@@ -56,7 +56,7 @@ def _live_targets(hass, radar: RadarDevice) -> int | None:
 
 
 def _radar_label(hass, radar: RadarDevice) -> str:
-    """'Name — Area (Floor) · 1 target now · 2 polygon helpers' for the device picker."""
+    """'Name — Area (Floor) · 1 target now' for the device picker."""
     parts = [radar.name]
     area = ar.async_get(hass).async_get_area(radar.area_id) if radar.area_id else None
     if area:
@@ -64,8 +64,6 @@ def _radar_label(hass, radar: RadarDevice) -> str:
         parts.append(f"— {area.name}" + (f" ({floor.name})" if floor else ""))
     live = _live_targets(hass, radar)
     details = ["offline" if live is None else f"{live} target{'s' if live != 1 else ''} now"]
-    if helpers := len(async_legacy_polygons(hass, radar.slug, None)):
-        details.append(f"{helpers} polygon helper{'s' if helpers != 1 else ''}")
     return " ".join(parts) + " · " + " · ".join(details)
 
 

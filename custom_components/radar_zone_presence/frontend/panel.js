@@ -17,6 +17,7 @@ const RANGES = [
 const SPEEDS = [0.25, 1, 4, 16, 64];
 
 const css = `
+.replay-label.live { color: var(--error-color, #db4437); font-weight: 500; }
 :host { display: block; height: 100%; background: var(--primary-background-color, #fafafa); color: var(--primary-text-color, #222);
   font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); font-size: 14px; }
 * { box-sizing: border-box; }
@@ -144,6 +145,10 @@ class RadarZonePresencePanel extends HTMLElement {
     this.liveTargets = [];
     this.liveTrails = new Map();
     this.liveStates = {};
+    this.livePresence = false;
+    this.preferLive = true; // open in live playback; false once the user picks the plain point cloud
+    this.windowEnd = 'now'; // the loaded window ends at "now" and keeps growing (absolute ends: future time picker)
+    this._nowTimer = 0;
     this.brush = null;
     this._unsubLive = null;
     this._previewTimer = 0;
@@ -167,6 +172,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   disconnectedCallback() {
     this._unsubscribeLive();
+    this._stopNowTimer();
     this.playing = false;
     window.removeEventListener('keydown', this._keyHandler);
   }
@@ -174,6 +180,7 @@ class RadarZonePresencePanel extends HTMLElement {
   connectedCallback() {
     this._keyHandler = this._keyHandler || (e => this._onKey(e));
     window.addEventListener('keydown', this._keyHandler);
+    if (this.hist) this._startNowTimer();
   }
 
   // ----------------------------------------------------------- bootstrap
@@ -202,6 +209,7 @@ class RadarZonePresencePanel extends HTMLElement {
     history.replaceState(null, '', `#entry=${entryId}`);
     this.selectedId = null;
     this.selectedVertex = null;
+    this._stopNowTimer();
     this.mode = 'cloud';
     this.cursor = null;
     this.playing = false;
@@ -277,6 +285,8 @@ class RadarZonePresencePanel extends HTMLElement {
     const now = ev.t;
     this.liveTargets = ev.targets;
     this.liveStates = Object.fromEntries(Object.entries(ev.zones).map(([k, v]) => [k, v[0]]));
+    this.livePresence = !!ev.presence;
+    this._appendLiveFrame(ev);
     for (const [slot, x, y] of ev.targets) {
       if (!this.liveTrails.has(slot)) this.liveTrails.set(slot, []);
       this.liveTrails.get(slot).push({ x, y, t: now });
@@ -286,13 +296,132 @@ class RadarZonePresencePanel extends HTMLElement {
       if (!pts.length) this.liveTrails.delete(slot);
     }
     if (this.mode === 'cloud') this._updatePlot();
+    else if (this.mode === 'live') {
+      this.cursor = Math.max(this.cursor ?? now, now);
+      this._updatePlot();
+      this._renderFramesThrottled();
+    }
     this._renderLiveBadges();
+  }
+
+  /** Grow the loaded history with live frames, so live playback can be paused and scrubbed back. */
+  _appendLiveFrame(ev) {
+    const h = this.hist;
+    if (!h || !this.frameIdx) return;
+    const tRel = ev.t - h.start;
+    if (h.frame_t.length && tRel <= h.frame_t[h.frame_t.length - 1]) return;
+    h.frame_t.push(tRel);
+    h.frame_n.push(ev.targets.length);
+    h.frame_available?.push(ev.available === false ? 0 : 1);
+    for (const [slot, x, y] of ev.targets) { h.slot.push(slot); h.x.push(x); h.y.push(y); }
+    this.frameIdx.frameStart.push(h.x.length);
+    h.end = Math.max(h.end, ev.t);
+    this._cloudDirty = true;
+    this._histGrew = true;
+  }
+
+  // ---------------------------------------------------------------- live
+
+  /** Live playback: the playhead follows now; pause or seek to drop into replay. */
+  _goLive({ width = null } = {}) {
+    if (!this.hist) return;
+    this.preferLive = true;
+    this.playing = false;
+    this.mode = 'live';
+    this._tick();
+    const v = this.timeline.view;
+    const w = width ?? (v ? v.v1 - v.v0 : 900);
+    this.timeline.focus(this.cursor - w, this.cursor);
+    this._updatePlot();
+    this._renderTransport();
+    this._renderFrames();
+  }
+
+  // While the window ends at "now", a 1 s ticker grows it to the right in every
+  // mode (live, replay, point cloud) and drops data that slides off the left.
+  _startNowTimer() {
+    this._stopNowTimer();
+    if (this.windowEnd === 'now' && this.hist) this._nowTimer = setInterval(() => this._tick(), 1000);
+  }
+
+  _stopNowTimer() {
+    clearInterval(this._nowTimer);
+    this._nowTimer = 0;
+  }
+
+  _tick() {
+    const h = this.hist;
+    if (!h || this.windowEnd !== 'now') return;
+    const now = Date.now() / 1000;
+    const prevEnd = h.end;
+    h.end = Math.max(h.end, now);
+    // A trim that reaches the end keeps reaching it.
+    if (this.brush && this.brush.t1 >= prevEnd - 1) this.brush = { ...this.brush, t1: h.end };
+    // Recorded bands: extend what is on now.
+    const states = { ...this.liveStates, presence: this.livePresence };
+    for (const [zid, on] of Object.entries(states)) {
+      if (!on) continue;
+      const iv = (this.actual[zid] ||= []);
+      const last = iv[iv.length - 1];
+      if (last && last[1] >= (this._lastTick ?? now) - 1.5) last[1] = now;
+      else iv.push([now, now]);
+    }
+    this._lastTick = now;
+    this._trimLeft(now);
+    if (this._cloudDirty && now - (this._cloudAt || 0) > 10) {
+      this._cloudAt = now;
+      this._cloudDirty = false;
+      this._uploadCloud();
+    }
+    if (this.mode === 'live') {
+      this.cursor = h.end;
+      this._updateReplayLabel();
+      this._updatePlot(); // age the trails
+      this._renderFramesThrottled();
+    }
+    this._renderTimeline();
+  }
+
+  /** Keep the window at "last <range>": drop frames older than that, in batches. */
+  _trimLeft(now) {
+    const h = this.hist;
+    const keepFrom = now - this.rangeS;
+    const excess = keepFrom - h.start;
+    if (excess < Math.max(60, this.rangeS / 100)) return;
+    const ft = h.frame_t;
+    let lo = 0, hi = ft.length; // first frame at or after keepFrom
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ft[mid] < excess) lo = mid + 1; else hi = mid; }
+    const m = this.frameIdx.frameStart[lo];
+    ft.splice(0, lo);
+    h.frame_n.splice(0, lo);
+    h.frame_available?.splice(0, lo);
+    h.slot.splice(0, m);
+    h.x.splice(0, m);
+    h.y.splice(0, m);
+    for (let i = 0; i < ft.length; i++) ft[i] -= excess;
+    h.start = keepFrom;
+    if (this.cursor != null && this.cursor < h.start) this.cursor = h.start;
+    if (this.brush) {
+      const t0 = Math.max(this.brush.t0, h.start);
+      this.brush = this.brush.t1 - t0 >= 1 ? { ...this.brush, t0 } : null;
+    }
+    for (const iv of Object.values(this.actual)) while (iv.length && iv[0][1] < h.start) iv.shift();
+    this._cloudDirty = false;
+    this._uploadCloud();
+    this._recomputePreview(true); // per-frame results are indexed by frame
+  }
+
+  _renderFramesThrottled() {
+    if (!this.showFrames) return;
+    const t = performance.now();
+    if (t - (this._framesAt || 0) > 250) { this._framesAt = t; this._renderFrames(); }
   }
 
   // ------------------------------------------------------------- history
 
   async _loadHistory() {
     if (!this.entryId) return;
+    this._stopNowTimer();
     this._loadingHistory = true;
     this._renderLoading();
     const end = new Date();
@@ -322,17 +451,31 @@ class RadarZonePresencePanel extends HTMLElement {
     this._renderLoading();
     this._renderTransport(); // enable play/step now that history is loaded
     this._recomputePreview(true);
+    if (this.hist) {
+      this._lastTick = this.hist.end;
+      this._startNowTimer();
+      if (this.preferLive && this.mode === 'cloud') this._goLive({ width: 900 });
+    }
   }
 
   _setHistory(hist) {
     this.hist = hist;
+    this._resetTimelineView = true;
+    this._uploadCloud();
+    if (hist.truncated) this._toast('History truncated: pick a shorter range for the full point cloud.');
+    this._renderStatus();
+  }
+
+  /** (Re)build the frame index and the WebGL point cloud from this.hist. */
+  _uploadCloud() {
+    const hist = this.hist;
     const nT = hist.x.length;
     const pos = new Float32Array(nT * 2);
     const t = new Float32Array(nT);
     const slot = new Float32Array(nT);
     // frameOf[k] = frame index of target k; frameStart[i] = first target index of frame i
     const nF = hist.frame_t.length;
-    const frameStart = new Uint32Array(nF + 1);
+    const frameStart = new Array(nF + 1);
     let k = 0;
     for (let i = 0; i < nF; i++) {
       frameStart[i] = k;
@@ -344,9 +487,8 @@ class RadarZonePresencePanel extends HTMLElement {
       }
     }
     frameStart[nF] = k;
-    this.frameIdx = { frameStart, frameT: Float64Array.from(hist.frame_t) };
+    this.frameIdx = { frameStart, frameT: hist.frame_t };
     this.plot.setHistory({ pos, t, slot });
-    if (hist.truncated) this._toast('History truncated: pick a shorter range for the full point cloud.');
     this._renderStatus();
   }
 
@@ -421,6 +563,8 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _seek(t) {
     if (!this.hist) return;
+    if (this._cloudDirty) { this._cloudDirty = false; this._uploadCloud(); }
+    if (this._histGrew) { this._histGrew = false; this._recomputePreview(); } // preview the frames that arrived live
     this.mode = 'replay';
     this.cursor = Math.max(this.hist.start, Math.min(this.hist.end, t));
     this._updatePlot();
@@ -437,6 +581,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _replayLabelText() {
+    if (this.mode === 'live') return `● Live ${fmtTime(this.cursor)}`;
     return `Replay ${fmtDateTime(this.cursor)}.${String(Math.floor((this.cursor % 1) * 1000)).padStart(3, '0')}`;
   }
 
@@ -457,6 +602,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _togglePlay() {
     if (!this.hist) return;
+    if (this.mode === 'live') { this._seek(this.cursor); return; } // pause = freeze at now
     if (this.playing) { this.playing = false; this._renderTransport(); return; }
     const t0 = this.brush ? this.brush.t0 : this.hist.start;
     const t1 = this.brush ? this.brush.t1 : this.hist.end;
@@ -478,6 +624,7 @@ class RadarZonePresencePanel extends HTMLElement {
         if (nt !== undefined && this.hist.start + nt - next > 60) next = this.hist.start + nt - 1;
       }
       const stopAt = this.brush ? this.brush.t1 : this.hist.end;
+      if (next >= stopAt && !this.brush && this.speed <= 1) { this._goLive(); return; } // caught up with now
       if (next >= stopAt) { next = stopAt; this.playing = false; }
       this._seek(next); // re-renders the transport when playing flipped to false
       if (this.playing) requestAnimationFrame(step);
@@ -835,11 +982,12 @@ class RadarZonePresencePanel extends HTMLElement {
     const t = this.transport;
     if (!t) return;
     this._transportKey = `${this.mode}|${this.playing}`;
-    const replay = this.mode === 'replay';
+    const replay = this.mode === 'replay' || this.mode === 'live';
+    const live = this.mode === 'live';
     t.replaceChildren(
       el('div', { class: 'group' },
         this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (,) · ← jumps 10 s, Shift+← 1 min', !this.hist),
-        this._tb(this.playing ? '⏸' : '▶', this.playing, () => this._togglePlay(), 'Play / pause (Space)', !this.hist),
+        this._tb(this.playing || live ? '⏸' : '▶', this.playing || live, () => this._togglePlay(), live ? 'Pause: freeze at this moment (Space)' : 'Play / pause (Space)', !this.hist),
         this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (.) · → jumps 10 s, Shift+→ 1 min', !this.hist),
         el('select', { onchange: e => { this.speed = +e.target.value; }, title: 'Playback speed' },
           SPEEDS.map(s => el('option', { value: s, selected: s === this.speed }, `${s}×`)))),
@@ -852,9 +1000,10 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Frames', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the frame table around the cursor')),
       el('div', { class: 'group' },
         replay
-          ? el('span', { class: 'replay-label', style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
+          ? el('span', { class: `replay-label${live ? ' live' : ''}`, style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
           : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead · ←/→ 10 s, Shift 1 min, ,/. one frame · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
-        replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : '',
+        !live && this.hist ? this._tb('● Live', false, () => this._goLive(), 'Follow what the radar sees right now') : '',
+        replay ? this._tb('Point cloud', false, () => { this.preferLive = false; this._exitReplay(); }, 'Show the whole point cloud (for drawing zones), with live targets on top') : '',
         this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
         this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
     );
@@ -875,7 +1024,10 @@ class RadarZonePresencePanel extends HTMLElement {
       rows,
       cursor: this.cursor,
       brush: this.brush,
+      follow: this.mode === 'live',
+      resetView: !!this._resetTimelineView,
     });
+    this._resetTimelineView = false;
   }
 
   _updatePlot() {
@@ -888,6 +1040,12 @@ class RadarZonePresencePanel extends HTMLElement {
       targets = r.targets;
       trails = r.trails;
       states = r.states;
+      cursor = this.cursor - this.hist.start;
+      if (this.brush) window = { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
+    } else if (this.mode === 'live' && this.hist) {
+      targets = this.liveTargets;
+      trails = this.liveTrails;
+      states = this.liveStates;
       cursor = this.cursor - this.hist.start;
       if (this.brush) window = { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
     } else {
@@ -968,7 +1126,6 @@ class RadarZonePresencePanel extends HTMLElement {
           el('div', { class: 'zone-meta' }, z.kind === 'exclude' ? 'exclusion · ignored by all zones' : (eid || 'new — save to create entity'))),
         el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'exclude' : '—'));
     });
-    const legacy = (cfg.legacy_polygons || []).filter(lp => !this.zones.some(z => JSON.stringify(z.polygon) === JSON.stringify(lp.polygon)));
     const sensor = el('div', { class: 'section' },
       el('h3', {}, el('span', { class: 'grow' }, cfg.title)),
       el('div', { class: 'help' }, `${cfg.targets.length} targets · ${cfg.profile.replace(/_/g, ' ')} · range ${this.units.fmtLong(cfg.fov.max_distance_mm)}`),
@@ -981,8 +1138,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'actions' },
         el('button', { class: 'btn', onclick: () => { this.drawKind = 'include'; this._setTool('draw'); } }, '+ Zone'),
         el('button', { class: 'btn', onclick: () => { this.drawKind = 'exclude'; this._setTool('draw'); } }, '+ Exclusion'),
-        el('button', { class: 'btn', title: 'Zone covering the whole field of view', onclick: () => this._addZone(fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 12), 'include', 'Whole room') }, 'Fill detection area'),
-        legacy.length ? el('button', { class: 'btn', title: legacy.map(l => l.entity_id).join('\n'), onclick: () => legacy.forEach(lp => this._addZone(lp.polygon, 'include', `Polygon ${lp.n}`)) }, `Import ${legacy.length} legacy polygon(s)`) : ''),
+        el('button', { class: 'btn', title: 'Zone covering the whole field of view', onclick: () => this._addZone(fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 12), 'include', 'Whole room') }, 'Fill detection area')),
       el('div', { class: 'actions' },
         el('button', { class: 'btn', title: 'Download these zones (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
         el('button', { class: 'btn', title: 'Load zones from an exported JSON file. Zones with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
@@ -1295,7 +1451,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const box = this.framesEl;
     if (!box) return;
     box.style.display = this.showFrames ? '' : 'none';
-    if (!this.showFrames || !this.hist || this.mode !== 'replay') {
+    if (!this.showFrames || !this.hist || (this.mode !== 'replay' && this.mode !== 'live')) {
       box.replaceChildren(this.showFrames ? el('div', { class: 'help', style: { padding: '8px' } }, 'Click the timeline to replay; frames around the cursor show here.') : '');
       return;
     }

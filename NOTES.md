@@ -218,3 +218,22 @@ Ideas not built yet:
 - HACS Action: brand icon (`brand/icon.png`, served by HA ≥ 2026.x from the
   integration folder) and manifest `categories` fixed; the repository
   description and topics have to be set on GitHub.
+
+## 2026-11-14: live playback by default, a window that ends at "now"
+
+- The panel opens in live playback: playhead at now, timeline zoomed to the
+  last 15 min, trails / zone states / frame table update as frames arrive.
+  Pause (or click the timeline, arrows, a trigger) drops into replay at that
+  moment; *● Live* jumps back (keeping the zoom); *Point cloud* is the old
+  full-cloud view for drawing.
+- The loaded window ends at "now" (`windowEnd`; an absolute end, from the
+  future time picker, will switch this off). A 1 s ticker grows it to the
+  right in every mode, live frames are appended to the history (so live can
+  be paused and scrubbed back), recorded bands are extended, and frames older
+  than the range drop off the left in batches (max(60 s, range/100)), which
+  re-indexes the preview. Timeline: a full-width view keeps showing the whole
+  window; a zoomed view slides only while live; a trim that reaches the end
+  keeps reaching it.
+- Legacy `input_text` polygon helpers: only the one-time import in the setup
+  flow remains (it only appears when such helpers exist); the panel button,
+  picker hint and README claims are gone.

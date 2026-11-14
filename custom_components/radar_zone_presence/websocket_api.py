@@ -25,7 +25,7 @@ from .const import (
     FOV_HALF_ANGLE_DEG,
     PRESENCE_KEY,
 )
-from .discovery import async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
+from .discovery import async_device_geometry, async_find_radars, async_resolve_units, common_unit
 from .engine import KIND_EXCLUDE, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
 from .history import async_history_frames, async_zone_events
 from .runtime import RadarRuntime
@@ -114,7 +114,6 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
     device = dr.async_get(hass).async_get(device_id)
     geometry = async_device_geometry(hass, device_id)
     unit = _target_unit(hass, runtime)
-    slug = runtime.targets[0].x.split(".", 1)[1].rsplit("_target", 1)[0] if runtime.targets else ""
     entity_ids = _zone_entity_ids(hass, entry)
     ent_reg = er.async_get(hass)
     zones = []
@@ -140,7 +139,6 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
             },
             "fov": {"half_angle_deg": FOV_HALF_ANGLE_DEG, "max_distance_mm": geometry["max_distance_mm"]},
             "device_zones": geometry["device_zones"],
-            "legacy_polygons": async_legacy_polygons(hass, slug, unit),
         },
     )
 

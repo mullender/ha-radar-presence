@@ -98,8 +98,7 @@ async def test_config_flow_labels_show_area_floor_and_live_targets(hass: HomeAss
     for slot in (1, 2, 3):
         hass.states.async_set(f"sensor.{SLUG}_target_{slot}_y", "0", {"unit_of_measurement": "in"})
     await move(hass, 2, 10, 80)
-    hass.states.async_set(f"input_text.{SLUG}_zone_polygon_1", "[[0, 100], [40, 100], [40, 140], [0, 140]]")
-    assert (await labelled()).endswith("— Office (Upstairs) · 1 target now · 1 polygon helper")
+    assert (await labelled()).endswith("— Office (Upstairs) · 1 target now")
 
 
 async def test_config_flow_no_devices(hass: HomeAssistant) -> None:

@@ -12,8 +12,8 @@ nothing is written to the device.
 ## Features
 
 - **Pick a radar, get zones.** The config flow lists devices with per-target
-  X/Y sensors and discovers the entities. Existing
-  `input_text.<device>_zone_polygon_N` helpers can be imported.
+  X/Y sensors (with their area, floor and live target count) and discovers
+  the entities.
 - **Radar Zones panel** (sidebar):
   - Draw polygons or rectangles; edges snap to 45°/90°, relative to the
     previous edge, and the closing corner squares up to the start. Vertex and
@@ -29,6 +29,8 @@ nothing is written to the device.
 - **Preview before saving:** how often and when the draft zone would have
   turned on over the loaded history, with and without filters, plus a
   clickable trigger list.
+- **Live playback** by default: the playhead follows now, with trails, zone
+  states and the frame table updating in real time; pause to scrub back.
 - **Replay scrubber:** timeline with activity, predicted vs recorded zone
   bands and trigger markers; play / step / speed; fading trails with
   timestamps; a frame table showing each target's position and every zone's
@@ -92,9 +94,9 @@ Then:
 
 1. Settings → Devices & services → Add integration → *Radar Zone Presence*,
    pick a radar. Repeat for each radar.
-2. Open **Radar Zones** in the sidebar. Existing
-   `input_text.<device>_zone_polygon_N` helpers show up as *Import N legacy
-   polygon(s)*; zones exported from another instance load with *Import…*.
+2. Open **Radar Zones** in the sidebar. It opens in live playback: what the
+   radar sees right now, on top of the last 24 h. Zones exported from
+   another instance load with *Import…*.
 3. Draw or adjust zones and press **Save**; the presence entities appear on
    the radar's device.
 

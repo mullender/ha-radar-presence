@@ -32,6 +32,7 @@ export class RzpTimeline extends HTMLElement {
     this.rows = []; // [{id, name, color, predicted: [[a,b]], actual: [[a,b]], triggers: [t]}]
     this.cursor = null;
     this.brush = null; // {t0, t1}
+    this.follow = false; // slide a zoomed view along as the range grows (live)
     this._drag = null;
     this._raf = 0;
     this.canvas.addEventListener('pointerdown', e => this._down(e));
@@ -46,10 +47,25 @@ export class RzpTimeline extends HTMLElement {
   disconnectedCallback() { this._ro.disconnect(); }
 
   set(props) {
-    if (props.range && (!this.range || props.range.start !== this.range.start || props.range.end !== this.range.end)) {
-      this.view = { v0: props.range.start, v1: props.range.end };
+    const { resetView = false, ...rest } = props;
+    const old = this.range;
+    const r = rest.range;
+    if (r && (!old || !this.view || resetView)) {
+      this.view = { v0: r.start, v1: r.end };
+    } else if (r && (r.start !== old.start || r.end !== old.end)) {
+      // The window slides with "now". A full-width view keeps showing all of
+      // it; a zoomed view slides along only while following (live), else stays.
+      const eps = 1e-3;
+      let { v0, v1 } = this.view;
+      const atStart = v0 <= old.start + eps;
+      const atEnd = v1 >= old.end - eps;
+      if (atStart && atEnd) { v0 = r.start; v1 = r.end; }
+      else if (atEnd && (rest.follow ?? this.follow)) { v0 += r.end - v1; v1 = r.end; }
+      v0 = Math.max(r.start, v0);
+      v1 = Math.min(r.end, Math.max(v1, v0 + 1));
+      this.view = { v0, v1 };
     }
-    Object.assign(this, props);
+    Object.assign(this, rest);
     this.requestRender();
   }
 
