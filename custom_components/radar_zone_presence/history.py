@@ -10,9 +10,9 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.components.recorder import get_instance, history
-from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import HomeAssistant, State
 
+from .discovery import async_resolve_units
 from .engine import FrameAssembler, TargetEntities, assemble
 from .engine.frames import pack_frames
 
@@ -58,10 +58,7 @@ async def async_history_frames(
     entity_ids = sorted({e for t in targets for e in (t.x, t.y)})
     raw = await get_instance(hass).async_add_executor_job(_fetch, hass, start, end, entity_ids)
 
-    units = {}
-    for eid in entity_ids:
-        st = hass.states.get(eid)
-        units[eid] = st.attributes.get(ATTR_UNIT_OF_MEASUREMENT) if st else None
+    units = async_resolve_units(hass, entity_ids)
 
     def build() -> dict[str, Any]:
         events: list[tuple[float, str, str]] = []

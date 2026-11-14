@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -144,3 +145,35 @@ def async_legacy_polygons(hass: HomeAssistant, slug: str, unit: str | None) -> l
             out.append({"entity_id": state.entity_id, "n": state.entity_id.removeprefix(prefix), "polygon": polygon})
     out.sort(key=lambda p: p["n"])
     return out
+
+
+@callback
+def async_resolve_units(hass: HomeAssistant, entity_ids: list[str] | set[str]) -> dict[str, str | None]:
+    """Unit of each coordinate entity, robust to states that carry no unit.
+
+    Restored/unavailable states (e.g. right after a restart, or while the radar
+    is offline) can lack ``unit_of_measurement``. Treating those as native mm
+    would shrink inch readings 25.4x, so fall back to the entity registry and
+    then to the radar's other coordinate entities, which always share a unit.
+    """
+    ent_reg = er.async_get(hass)
+    units: dict[str, str | None] = {}
+    for eid in entity_ids:
+        unit = None
+        if (st := hass.states.get(eid)) is not None:
+            unit = st.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
+        if unit is None and (entry := ent_reg.async_get(eid)) is not None:
+            opts = entry.options or {}
+            unit = (
+                opts.get("sensor", {}).get("unit_of_measurement")
+                or opts.get("sensor.private", {}).get("suggested_unit_of_measurement")
+                or entry.unit_of_measurement
+            )
+        units[eid] = unit
+    known = [u for u in units.values() if u]
+    if known:
+        common = max(set(known), key=known.count)
+        for eid, unit in units.items():
+            if not unit:
+                units[eid] = common
+    return units

@@ -11,6 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.radar_zone_presence.const import DOMAIN
 
+from .conftest import SLUG
 from .test_integration import CHAIR_IN, move, setup_entry, zone
 
 
@@ -40,3 +41,28 @@ async def test_ws_history_frames(hass: HomeAssistant, radar_device: str, hass_ws
     )
     ev = (await client.receive_json())["result"]["zones"]
     assert any(s == "on" for _, s in ev["chair"])
+
+
+async def test_history_units_survive_unitless_state(hass: HomeAssistant, radar_device: str, hass_ws_client, freezer) -> None:
+    """Regression: a restored/unavailable state without a unit made history treat inches as mm."""
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    start = dt_util.utcnow() - timedelta(minutes=1)
+    for i in range(3):
+        freezer.tick(0.3)
+        await move(hass, 2, 100 + i, 130)
+    freezer.tick(0.3)
+    # Target 2 goes "unavailable" with no unit attribute (like a restored state after restart).
+    hass.states.async_set(f"sensor.{SLUG}_target_2_x", "unavailable", {"restored": True})
+    hass.states.async_set(f"sensor.{SLUG}_target_2_y", "unavailable", {"restored": True})
+    await hass.async_block_till_done()
+    await hass.async_add_executor_job(
+        __import__("homeassistant.components.recorder", fromlist=["get_instance"]).get_instance(hass).block_till_done
+    )
+    freezer.tick(1)
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/frames/history", "entry_id": entry.entry_id, "start": start.isoformat()}
+    )
+    res = (await client.receive_json())["result"]
+    xs = [x for s, x in zip(res["slot"], res["x"]) if s == 2]
+    assert xs and min(xs) == round(100 * 25.4)  # inches converted, not read as mm

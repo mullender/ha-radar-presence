@@ -441,8 +441,10 @@ class RadarZonePresencePanel extends HTMLElement {
   _togglePlay() {
     if (!this.hist) return;
     if (this.playing) { this.playing = false; this._renderTransport(); return; }
-    if (this.mode !== 'replay' || this.cursor >= this.hist.end - 0.5) {
-      this._seek(this.brush ? this.brush.t0 : Math.max(this.hist.start, this.hist.end - 600));
+    const t0 = this.brush ? this.brush.t0 : this.hist.start;
+    const t1 = this.brush ? this.brush.t1 : this.hist.end;
+    if (this.mode !== 'replay' || this.cursor < t0 || this.cursor >= t1 - 0.5) {
+      this._seek(this.brush ? t0 : Math.max(this.hist.start, this.hist.end - 600));
     }
     this.playing = true;
     this._renderTransport();
@@ -458,7 +460,8 @@ class RadarZonePresencePanel extends HTMLElement {
         const nt = this.hist.frame_t[i + 1];
         if (nt !== undefined && this.hist.start + nt - next > 60) next = this.hist.start + nt - 1;
       }
-      if (next >= this.hist.end) { next = this.hist.end; this.playing = false; }
+      const stopAt = this.brush ? this.brush.t1 : this.hist.end;
+      if (next >= stopAt) { next = stopAt; this.playing = false; }
       this._seek(next); // re-renders the transport when playing flipped to false
       if (this.playing) requestAnimationFrame(step);
     };
@@ -670,7 +673,12 @@ class RadarZonePresencePanel extends HTMLElement {
     this.plot.addEventListener('pointer-world', e => { this._pointer = e.detail; this._renderPointer(); });
     this.timeline.addEventListener('seek', e => { this.playing = false; this._seek(e.detail.t); });
     this.timeline.addEventListener('trigger', e => this._jumpTo(e.detail.t, e.detail.zoneId));
-    this.timeline.addEventListener('window', e => { this.brush = e.detail.brush; this._updatePlot(); });
+    this.timeline.addEventListener('window', e => {
+      const had = !!this.brush;
+      this.brush = e.detail.brush;
+      this._updatePlot();
+      if (had !== !!this.brush) this._renderTransport();
+    });
   }
 
   _renderAll() {
@@ -782,8 +790,10 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'group' },
         replay
           ? el('span', { class: 'replay-label', style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
-          : el('span', { class: 'help' }, this.hist ? 'Timeline: coloured bars = draft preview ▼ · dark line = recorded by HA ▲ · click to replay, wheel to zoom, drag the activity strip to window the cloud' : ''),
-        replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : ''),
+          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · click to replay · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
+        replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : '',
+        this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
+        this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
     );
   }
 

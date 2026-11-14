@@ -12,14 +12,14 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import CONF_DEVICE_ID, CONF_PROFILE, CONF_RECONNECT_GRACE, CONF_TARGETS, CONF_ZONES, DOMAIN
-from .discovery import RadarDevice, async_find_radars, async_legacy_polygons
+from .discovery import RadarDevice, async_find_radars, async_legacy_polygons, async_resolve_units
 from .engine import KIND_INCLUDE, validate_polygon
 
 
 def _legacy_zones(flow_hass, radar: RadarDevice) -> list[dict[str, Any]]:
-    unit = None
-    if radar.targets and (st := flow_hass.states.get(radar.targets[0].x)) is not None:
-        unit = st.attributes.get("unit_of_measurement")
+    ids = [e for t in radar.targets for e in (t.x, t.y)]
+    units = [u for u in async_resolve_units(flow_hass, ids).values() if u]
+    unit = max(set(units), key=units.count) if units else None
     zones = []
     for p in async_legacy_polygons(flow_hass, radar.slug, unit):
         if validate_polygon(p["polygon"]) is None:

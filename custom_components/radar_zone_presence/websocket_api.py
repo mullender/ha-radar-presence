@@ -24,7 +24,7 @@ from .const import (
     FOV_HALF_ANGLE_DEG,
     PRESENCE_KEY,
 )
-from .discovery import async_device_geometry, async_find_radars, async_legacy_polygons
+from .discovery import async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units
 from .engine import KIND_EXCLUDE, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
 from .history import async_history_frames, async_zone_events
 from .runtime import RadarRuntime
@@ -68,10 +68,8 @@ def _zone_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str]:
 
 
 def _target_unit(hass: HomeAssistant, runtime: RadarRuntime) -> str | None:
-    for eid in runtime.entity_ids:
-        if (st := hass.states.get(eid)) is not None and st.attributes.get("unit_of_measurement"):
-            return st.attributes["unit_of_measurement"]
-    return None
+    units = [u for u in async_resolve_units(hass, runtime.entity_ids).values() if u]
+    return max(set(units), key=units.count) if units else None
 
 
 @websocket_api.require_admin

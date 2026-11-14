@@ -13,6 +13,7 @@ from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, Home
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from .const import CONF_RECONNECT_GRACE, CONF_TARGETS, CONF_ZONES
+from .discovery import async_resolve_units
 from .engine import COALESCE_S, EngineSnapshot, Frame, FrameAssembler, TargetEntities, Zone, ZoneEngine
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,9 +52,9 @@ class RadarRuntime:
 
     @callback
     def async_start(self) -> None:
+        self.units.update(async_resolve_units(self.hass, self.assembler.entity_ids))
         for entity_id in self.assembler.entity_ids:
             if (state := self.hass.states.get(entity_id)) is not None:
-                self.units[entity_id] = state.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
                 self.assembler.seed(entity_id, state.state)
         self._evaluate(self.assembler.build_at(time.time()))
         self._unsubs.append(
@@ -109,8 +110,10 @@ class RadarRuntime:
             opened = self.assembler.update(entity_id, None, time.time())
         else:
             unit = new.attributes.get(ATTR_UNIT_OF_MEASUREMENT)
-            if unit is not None:
+            if unit is not None and unit != self.units.get(entity_id):
+                # Display unit changed (or first real state): re-resolve all siblings.
                 self.units[entity_id] = unit
+                self.units.update(async_resolve_units(self.hass, self.assembler.entity_ids))
             opened = self.assembler.update(entity_id, new.state, new.last_updated_timestamp)
         if opened:
             self._flush_unsub = async_call_later(self.hass, COALESCE_S, self._flush)

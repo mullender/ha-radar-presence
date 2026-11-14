@@ -125,3 +125,27 @@ section. DESIGN.md is the spec; this file is the lab notebook.
   panel and answered config/history/live websocket calls without errors.
   (Tests run against 2026.10.4, the latest pytest-homeassistant-custom-component.)
 - ha-tides' `ha_dev` container auto-starts on :8123 with Colima; left alone.
+
+## 2026-11-13 late: units bug found by the user (fixed)
+
+- Symptom: a dense cluster right in front of the living-room sensor, and
+  target 2 drawn at the sensor while the data had it ~3 m out.
+- Cause: history (and the live seed) took each entity's unit from its
+  *current* state. Right after an HA restart, targets that had not reported yet
+  had restored/unavailable states without `unit_of_measurement`, so their whole
+  history was read as mm instead of inches (25.4x too small → collapsed onto
+  the sensor). Can happen in production after restarts or while a radar is
+  offline.
+- Fix: `discovery.async_resolve_units` — state attribute → entity registry
+  (sensor options / suggested unit / registry unit) → most common unit among
+  the radar's other coordinate entities. Used by runtime, history, websocket
+  and config flow. Regression tests in test_history / test_integration fail
+  without the fix.
+- The kitchen 8519b4 analysis (real person at ~1.25 m: walked in every time,
+  co-detected by the Screek, mealtimes) was computed from the export with
+  correct units and stands.
+- Timeline: replaced the hidden drag-to-window gesture with an Apple-Photos
+  style trimmer (yellow handles at the ends of the loaded range). The trim
+  windows the point cloud and bounds playback; "Zoom to trim" / "Clear trim".
+- Dev panel times are shifted +2043 s vs production (simulator backfill
+  anchors the export end to "now"); offered to switch to real timestamps.

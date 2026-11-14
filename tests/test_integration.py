@@ -225,3 +225,13 @@ async def test_zone_area_override_and_inherit(hass: HomeAssistant, radar_device:
     assert (await client.receive_json())["success"]
     await hass.async_block_till_done()
     assert ent_reg.async_get(chair).area_id is None  # back to inheriting the device area
+
+
+async def test_live_units_fall_back_to_siblings(hass: HomeAssistant, radar_device: str) -> None:
+    """Target 2 seeded without a unit still converts with the radar's unit (inches)."""
+    hass.states.async_set(f"sensor.{SLUG}_target_2_x", "20", {})
+    hass.states.async_set(f"sensor.{SLUG}_target_2_y", "120", {})
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    chair = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
+    assert hass.states.get(chair).state == "on"  # (20 in, 120 in) is inside the chair; as mm it would not be
+    assert entry.runtime_data.last_frame.targets[0].x == pytest.approx(508)

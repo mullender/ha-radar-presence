@@ -1,6 +1,8 @@
 // <rzp-timeline>: activity density, per-zone on/off bands (preview vs.
-// recorded), trigger markers and a scrub cursor. Wheel zooms, drag scrubs,
-// drag on the density strip selects the cloud window.
+// recorded), trigger markers and a playhead. Apple-Photos-style trimmer:
+// yellow handles at both ends of the loaded range trim the window used for
+// the point cloud and for playback. Click/drag elsewhere scrubs the playhead,
+// wheel zooms, Shift-drag pans, double-click resets zoom.
 
 import { fmtTime } from './util.js';
 
@@ -8,6 +10,8 @@ const AXIS_H = 18;
 const DENSITY_H = 26;
 const ROW_H = 16;
 const LABEL_W = 120;
+const HANDLE_W = 10;
+const TRIM_COLOR = '#f9a825';
 
 const css = `
 :host { display: block; position: relative; user-select: none; -webkit-user-select: none; }
@@ -90,15 +94,34 @@ export class RzpTimeline extends HTMLElement {
     return null;
   }
 
+  get _trim() {
+    return this.brush || { t0: this.range.start, t1: this.range.end };
+  }
+
+  /** Left edges of the two handles, kept inside the plot area so they stay grabbable. */
+  _handleXs() {
+    const { t0, t1 } = this._trim;
+    const w = this.clientWidth;
+    return [Math.max(LABEL_W - HANDLE_W, this._x(t0) - HANDLE_W), Math.min(w - HANDLE_W, this._x(t1))];
+  }
+
+  _hitHandle(x) {
+    const [h0, h1] = this._handleXs();
+    if (x >= h0 - 3 && x <= h0 + HANDLE_W + 3) return 't0';
+    if (x >= h1 - 3 && x <= h1 + HANDLE_W + 3) return 't1';
+    return null;
+  }
+
   _down(e) {
     if (!this.range) return;
     const [x, y] = this._local(e);
     this.canvas.setPointerCapture(e.pointerId);
+    const handle = this._hitHandle(x);
+    if (handle) { this._drag = { kind: 'trim', handle }; return; }
     if (x < LABEL_W) return;
     const hit = this._hitTrigger(x, y);
     if (hit) { this._emit('trigger', { zoneId: hit.row.id, t: hit.t }); return; }
     if (e.shiftKey || e.button === 1) { this._drag = { kind: 'pan', x, view: { ...this.view } }; return; }
-    if (y >= AXIS_H && y < AXIS_H + DENSITY_H) { this._drag = { kind: 'brush', t0: this._t(x) }; return; }
     this._drag = { kind: 'scrub' };
     this._emit('seek', { t: this._clamp(this._t(x)) });
   }
@@ -108,13 +131,19 @@ export class RzpTimeline extends HTMLElement {
   _move(e) {
     if (!this.range) return;
     const [x, y] = this._local(e);
-    this.canvas.style.cursor = this._hitTrigger(x, y) ? 'pointer' : y < AXIS_H + DENSITY_H && y >= AXIS_H ? 'col-resize' : 'crosshair';
+    this.canvas.style.cursor = this._drag?.kind === 'trim' || this._hitHandle(x) ? 'ew-resize' : this._hitTrigger(x, y) ? 'pointer' : 'crosshair';
     const d = this._drag;
     if (!d) return;
     if (d.kind === 'scrub') this._emit('seek', { t: this._clamp(this._t(x)) });
-    else if (d.kind === 'brush') {
-      const t1 = this._clamp(this._t(x));
-      this.brush = { t0: Math.min(d.t0, t1), t1: Math.max(d.t0, t1) };
+    else if (d.kind === 'trim') {
+      const trim = { ...this._trim };
+      const minSpan = Math.max(1, (this.view.v1 - this.view.v0) / 400);
+      const t = this._clamp(this._t(x));
+      if (d.handle === 't0') trim.t0 = Math.min(t, trim.t1 - minSpan);
+      else trim.t1 = Math.max(t, trim.t0 + minSpan);
+      const full = trim.t0 <= this.range.start + 0.001 && trim.t1 >= this.range.end - 0.001;
+      this.brush = full ? null : trim;
+      this._emit('window', { brush: this.brush });
       this.requestRender();
     } else if (d.kind === 'pan') {
       const dt = ((x - d.x) / (this.clientWidth - LABEL_W)) * (d.view.v1 - d.view.v0);
@@ -127,24 +156,26 @@ export class RzpTimeline extends HTMLElement {
   }
 
   _up() {
-    const d = this._drag;
     this._drag = null;
-    if (d?.kind === 'brush') {
-      if (this.brush && this.brush.t1 - this.brush.t0 < (this.view.v1 - this.view.v0) / 500) this.brush = null;
-      this._emit('window', { brush: this.brush });
-      this.requestRender();
-    }
   }
 
   _dbl(e) {
-    const [, y] = this._local(e);
-    if (y < AXIS_H + DENSITY_H) {
-      this.brush = null;
+    const [x] = this._local(e);
+    if (this._hitHandle(x)) {
+      this.brush = null; // double-click a handle: reset the trim
       this._emit('window', { brush: null });
     } else {
       this.view = { v0: this.range.start, v1: this.range.end };
     }
     this.requestRender();
+  }
+
+  /** Zoom the view to the trimmed range (with a little margin). */
+  zoomToTrim() {
+    if (!this.range) return;
+    const { t0, t1 } = this._trim;
+    const m = (t1 - t0) * 0.05;
+    this.focus(t0 - m, t1 + m);
   }
 
   _wheel(e) {
@@ -233,12 +264,6 @@ export class RzpTimeline extends HTMLElement {
       }
       ctx.globalAlpha = 1;
     }
-    if (this.brush) {
-      ctx.fillStyle = primary;
-      ctx.globalAlpha = 0.15;
-      ctx.fillRect(xa(this.brush.t0), y0, xa(this.brush.t1) - xa(this.brush.t0), h - y0);
-      ctx.globalAlpha = 1;
-    }
 
     // Zone rows
     let ry = AXIS_H + DENSITY_H;
@@ -270,6 +295,32 @@ export class RzpTimeline extends HTMLElement {
         ctx.beginPath(); ctx.moveTo(x, ry + ROW_H - 5); ctx.lineTo(x - 3, ry + ROW_H); ctx.lineTo(x + 3, ry + ROW_H); ctx.closePath(); ctx.fill();
       }
       ry += ROW_H;
+    }
+
+    // Trimmer: dim outside the trimmed range, yellow frame + handles around it.
+    {
+      const { t0, t1 } = this._trim;
+      const xL = Math.max(LABEL_W, xa(t0)), xR = Math.min(w, xa(t1));
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      if (xL > LABEL_W) ctx.fillRect(LABEL_W, AXIS_H, xL - LABEL_W, h - AXIS_H);
+      if (xR < w) ctx.fillRect(xR, AXIS_H, w - xR, h - AXIS_H);
+      ctx.strokeStyle = TRIM_COLOR;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(xa(t0), AXIS_H + 1, xa(t1) - xa(t0), h - AXIS_H - 2);
+      ctx.lineWidth = 1;
+      const [h0, h1] = this._handleXs();
+      for (const [hx, side] of [[h0, -1], [h1, 1]]) {
+        ctx.fillStyle = TRIM_COLOR;
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(hx, AXIS_H, HANDLE_W, h - AXIS_H, side < 0 ? [5, 0, 0, 5] : [0, 5, 5, 0]) : ctx.rect(hx, AXIS_H, HANDLE_W, h - AXIS_H);
+        ctx.fill();
+        // chevron grip
+        ctx.strokeStyle = '#5d4037';
+        ctx.lineWidth = 1.5;
+        const cx = hx + HANDLE_W / 2, cy = AXIS_H + (h - AXIS_H) / 2;
+        ctx.beginPath(); ctx.moveTo(cx + side * -1.5, cy - 5); ctx.lineTo(cx + side * 1.5, cy); ctx.lineTo(cx + side * -1.5, cy + 5); ctx.stroke();
+        ctx.lineWidth = 1;
+      }
     }
 
     // Cursor
