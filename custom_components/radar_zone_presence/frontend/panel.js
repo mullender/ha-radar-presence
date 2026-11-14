@@ -612,8 +612,8 @@ class RadarZonePresencePanel extends HTMLElement {
       e.preventDefault();
       const dir = e.key === 'ArrowLeft' ? -1 : 1;
       this.playing = false;
-      if (e.shiftKey) this._seek((this.cursor ?? (this.brush ? this.brush.t1 : this.hist.end)) + dir * 10);
-      else this._stepFrame(dir);
+      // ←/→ jump 10 s, Shift+←/→ jump 1 min (frame steps: , and .)
+      this._seek((this.cursor ?? (this.brush ? this.brush.t1 : this.hist.end)) + dir * (e.shiftKey ? 60 : 10));
       return;
     }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this._redo() : this._undo(); return; }
@@ -785,9 +785,9 @@ class RadarZonePresencePanel extends HTMLElement {
     const replay = this.mode === 'replay';
     t.replaceChildren(
       el('div', { class: 'group' },
-        this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (← or ,) · Shift+← jumps 10 s', !this.hist),
+        this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (,) · ← jumps 10 s, Shift+← 1 min', !this.hist),
         this._tb(this.playing ? '⏸' : '▶', this.playing, () => this._togglePlay(), 'Play / pause (Space)', !this.hist),
-        this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (→ or .) · Shift+→ jumps 10 s', !this.hist),
+        this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (.) · → jumps 10 s, Shift+→ 1 min', !this.hist),
         el('select', { onchange: e => { this.speed = +e.target.value; }, title: 'Playback speed' },
           SPEEDS.map(s => el('option', { value: s, selected: s === this.speed }, `${s}×`)))),
       el('div', { class: 'group' },
@@ -800,7 +800,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'group' },
         replay
           ? el('span', { class: 'replay-label', style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
-          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead or use ←/→ (Shift = 10 s) · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
+          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead · ←/→ 10 s, Shift 1 min, ,/. one frame · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
         replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : '',
         this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
         this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
