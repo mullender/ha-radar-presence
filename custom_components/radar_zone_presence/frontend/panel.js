@@ -305,6 +305,7 @@ class RadarZonePresencePanel extends HTMLElement {
     }
     this._loadingHistory = false;
     this._renderLoading();
+    this._renderTransport(); // enable play/step now that history is loaded
     this._recomputePreview(true);
   }
 
@@ -406,9 +407,25 @@ class RadarZonePresencePanel extends HTMLElement {
     this.mode = 'replay';
     this.cursor = Math.max(this.hist.start, Math.min(this.hist.end, t));
     this._updatePlot();
-    this._renderTransport();
+    // Rebuilding the transport every animation frame would swallow clicks on
+    // its buttons (the element under the pointer is replaced between mousedown
+    // and mouseup), so only rebuild when mode / play state change.
+    if (this._transportKey !== `${this.mode}|${this.playing}`) this._renderTransport();
+    else this._updateReplayLabel();
     this.timeline.set({ cursor: this.cursor });
-    if (this.showFrames) this._renderFrames();
+    if (this.showFrames) {
+      const now = performance.now();
+      if (!this.playing || now - (this._framesAt || 0) > 200) { this._framesAt = now; this._renderFrames(); }
+    }
+  }
+
+  _replayLabelText() {
+    return `Replay ${fmtDateTime(this.cursor)}.${String(Math.floor((this.cursor % 1) * 1000)).padStart(3, '0')}`;
+  }
+
+  _updateReplayLabel() {
+    const label = this.transport?.querySelector('.replay-label');
+    if (label) label.textContent = this._replayLabelText();
   }
 
   _exitReplay() {
@@ -442,7 +459,7 @@ class RadarZonePresencePanel extends HTMLElement {
         if (nt !== undefined && this.hist.start + nt - next > 60) next = this.hist.start + nt - 1;
       }
       if (next >= this.hist.end) { next = this.hist.end; this.playing = false; }
-      this._seek(next);
+      this._seek(next); // re-renders the transport when playing flipped to false
       if (this.playing) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
@@ -747,6 +764,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _renderTransport() {
     const t = this.transport;
     if (!t) return;
+    this._transportKey = `${this.mode}|${this.playing}`;
     const replay = this.mode === 'replay';
     t.replaceChildren(
       el('div', { class: 'group' },
@@ -763,7 +781,7 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Frames', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the frame table around the cursor')),
       el('div', { class: 'group' },
         replay
-          ? el('span', { style: { fontVariantNumeric: 'tabular-nums' } }, `Replay ${fmtDateTime(this.cursor)}.${String(Math.floor((this.cursor % 1) * 1000)).padStart(3, '0')}`)
+          ? el('span', { class: 'replay-label', style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
           : el('span', { class: 'help' }, this.hist ? 'Timeline: coloured bars = draft preview ▼ · dark line = recorded by HA ▲ · click to replay, wheel to zoom, drag the activity strip to window the cloud' : ''),
         replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : ''),
     );
