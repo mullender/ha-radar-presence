@@ -4,11 +4,14 @@ services:
     container_name: ha_radar_dev
     volumes:
       - ./ha_config:/config
-      - ./custom_components:/config/custom_components
+      - ./custom_components/radar_zone_presence:/config/custom_components/radar_zone_presence
+      - ./dev/radar_sim:/config/custom_components/radar_sim
+      - ./dev/data:/data:ro
     ports:
-      # Offset from ha-tides (8123/5678) so both dev containers can run at once.
-      - "8124:8123"
+      # dev/configuration.yaml serves on 8124 (offset from ha-tides on 8123).
+      - "8124:8124"
       - "5679:5678"   # debugpy
     environment:
       - TZ=America/Los_Angeles
+      - RADAR_SIM_DATA=/data
     restart: unless-stopped

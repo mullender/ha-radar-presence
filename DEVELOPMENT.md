@@ -10,9 +10,28 @@ on [ha-tides](https://github.com/mullender/ha-tides/blob/main/DEVELOPMENT.md).
 - Node.js 20+ (frontend build, CDP helper scripts).
 - VS Code with the "Python" extension.
 
-Python is not needed on the host; the HA container ships it.
+Docker is optional: the venv route (2a) needs only Python 3.13+ and Node.
 
-## 2. HA in Docker with the component mounted
+## 2a. HA from a local venv (what the Claude sessions use)
+
+```
+python3 -m venv .venv
+.venv/bin/pip install pytest-homeassistant-custom-component
+.venv/bin/pip install "$(grep -i '^home-assistant-frontend' .venv/lib/python3.*/site-packages/homeassistant/package_constraints.txt)"
+node tools/export_history.mjs --hours 48      # needs the production CDP tab; writes dev/data/
+dev/run.sh                                    # http://localhost:8124, user dev / password dev
+```
+
+`dev/run.sh` seeds `ha_config/` (minimal config, dev user, onboarding done),
+symlinks `radar_zone_presence` and the dev-only `radar_sim` integration, and
+confirms the pending HTTP port. `radar_sim` recreates the exported radars with
+the same entity ids, backfills the recorder once (paced; takes ~6 min) and
+then replays the data live in a loop.
+
+Add radars via Settings → Integrations, or script it with
+`tools/dev_ws.mjs` (websocket client logged in as dev/dev).
+
+## 2b. HA in Docker with the component mounted
 
 `docker-compose.yml` runs `ghcr.io/home-assistant/home-assistant:dev` as
 `ha_radar_dev`, with `custom_components/` bind-mounted. Ports are offset from
@@ -20,7 +39,7 @@ ha-tides so both can run at once:
 
 | Host | Container | Use |
 |---|---|---|
-| 8124 | 8123 | Home Assistant UI |
+| 8124 | 8124 | Home Assistant UI |
 | 5679 | 5678 | debugpy |
 
 First run:
@@ -53,16 +72,22 @@ startup code.
 
 Logs: `docker compose logs -f homeassistant | grep radar_zone_presence`.
 
-## 5. Realistic data without a radar
+## 5. Tests
 
-The dev container has no radar. Planned for M1 (see DESIGN.md §10):
+```
+.venv/bin/pytest                 # engine, integration (HA test harness), history, parity vectors
+node --test tests/js/            # frontend/engine.js against the same vectors
+UPDATE_VECTORS=1 .venv/bin/pytest tests/test_vectors.py   # after changing engine semantics
+```
 
-1. Export target history from production through the CDP browser into
-   `tests/fixtures/` (frames in mm, per sensor).
-2. A dev-only simulator replays those fixtures into fake
-   `sensor.*_target_<n>_x/_y` entities with the original timing (X first,
-   then Y ~1–4 ms later), so the engine sees the same update pattern as real
-   ESPHome devices.
+`tests/fixtures/` are short windows cut from production exports
+(`tools/cut_fixture.py`), including the 2026-11-13 kitchen ghost.
+
+## 5b. Driving the panel
+
+`tools/cdp_dev.mjs` opens the dev HA in its own window of the CDP Chrome on
+:9224 (logged in, cache and service worker bypassed) and offers `eval`,
+`shot`, `click`, `drag`, `mouse`, `key`, `wheel`, `close`.
 
 ## 6. Reading production HA
 

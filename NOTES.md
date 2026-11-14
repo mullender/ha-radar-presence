@@ -35,6 +35,29 @@ section. DESIGN.md is the spec; this file is the lab notebook.
 - aef514 has firmware exclusion zone zout1 enabled (x 1016–2540 mm); it does
   not explain the count/slot-2 mismatch (22/80 points inside).
 
+## Dev-environment gotchas (2026-11-13)
+
+- **Docker/Colima and Playwright-style Chrome cannot start** from this Claude
+  session (macOS sandbox `sandbox_extension_issue_*` / mach-port denials).
+  HA runs from `.venv` via `dev/run.sh`; UI testing drives a *separate window*
+  in the user's CDP Chrome (`tools/cdp_dev.mjs`), never the production tab.
+- **HA 2026.10 HTTP config is "pending" until confirmed**: a YAML
+  `server_port` change reverts after 5 min unless promoted
+  (`http/config/promote`). `dev/run.sh` promotes it; if a trial already failed,
+  fix `ha_config/.storage/http` (`stable.server_port`, `pending: null`).
+- **Recorder stall on bulk backfill**: every recorded state references the
+  entity's previous state; SQLAlchemy's flush topologically sorts those chains
+  quadratically. Thousands of states per entity in one commit = flush never
+  finishes (stack: `session.commit → flush → topological.sort_as_subsets`).
+  The simulator paces the backfill (~800 states/s, `commit_interval: 1`).
+  Production is unaffected (3 Hz real updates).
+- **Background windows don't run requestAnimationFrame**: the plot only
+  repaints when the dev window is visible or a screenshot forces a frame.
+- **HA's service worker caches panel modules**; the URL version hash only
+  changes on HA restart. `cdp_dev.mjs open` disables cache + service worker.
+- Household presence data is never committed: `dev/data/` is gitignored,
+  fixtures are short windows, no screenshots of real data in docs.
+
 ## Environment
 
 - Production HA readable via CDP on localhost:9224 (`tools/cdp_eval.mjs`).
@@ -47,4 +70,15 @@ section. DESIGN.md is the spec; this file is the lab notebook.
 
 ## Progress
 
-- M0 scaffolding, DESIGN.md, export + fixture tools, fixtures.
+- M0 scaffolding, DESIGN.md, export + fixture tools, fixtures. (2f1fae8)
+- M1 engine (216b4c4) + HA integration (c860ab4) + simulator & JS engine
+  port with parity vectors (38ea221). 32 pytest + 17 node tests.
+- M2–M4 panel (fea8957): editor, snapping, WebGL cloud, preview, timeline,
+  replay, frame table. Verified in the dev instance against 48 h of
+  production-shaped data (7 radars): drawing snaps rectangles square, edge
+  drag keeps rectilinear zones rectilinear, save → entities created, entry
+  reload → live subscription resumes, exclusion immediately reflected in
+  `excluded_targets`.
+- Observation from the dev data: a box over living-room target 1's parking
+  spot would have triggered 1052× in 24 h — exactly the ghost case the
+  preview is meant to expose.
