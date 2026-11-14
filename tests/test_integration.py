@@ -311,7 +311,7 @@ async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_w
     assert hass.states.get(couch).state == "on"
 
 
-async def test_exit_zone_keeps_door_and_creates_no_entity(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+async def test_exit_zone_keeps_door_and_creates_no_zone_device(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     entry = await setup_entry(hass, radar_device)
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
@@ -332,7 +332,10 @@ async def test_exit_zone_keeps_door_and_creates_no_entity(hass: HomeAssistant, r
     ent_reg = er.async_get(hass)
     assert eid(hass, "zdoor") is None
     assert entry.subentries[RADAR].data["zones"][0]["id"] == "zdoor"  # exits live on the radar
-    assert not [d for d in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)]  # no device for an exit
+    # No presence device for an exit, only a passage event on the radar's (linked) device.
+    (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    assert device.model == "Radar exits"
+    assert [e.domain for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id)] == ["event"]
     await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
     cfg = (await client.receive_json())["result"]
     assert cfg["zones"][0]["door_entity_id"] == "binary_sensor.front_door"
@@ -459,3 +462,36 @@ async def test_aligned_radars_share_zones(hass: HomeAssistant, radar_device: str
     cfg = (await client.receive_json())["result"]
     assert cfg["zones"][0]["seen_by"] == ["Everything Presence Lite abc123", "Kitchen radar"]
     assert cfg["group"] == {"anchor": RADAR, "members": [RADAR, "radar2"]}
+
+
+async def test_exit_passages_fire_events(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    stairs = {**zone("stairs", "Stairs", [[-60, 10], [-20, 10], [-20, 50], [-60, 50]], kind="exit")}
+    door = {**zone("door", "Front door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"), "door_entity_id": "binary_sensor.front_door"}
+    hass.states.async_set("binary_sensor.front_door", "off")
+    freezer.tick(120)  # the door last moved long ago
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN), stairs, door])
+    ent_reg = er.async_get(hass)
+    stairs_eid = ent_reg.async_get_entity_id("event", DOMAIN, f"{RADAR}_stairs_passage")
+    door_eid = ent_reg.async_get_entity_id("event", DOMAIN, f"{RADAR}_door_passage")
+    assert hass.states.get(stairs_eid).attributes["friendly_name"] == "Everything Presence Lite abc123 Stairs"
+    # The exits sit on our own device for the radar, linked to the radar's device by its MAC.
+    device = dr.async_get(hass).async_get(ent_reg.async_get(stairs_eid).device_id)
+    assert device.id != radar_device and device.config_subentry_id == RADAR
+    assert device.connections == dr.async_get(hass).async_get(radar_device).connections
+
+    await move(hass, 1, -40, 30)  # appears at the top of the stairs
+    assert hass.states.get(stairs_eid).attributes["event_type"] == "arrived"
+    await move(hass, 1, -40, 80)  # walks in
+    await move(hass, 1, -40, 30)  # back to the stairs
+    await move(hass, 1, 0, 0)  # gone down
+    assert hass.states.get(stairs_eid).attributes["event_type"] == "left"
+
+    # A door exit needs the door: appearing there without it moving is not an arrival...
+    await move(hass, 2, 40, 30)
+    assert hass.states.get(door_eid).state == "unknown"
+    # ...until the door closes behind them, within the window.
+    hass.states.async_set("binary_sensor.front_door", "on")
+    await hass.async_block_till_done()
+    state = hass.states.get(door_eid)
+    assert state.attributes["event_type"] == "arrived" and state.attributes["door_entity_id"] == "binary_sensor.front_door"
+    assert entry.runtime_data.feeds[RADAR].exits

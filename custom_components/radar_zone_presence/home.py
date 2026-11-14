@@ -57,6 +57,8 @@ from .engine.fusion import Fuser, Observation
 
 _LOGGER = logging.getLogger(__name__)
 
+DOOR_WINDOW_S = 30.0  # a passage through an exit with a door counts if the door moved this close to it
+
 
 @dataclass(frozen=True, slots=True)
 class RadarView:
@@ -151,13 +153,15 @@ class GroupRuntime:
             Zone(zd.zone.id, zd.zone.name, KIND_INCLUDE, transform_polygon(self.to_anchor[zd.radar_id], zd.zone.polygon), zd.zone.filters, zd.zone.area_id)
             for zd in zones
         ]
+        self.exits: list[Zone] = []  # id "<radar id>:<exit id>", polygon in the anchor's frame
         for feed in self.feeds:
             a = self.to_anchor[feed.id]
-            engine_zones += [
+            self.exits += [
                 Zone(f"{feed.id}:{z.id}", z.name, KIND_EXIT, transform_polygon(a, z.polygon), door_entity_id=z.door_entity_id)
                 for z in feed.exits
             ]
-        self.engine = ZoneEngine(engine_zones, 0.0)
+        self.engine = ZoneEngine([*engine_zones, *self.exits], 0.0)
+        self._positions: dict[int, tuple[float, float]] = {}  # track id -> position, previous evaluation
         self.fuser = Fuser()
         self.snapshot: EngineSnapshot = self.engine.snapshot()
         self.track_radars: dict[int, frozenset[int]] = {}
@@ -180,7 +184,8 @@ class GroupRuntime:
     def available(self) -> bool:
         return any(f.available for f in self.feeds)
 
-    def evaluate(self, t: float) -> None:
+    def evaluate(self, t: float) -> list[tuple[str, str]]:
+        """Run the engine on the radars' latest targets; return passages [(exit id, "arrived" | "left")]."""
         obs = []
         for k, feed in enumerate(self.feeds):
             a = self.to_anchor[feed.id]
@@ -190,6 +195,22 @@ class GroupRuntime:
         fused = self.fuser.fuse(obs)
         self.track_radars = fused.radars
         self.snapshot = self.engine.process(Frame(t, fused.targets, self.available, fused.gone))
+        return self._passages(fused.targets, fused.gone)
+
+    def _passages(self, targets: tuple[Target, ...], gone: tuple[int, ...]) -> list[tuple[str, str]]:
+        """Someone appearing in an exit came in; someone vanishing in one left (merges are neither)."""
+        cur = {tg.slot: (tg.x, tg.y) for tg in targets}
+        prev, self._positions = self._positions, cur
+        if not self.exits:
+            return []
+        out = []
+        for tid, (x, y) in prev.items():
+            if tid not in cur and tid not in gone:
+                out += [(e.id, "left") for e in self.exits if point_in_polygon(x, y, e.polygon)]
+        for tid, (x, y) in cur.items():
+            if tid not in prev:
+                out += [(e.id, "arrived") for e in self.exits if point_in_polygon(x, y, e.polygon)]
+        return out
 
     def advance(self, t: float) -> None:
         self.engine.advance(t)
@@ -238,6 +259,9 @@ class HomeRuntime:
         self._entity_listeners: dict[int, list[CALLBACK_TYPE]] = {}  # id(group) -> callbacks
         self._frame_listeners: dict[str, list[FrameListener]] = {}  # radar id -> callbacks
         self._close_listeners: list[CALLBACK_TYPE] = []
+        self._passage_listeners: dict[str, list[Callable[[str, dict[str, Any]], None]]] = {}
+        self._pending_passages: list[tuple[str, str, float, str]] = []
+        self._door_unsubs: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self.reload_scheduled = False
 
@@ -270,7 +294,7 @@ class HomeRuntime:
                     feed.assembler.seed(entity_id, state.state)
             feed.process(feed.assembler.build_at(now))
         for group in self.groups:
-            group.evaluate(now)
+            group.evaluate(now)  # the targets already in view at start-up are not passages
             self._schedule_deadline(group)
         if self._feed_of_entity:
             self._unsubs.append(
@@ -279,9 +303,10 @@ class HomeRuntime:
 
     @callback
     def async_stop(self) -> None:
-        for unsub in self._unsubs:
+        for unsub in (*self._unsubs, *self._door_unsubs.values()):
             unsub()
         self._unsubs.clear()
+        self._door_unsubs.clear()
         for feed in self.feeds.values():
             if feed.flush_unsub:
                 feed.flush_unsub()
@@ -324,6 +349,46 @@ class HomeRuntime:
 
         return remove
 
+    # ------------------------------------------------------------- passages
+
+    @callback
+    def async_add_passage_listener(self, exit_id: str, cb: Callable[[str, dict[str, Any]], None]) -> CALLBACK_TYPE:
+        """exit id is "<radar id>:<exit zone id>"; cb(kind, attributes)."""
+        cbs = self._passage_listeners.setdefault(exit_id, [])
+        cbs.append(cb)
+        return lambda: cbs.remove(cb)
+
+    @callback
+    def _passage(self, group: GroupRuntime, exit_id: str, kind: str, t: float) -> None:
+        """With a door sensor, a passage only counts if the door moved around it."""
+        exit_zone = next(e for e in group.exits if e.id == exit_id)
+        door = exit_zone.door_entity_id
+        if door is None:
+            self._fire_passage(exit_id, kind, {})
+            return
+        state = self.hass.states.get(door)
+        if state is not None and abs(state.last_changed_timestamp - t) <= DOOR_WINDOW_S:
+            self._fire_passage(exit_id, kind, {"door_entity_id": door})
+            return
+        # The door may still open or close (people often vanish before it shuts).
+        self._pending_passages = [p for p in self._pending_passages if t - p[2] <= DOOR_WINDOW_S]
+        self._pending_passages.append((exit_id, kind, t, door))
+        if door not in self._door_unsubs:
+            self._door_unsubs[door] = async_track_state_change_event(self.hass, [door], self._on_door)
+
+    @callback
+    def _on_door(self, event: Event[EventStateChangedData]) -> None:
+        door = event.data["entity_id"]
+        now = time.time()
+        for pending in [p for p in self._pending_passages if p[3] == door and now - p[2] <= DOOR_WINDOW_S]:
+            self._pending_passages.remove(pending)
+            self._fire_passage(pending[0], pending[1], {"door_entity_id": door})
+
+    @callback
+    def _fire_passage(self, exit_id: str, kind: str, attrs: dict[str, Any]) -> None:
+        for cb in list(self._passage_listeners.get(exit_id, ())):
+            cb(kind, attrs)
+
     # -------------------------------------------------------------- updates
 
     @callback
@@ -355,7 +420,8 @@ class HomeRuntime:
         frame = feed.assembler.build()
         feed.process(frame)
         group = self.group_of[feed.id]
-        group.evaluate(frame.t)
+        for exit_id, kind in group.evaluate(frame.t):
+            self._passage(group, exit_id, kind, frame.t)
         self._publish(group, feed)
         self._schedule_deadline(group)
 

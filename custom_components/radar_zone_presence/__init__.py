@@ -32,11 +32,12 @@ from .const import (
 )
 from .devices import zone_device_identifier
 from .discovery import async_device_geometry, async_resolve_units, common_unit
+from .event import passage_unique_id
 from .home import HomeRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -145,11 +146,20 @@ def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry, runtime: Hom
         coverage = runtime.coverage(zid)
         if len(coverage) > 1:
             expected |= {f"{zid}_seen_{rid}" for rid in coverage}
+    for rid, feed in runtime.feeds.items():
+        expected |= {passage_unique_id(rid, z.id) for z in feed.exits}
     ent_reg = er.async_get(hass)
     for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
         if e.unique_id not in expected:
             _LOGGER.debug("Removing stale entity %s", e.entity_id)
             ent_reg.async_remove(e.entity_id)
+    # A radar whose exits were all removed no longer needs its (exits) device.
+    dev_reg = dr.async_get(hass)
+    keep = {(DOMAIN, f"radar_{f.device_id}") for f in runtime.feeds.values() if f.exits}
+    for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+        ours = {i for i in device.identifiers if i[0] == DOMAIN and i[1].startswith("radar_")}
+        if ours and not ours & keep:
+            dev_reg.async_remove_device(device.id)
 
 
 @callback

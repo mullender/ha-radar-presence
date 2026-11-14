@@ -89,6 +89,19 @@
       "zone_targets": {
         "name": "Targets"
       }
+    },
+    "event": {
+      "passage": {
+        "name": "{exit}",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "arrived": "Arrived",
+              "left": "Left"
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -10,6 +10,7 @@ VERSION: str = json.loads((Path(__file__).parent / "manifest.json").read_text())
 
 MANUFACTURER = "Radar Zone Presence"
 ZONE_MODEL = "Presence zone"
+RADAR_MODEL = "Radar exits"
 
 CONF_DEVICE_ID = "device_id"
 CONF_PROFILE = "profile"
