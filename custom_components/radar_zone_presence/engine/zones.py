@@ -173,7 +173,7 @@ class ZoneEngine:
                 inside = [tg for tg in kept if point_in_polygon(tg.x, tg.y, zone.polygon)]
             rt.slots = tuple(tg.slot for tg in inside)
             if zone.filters.hold_until_exit and t >= self._grace_until:
-                self._update_hold(rt, kept, set(rt.slots), exit_slots, t)
+                self._update_hold(rt, kept, set(rt.slots), exit_slots, t, frame.gone)
             elif not zone.filters.hold_until_exit:
                 rt.held_since.clear()
             rt.count = len(inside) + rt.held
@@ -185,10 +185,12 @@ class ZoneEngine:
         return self.snapshot()
 
     @staticmethod
-    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int], exit_slots: set[int], t: float) -> None:
+    def _update_hold(
+        rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int], exit_slots: set[int], t: float, gone: tuple[int, ...] = ()
+    ) -> None:
         cur = {tg.slot: tg.slot in inside_slots for tg in kept}
         for slot, was_inside in rt.prev_inside.items():
-            if was_inside and slot not in cur and slot not in rt.prev_exit:
+            if was_inside and slot not in cur and slot not in rt.prev_exit and slot not in gone:
                 rt.held_since.append(t)  # vanished inside (not in an exit): still there, just not detected
         for slot in cur:
             if slot not in rt.prev_inside and rt.held_since and slot not in exit_slots:

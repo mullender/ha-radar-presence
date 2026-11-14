@@ -1,37 +1,94 @@
 {
   "config": {
-    "step": {
-      "user": {
-        "title": "Pick a radar sensor",
-        "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). Zones are drawn afterwards in the Radar Zones panel.",
-        "data": { "device_id": "Radar sensor" }
+    "abort": {
+      "single_instance_allowed": "Radar Zone Presence is already set up. Add radars and zones from its integration page."
+    }
+  },
+  "config_subentries": {
+    "radar": {
+      "entry_type": "Radar",
+      "initiate_flow": {
+        "user": "Add radar"
       },
-      "import_legacy": {
-        "title": "Import existing polygons",
-        "description": "Found {count} polygon helper(s) (input_text.…_zone_polygon_N) for this sensor. Import them as include zones? The helpers are not changed or removed.",
-        "data": { "import": "Import polygons" }
+      "step": {
+        "user": {
+          "title": "Pick a radar sensor",
+          "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). Zones are drawn afterwards in the Radar Zones panel.",
+          "data": {
+            "device_id": "Radar sensor"
+          }
+        },
+        "import_legacy": {
+          "title": "Import existing polygons",
+          "description": "Found {count} polygon helper(s) (input_text.…_zone_polygon_N) for this sensor. Import them as zones? The helpers are not changed or removed.",
+          "data": {
+            "import": "Import polygons"
+          }
+        }
+      },
+      "abort": {
+        "no_devices": "No unconfigured radar sensors with per-target X/Y entities were found."
       }
     },
-    "abort": {
-      "no_devices": "No unconfigured radar sensors with per-target X/Y entities were found.",
-      "already_configured": "This radar sensor is already configured."
+    "zone": {
+      "entry_type": "Zone",
+      "initiate_flow": {
+        "user": "Add zone"
+      },
+      "step": {
+        "user": {
+          "title": "Add a presence zone",
+          "description": "Creates a presence device for a spot or room. It starts as a 1 × 1 m square in front of the radar; draw its real shape in the Radar Zones panel.",
+          "data": {
+            "name": "Name",
+            "radar": "Radar that sees it",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "area_id": "Leave empty to use the radar's area."
+          }
+        },
+        "reconfigure": {
+          "title": "Zone",
+          "description": "Shape, filters and hold settings are edited in the Radar Zones panel.",
+          "data": {
+            "name": "Name",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "area_id": "Leave empty to use the radar's area."
+          }
+        }
+      },
+      "abort": {
+        "no_radars": "Add a radar first."
+      }
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Radar settings",
-        "description": "Zones, exclusions and per-zone filters are edited in the Radar Zones panel in the sidebar.",
-        "data": { "reconnect_grace_s": "Ignore targets after reconnect" },
+        "title": "Settings",
+        "description": "Zones, exclusions, exits and per-zone filters are edited in the Radar Zones panel in the sidebar.",
+        "data": {
+          "reconnect_grace_s": "Ignore targets after reconnect"
+        },
         "data_description": {
-          "reconnect_grace_s": "Seconds to ignore detections after the radar comes back from unavailable. Ghost targets often appear right after a reconnect."
+          "reconnect_grace_s": "Seconds to ignore a radar's detections after it comes back from unavailable. Ghost targets often appear right after a reconnect."
         }
       }
     }
   },
   "entity": {
+    "binary_sensor": {
+      "seen_by": {
+        "name": "Seen by {radar}"
+      }
+    },
     "sensor": {
-      "zone_targets": { "name": "Targets" }
+      "zone_targets": {
+        "name": "Targets"
+      }
     }
   }
 }

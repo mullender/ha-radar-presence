@@ -12,7 +12,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.radar_zone_presence.const import DOMAIN
 
 from .conftest import SLUG
-from .test_integration import CHAIR_IN, move, setup_entry, zone
+from .test_integration import CHAIR_IN, RADAR, move, setup_entry, zone
 
 
 @pytest.fixture(autouse=True)
@@ -31,13 +31,13 @@ async def test_ws_history_frames(hass: HomeAssistant, radar_device: str, hass_ws
     freezer.tick(1)
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
-        {"type": f"{DOMAIN}/frames/history", "entry_id": entry.entry_id, "start": start.isoformat()}
+        {"type": f"{DOMAIN}/frames/history", "radar_id": RADAR, "start": start.isoformat()}
     )
     res = (await client.receive_json())["result"]
     assert len(res["x"]) >= 5
     assert res["x"][-1] == round(14 * 25.4)
     await client.send_json_auto_id(
-        {"type": f"{DOMAIN}/zone_events", "entry_id": entry.entry_id, "start": start.isoformat()}
+        {"type": f"{DOMAIN}/zone_events", "radar_id": RADAR, "start": start.isoformat()}
     )
     ev = (await client.receive_json())["result"]["zones"]
     assert any(s == "on" for _, s in ev["chair"])
@@ -61,7 +61,7 @@ async def test_history_units_survive_unitless_state(hass: HomeAssistant, radar_d
     freezer.tick(1)
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
-        {"type": f"{DOMAIN}/frames/history", "entry_id": entry.entry_id, "start": start.isoformat()}
+        {"type": f"{DOMAIN}/frames/history", "radar_id": RADAR, "start": start.isoformat()}
     )
     res = (await client.receive_json())["result"]
     xs = [x for s, x in zip(res["slot"], res["x"]) if s == 2]

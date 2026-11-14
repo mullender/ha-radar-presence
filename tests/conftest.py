@@ -16,19 +16,32 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+SLUG2 = "everything_presence_lite_def456"
+
+
 @pytest.fixture
 def radar_device(hass: HomeAssistant) -> str:
     """A fake ESPHome-style EP Lite: 3 targets of X/Y sensors in inches."""
+    return make_radar(hass, SLUG, "aa:bb:cc:dd:ee:ff")
+
+
+@pytest.fixture
+def second_radar(hass: HomeAssistant) -> str:
+    return make_radar(hass, SLUG2, "aa:bb:cc:dd:ee:00")
+
+
+def make_radar(hass: HomeAssistant, slug: str, mac: str) -> str:
+    SLUG = slug  # noqa: N806
     source = MockConfigEntry(domain="esphome", title="EPL")
     source.add_to_hass(hass)
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
     device = dev_reg.async_get_or_create(
         config_entry_id=source.entry_id,
-        connections={(dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:ff")},
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
         manufacturer="EverythingSmartTechnology",
         model="Everything Presence Lite",
-        name="Everything Presence Lite abc123",
+        name=f"Everything Presence Lite {slug[-6:]}",
     )
     for n in (1, 2, 3):
         for axis in "xy":

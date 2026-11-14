@@ -9,25 +9,30 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .discovery import async_device_geometry
-from .runtime import RadarRuntime
+from .home import HomeRuntime
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
-    runtime: RadarRuntime = entry.runtime_data
-    frame = runtime.last_frame
-    snap = runtime.snapshot
+    runtime: HomeRuntime = entry.runtime_data
+    radars = {}
+    for rid, feed in runtime.feeds.items():
+        frame = feed.last_frame
+        radars[rid] = {
+            "title": feed.title,
+            "units": feed.units,
+            "states": {eid: (st.state if (st := hass.states.get(eid)) else None) for eid in sorted(feed.entity_ids)},
+            "last_frame": asdict(frame) if frame else None,
+            "excluded_count": feed.excluded_count,
+            "suppressed": feed.suppressed,
+            "group": runtime.group_of[rid].anchor,
+            "device_geometry": async_device_geometry(hass, feed.device_id),
+        }
     return {
-        "data": dict(entry.data),
         "options": dict(entry.options),
-        "units": runtime.units,
-        "states": {eid: (st.state if (st := hass.states.get(eid)) else None) for eid in runtime.entity_ids},
-        "last_frame": asdict(frame) if frame else None,
-        "snapshot": {
-            "presence": snap.presence,
-            "target_count": snap.target_count,
-            "excluded_count": snap.excluded_count,
-            "suppressed": snap.suppressed,
-            "zones": {k: asdict(v) for k, v in snap.zones.items()},
+        "subentries": {sid: {"type": s.subentry_type, "title": s.title, "data": dict(s.data)} for sid, s in entry.subentries.items()},
+        "radars": radars,
+        "zones": {
+            zid: {"snapshot": asdict(runtime.zone_group(zid).snapshot.zones[zid]), "coverage": runtime.coverage(zid)}
+            for zid in runtime.zones
         },
-        "device_geometry": async_device_geometry(hass, entry.data["device_id"]),
     }

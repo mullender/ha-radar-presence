@@ -91,8 +91,12 @@ export class ZoneEngine {
     return false;
   }
 
-  /** targets: array of [slot, x, y]. Returns nothing; read snapshot(). */
-  process(t, targets, available = true) {
+  /**
+   * targets: array of [slot, x, y]. `gone`: slots that disappeared because they
+   * merged into another target (multi-radar fusion), not because they vanished.
+   * Returns nothing; read snapshot().
+   */
+  process(t, targets, available = true, gone = null) {
     this.advance(t);
     if (available && !this.available) this.graceUntil = t + this.grace;
     this.available = available;
@@ -113,7 +117,7 @@ export class ZoneEngine {
       }
       rt.slots = inside.map(tg => tg[0]);
       const hold = !!z.filters?.hold_until_exit;
-      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), exitSlots, t);
+      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), exitSlots, t, gone);
       else if (!hold) rt.heldSince.length = 0;
       rt.count = inside.length + rt.heldSince.length;
       this._setRaw(rt, inside.length > 0 || rt.heldSince.length > 0, t, z.filters);
@@ -122,9 +126,11 @@ export class ZoneEngine {
     this.lastT = t;
   }
 
-  _updateHold(rt, kept, insideSlots, exitSlots, t) {
+  _updateHold(rt, kept, insideSlots, exitSlots, t, gone = null) {
     const cur = new Map(kept.map(tg => [tg[0], insideSlots.has(tg[0])]));
-    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot) && !rt.prevExit.has(slot)) rt.heldSince.push(t);
+    for (const [slot, wasInside] of rt.prevInside) {
+      if (wasInside && !cur.has(slot) && !rt.prevExit.has(slot) && !gone?.includes(slot)) rt.heldSince.push(t);
+    }
     for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.heldSince.length && !exitSlots.has(slot)) rt.heldSince.shift();
     rt.prevInside = cur;
     rt.prevExit = exitSlots;

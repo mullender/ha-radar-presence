@@ -116,7 +116,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this._started = false;
     this.radars = [];
     this.unconfigured = [];
-    this.entryId = null;
+    this.radarId = null;
     this.config = null;
     this.units = makeUnits('in');
     this.zones = [];
@@ -150,7 +150,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.liveTrails = new Map();
     this.liveStates = {};
     this.doors = {}; // door contact entity -> {rows: [[t, state]], events, pos}
-    this.peers = new Map(); // other radars: entry_id -> {title, cfg, live}
+    this.peers = new Map(); // other radars: radar_id -> {title, cfg, live}
     this.showPeers = true;
     this._peerUnsubs = [];
     this.livePresence = false;
@@ -190,7 +190,7 @@ class RadarZonePresencePanel extends HTMLElement {
   connectedCallback() {
     this._keyHandler = this._keyHandler || (e => this._onKey(e));
     window.addEventListener('keydown', this._keyHandler);
-    // "Visit" on a zone device links to #entry=...&zone=...; HA keeps this element
+    // "Visit" on a zone device links to #radar=...&zone=...; HA keeps this element
     // alive between visits, so follow the hash whenever HA navigates here.
     this._hashHandler = this._hashHandler || (() => { if (location.pathname.endsWith(`/${PANEL_PATH}`)) this._applyHash(); });
     window.addEventListener('location-changed', this._hashHandler);
@@ -204,9 +204,9 @@ class RadarZonePresencePanel extends HTMLElement {
   async _start() {
     this._buildShell();
     await this._loadRadars();
-    const fromHash = new URLSearchParams(location.hash.slice(1)).get('entry');
-    const stored = localStorage.getItem('rzp.entry');
-    const pick = [fromHash, stored].find(id => this.radars.some(r => r.entry_id === id)) || this.radars[0]?.entry_id;
+    const fromHash = new URLSearchParams(location.hash.slice(1)).get('radar');
+    const stored = localStorage.getItem('rzp.radar');
+    const pick = [fromHash, stored].find(id => this.radars.some(r => r.radar_id === id)) || this.radars[0]?.radar_id;
     if (pick) {
       const zoneId = new URLSearchParams(location.hash.slice(1)).get('zone'); // before the hash is rewritten
       await this._selectRadar(pick);
@@ -217,24 +217,25 @@ class RadarZonePresencePanel extends HTMLElement {
 
   async _applyHash() {
     const q = new URLSearchParams(location.hash.slice(1));
-    const entry = q.get('entry'), zone = q.get('zone');
-    if (!entry || !this.radars?.some(r => r.entry_id === entry)) return;
-    if (entry !== this.entryId) await this._selectRadar(entry);
+    const entry = q.get('radar'), zone = q.get('zone');
+    if (!entry || !this.radars?.some(r => r.radar_id === entry)) return;
+    if (entry !== this.radarId) await this._selectRadar(entry);
     if (zone && this.zones.some(z => z.id === zone)) this._select(zone, null);
   }
 
   async _loadRadars() {
     const res = await this.hass.callWS({ type: `${DOMAIN}/list` });
+    this.home = res.home;
     this.radars = res.radars;
     this.unconfigured = res.unconfigured;
     this._renderHeader();
   }
 
-  async _selectRadar(entryId) {
+  async _selectRadar(radarId) {
     if (this._dirty() && !confirm('Discard unsaved zone changes?')) { this._renderHeader(); return; }
-    this.entryId = entryId;
-    localStorage.setItem('rzp.entry', entryId);
-    history.replaceState(null, '', `#entry=${entryId}`);
+    this.radarId = radarId;
+    localStorage.setItem('rzp.radar', radarId);
+    history.replaceState(null, '', `#radar=${radarId}`);
     this.selectedId = null;
     this.selectedVertex = null;
     this._stopNowTimer();
@@ -251,7 +252,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   async _loadConfig() {
-    const cfg = await this.hass.callWS({ type: `${DOMAIN}/config`, entry_id: this.entryId });
+    const cfg = await this.hass.callWS({ type: `${DOMAIN}/config`, radar_id: this.radarId });
     this.config = cfg;
     this.units = makeUnits(cfg.target_unit, this.hass);
     this.snap.gridStep = this.units.snapSteps[1];
@@ -288,21 +289,21 @@ class RadarZonePresencePanel extends HTMLElement {
 
   /** Configs of the other radars; live frames of those connected to this one through alignments. */
   async _loadPeers() {
-    const entryId = this.entryId;
-    const others = this.radars.filter(r => r.entry_id !== entryId);
-    const cfgs = await Promise.all(others.map(r => this.hass.callWS({ type: `${DOMAIN}/config`, entry_id: r.entry_id }).catch(() => null)));
-    if (entryId !== this.entryId) return;
+    const radarId = this.radarId;
+    const others = this.radars.filter(r => r.radar_id !== radarId);
+    const cfgs = await Promise.all(others.map(r => this.hass.callWS({ type: `${DOMAIN}/config`, radar_id: r.radar_id }).catch(() => null)));
+    if (radarId !== this.radarId) return;
     this.peers = new Map();
-    others.forEach((r, i) => { if (cfgs[i]) this.peers.set(r.entry_id, { title: r.title, cfg: cfgs[i], live: [] }); });
+    others.forEach((r, i) => { if (cfgs[i]) this.peers.set(r.radar_id, { title: r.title, cfg: cfgs[i], live: [] }); });
     for (const u of this._peerUnsubs) u.then(f => f()).catch(() => {});
     this._peerUnsubs = [];
     for (const id of this._peerTransforms().keys()) {
       const sub = this.hass.connection.subscribeMessage(ev => {
         const peer = this.peers.get(id);
-        if (!peer || ev.closed || entryId !== this.entryId) return;
+        if (!peer || ev.closed || !ev.targets || radarId !== this.radarId) return;
         peer.live = ev.targets;
         if (this.showPeers && this.mode !== 'replay') this._updatePlot();
-      }, { type: `${DOMAIN}/frames/subscribe`, entry_id: id });
+      }, { type: `${DOMAIN}/frames/subscribe`, radar_id: id });
       sub.catch(() => {});
       this._peerUnsubs.push(sub);
     }
@@ -311,9 +312,9 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _peerTransforms() {
-    const radars = [{ entry_id: this.entryId, aligned_to: this.settings.display.aligned_to },
-      ...[...this.peers].map(([id, p]) => ({ entry_id: id, aligned_to: p.cfg.settings?.display?.aligned_to }))];
-    return radarTransforms(this.entryId, radars);
+    const radars = [{ radar_id: this.radarId, aligned_to: this.settings.display.aligned_to },
+      ...[...this.peers].map(([id, p]) => ({ radar_id: id, aligned_to: p.cfg.settings?.display?.aligned_to }))];
+    return radarTransforms(this.radarId, radars);
   }
 
   /** Other aligned radars drawn in this radar's frame: field of view, zones, live targets. */
@@ -342,22 +343,22 @@ class RadarZonePresencePanel extends HTMLElement {
     this._unsubscribeLive();
     this.liveTrails = new Map();
     this.liveTargets = [];
-    const entryId = this.entryId;
+    const radarId = this.radarId;
     this._unsubLive = this.hass.connection.subscribeMessage(ev => {
-      if (entryId !== this.entryId) return;
+      if (radarId !== this.radarId) return;
       if (ev.closed) {
         // Entry reloaded (zones saved): reconnect shortly.
         this._unsubLive = null;
-        setTimeout(() => { if (entryId === this.entryId) { this._loadConfigKeepView(); this._subscribeLive(); } }, 800);
+        setTimeout(() => { if (radarId === this.radarId) { this._loadConfigKeepView(); this._subscribeLive(); } }, 800);
         return;
       }
       this._onLiveFrame(ev);
-    }, { type: `${DOMAIN}/frames/subscribe`, entry_id: entryId });
+    }, { type: `${DOMAIN}/frames/subscribe`, radar_id: radarId });
     this._unsubLive.catch(err => this._toast(`Live updates failed: ${err.message || err.code}`, true));
   }
 
   async _loadConfigKeepView() {
-    const cfg = await this.hass.callWS({ type: `${DOMAIN}/config`, entry_id: this.entryId });
+    const cfg = await this.hass.callWS({ type: `${DOMAIN}/config`, radar_id: this.radarId });
     this.config = cfg;
     // Keep the draft if the user kept editing; otherwise sync ids/entity ids from the server.
     if (!this._dirty()) {
@@ -370,9 +371,14 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _onLiveFrame(ev) {
     const now = ev.t;
-    this.liveTargets = ev.targets;
     this.liveStates = Object.fromEntries(Object.entries(ev.zones).map(([k, v]) => [k, v[0]]));
     this.livePresence = !!ev.presence;
+    if (!ev.targets) { // only zone states changed (another radar of the group, or a delay ran out)
+      if (this.mode !== 'replay') this._updatePlot();
+      this._renderLiveBadges();
+      return;
+    }
+    this.liveTargets = ev.targets;
     this._appendLiveFrame(ev);
     for (const [slot, x, y] of ev.targets) {
       if (!this.liveTrails.has(slot)) this.liveTrails.set(slot, []);
@@ -507,7 +513,7 @@ class RadarZonePresencePanel extends HTMLElement {
   // ------------------------------------------------------------- history
 
   async _loadHistory() {
-    if (!this.entryId) return;
+    if (!this.radarId) return;
     this._stopNowTimer();
     this._loadingHistory = true;
     this._renderLoading();
@@ -515,8 +521,8 @@ class RadarZonePresencePanel extends HTMLElement {
     const start = new Date(end.getTime() - this.rangeS * 1000);
     try {
       const [hist, events] = await Promise.all([
-        this.hass.callWS({ type: `${DOMAIN}/frames/history`, entry_id: this.entryId, start: start.toISOString(), end: end.toISOString() }),
-        this.hass.callWS({ type: `${DOMAIN}/zone_events`, entry_id: this.entryId, start: start.toISOString(), end: end.toISOString() }),
+        this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: this.radarId, start: start.toISOString(), end: end.toISOString() }),
+        this.hass.callWS({ type: `${DOMAIN}/zone_events`, radar_id: this.radarId, start: start.toISOString(), end: end.toISOString() }),
       ]);
       this._setHistory(hist);
       this.actual = {};
@@ -825,7 +831,7 @@ class RadarZonePresencePanel extends HTMLElement {
     }
     try {
       const res = await this.hass.callWS({
-        type: `${DOMAIN}/zones/save`, entry_id: this.entryId, zones: this.zones,
+        type: `${DOMAIN}/zones/save`, radar_id: this.radarId, zones: this.zones,
         settings: { reconnect_grace_s: Number(this.settings.reconnect_grace_s) || 0, display: this.settings.display },
       });
       this.zones = res.zones.map(z => this._editable(z));
@@ -996,16 +1002,30 @@ class RadarZonePresencePanel extends HTMLElement {
       el('p', {}, this.unconfigured.length
         ? `Found ${this.unconfigured.length} radar sensor(s) with target coordinates: ${this.unconfigured.map(u => u.name).join(', ')}.`
         : 'No devices with per-target X/Y sensors were found.'),
-      el('p', {}, 'Add one under Settings → Devices & services → Add integration → Radar Zone Presence.'),
-      el('a', { href: '/config/integrations/dashboard/add?domain=radar_zone_presence', class: 'btn primary' }, 'Add radar')));
+      this.home
+        ? el('p', {}, 'Add one on the Radar Zone Presence integration page: Add radar.')
+        : el('p', {}, 'Set up the integration under Settings → Devices & services → Add integration → Radar Zone Presence; it then asks for the first radar.'),
+      el('a', { href: this.home ? '/config/integrations/integration/radar_zone_presence' : '/config/integrations/dashboard/add?domain=radar_zone_presence', class: 'btn primary' },
+        this.home ? 'Add radar' : 'Set up')));
   }
 
   _renderHeader() {
     const h = this.header;
     if (!h) return;
     const dirty = this._dirty();
+    // Radars grouped by HA floor (highest level first, like HA's own area lists), then floorless.
+    const floors = new Map();
+    for (const r of this.radars) {
+      const key = r.floor_id || '';
+      if (!floors.has(key)) floors.set(key, { name: r.floor || 'No floor', level: r.floor_level ?? -Infinity, radars: [] });
+      floors.get(key).radars.push(r);
+    }
+    const option = r => el('option', { value: r.radar_id, selected: r.radar_id === this.radarId }, `${r.title}${r.area ? ` · ${r.area}` : ''}`);
+    const grouped = [...floors.values()].sort((a, b) => b.level - a.level);
     const sel = el('select', { onchange: e => this._selectRadar(e.target.value), title: 'Radar sensor' },
-      this.radars.map(r => el('option', { value: r.entry_id, selected: r.entry_id === this.entryId }, `${r.title}${r.area ? ` · ${r.area}` : ''}`)));
+      grouped.length > 1 || grouped[0]?.name !== 'No floor'
+        ? grouped.map(f => el('optgroup', { label: f.name }, f.radars.map(option)))
+        : this.radars.map(option));
     const range = el('select', { onchange: e => { this.rangeS = +e.target.value; this._exitReplay(); this._loadHistory(); }, title: 'History range' },
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
     h.replaceChildren(
@@ -1278,6 +1298,12 @@ class RadarZonePresencePanel extends HTMLElement {
             return saved?.device_id
               ? el('a', { href: `/config/devices/device/${saved.device_id}`, title: 'Open the presence device in Home Assistant' }, `${name} ↗`)
               : el('span', { class: 'help' }, `${name} (created when you save)`);
+          })(),
+          ...(() => {
+            const seen = this.config.zones.find(q => q.id === z.id)?.seen_by || [];
+            return seen.length > 1 ? [el('label', {}, 'Seen by'),
+              el('span', { class: 'help', title: 'Aligned radars whose view covers part of this zone. Each has a "Seen by" diagnostic sensor on the device.' },
+                seen.map(t => t.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '')).join(', '))] : [];
           })(),
           el('label', {}, 'Area'),
           el('select', { onchange: e => this._patchZone(z.id, { area_id: e.target.value || null }) },
@@ -1586,11 +1612,11 @@ class RadarZonePresencePanel extends HTMLElement {
 
   /** Align this radar's view with another radar that sees part of the same space. */
   _alignControls() {
-    const others = this.radars.filter(r => r.entry_id !== this.entryId);
+    const others = this.radars.filter(r => r.radar_id !== this.radarId);
     if (!others.length) return [];
-    const a = this._align?.entryId === this.entryId ? this._align : null;
+    const a = this._align?.radarId === this.radarId ? this._align : null;
     const saved = this.settings.display.aligned_to;
-    this._alignRef ||= saved?.entry_id && others.some(r => r.entry_id === saved.entry_id) ? saved.entry_id : others[0].entry_id;
+    this._alignRef ||= saved?.radar_id && others.some(r => r.radar_id === saved.radar_id) ? saved.radar_id : others[0].radar_id;
     let status = '';
     if (a?.busy) status = `Matching against ${a.title}…`;
     else if (a?.error) status = a.error;
@@ -1603,45 +1629,45 @@ class RadarZonePresencePanel extends HTMLElement {
       el('label', {}, 'Align with'),
       el('div', { style: { display: 'flex', gap: '6px' } },
         el('select', { style: { flex: 1, minWidth: 0 }, onchange: e => { this._alignRef = e.target.value; } },
-          others.map(r => el('option', { value: r.entry_id, selected: r.entry_id === this._alignRef }, r.title))),
+          others.map(r => el('option', { value: r.radar_id, selected: r.radar_id === this._alignRef }, r.title))),
         el('button', { class: 'btn', disabled: !this.hist || a?.busy, title: 'Rotate this view to match the other radar, from moments when both radars saw the same person', onclick: () => this._alignWith(this._alignRef) }, 'Align')),
       el('div', { class: 'help full' }, 'For radars that overlap (e.g. one sees into the other\'s room): finds the rotation from the times both saw the same single person, and turns this view to match the other radar\'s.', status ? el('div', { style: { marginTop: '4px', color: a?.error ? 'var(--error-color, #db4437)' : '' } }, status) : ''),
     ];
   }
 
   async _alignWith(refId) {
-    const ref = this.radars.find(r => r.entry_id === refId);
+    const ref = this.radars.find(r => r.radar_id === refId);
     if (!this.hist || !ref) return;
-    const entryId = this.entryId;
-    this._align = { entryId, busy: true, title: ref.title };
+    const radarId = this.radarId;
+    this._align = { radarId, busy: true, title: ref.title };
     this._renderSide();
     try {
       const range = { start: new Date(this.hist.start * 1000).toISOString(), end: new Date(this.hist.end * 1000).toISOString() };
       const [cfg, refHist] = await Promise.all([
-        this.hass.callWS({ type: `${DOMAIN}/config`, entry_id: refId }),
-        this.hass.callWS({ type: `${DOMAIN}/frames/history`, entry_id: refId, ...range }),
+        this.hass.callWS({ type: `${DOMAIN}/config`, radar_id: refId }),
+        this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: refId, ...range }),
       ]);
-      if (entryId !== this.entryId) return;
+      if (radarId !== this.radarId) return;
       const reg = registerRigid(pairDetections(refHist, this.hist));
       if (!reg || reg.inliers < 30 || reg.inliers / reg.n < 0.3) {
-        this._align = { entryId, error: reg
+        this._align = { radarId, error: reg
           ? `Not enough overlap with ${ref.title}: only ${reg.inliers} of ${reg.n} moments agree. Try a longer history range.`
           : `${ref.title} and this radar rarely see one person at the same time in this range.` };
         this._renderSide();
         return;
       }
       const refDisplay = normalizeDisplay(cfg.settings.display || {}, { upsideDown: cfg.device_mounting?.upside_down });
-      this._align = { entryId };
+      this._align = { radarId };
       this._setDisplay({
         ...viewToMatch(refDisplay, reg),
         aligned_to: {
-          entry_id: refId, title: ref.title, angle_deg: Math.round(reg.angleDeg * 10) / 10, reflect: reg.reflect,
+          radar_id: refId, title: ref.title, angle_deg: Math.round(reg.angleDeg * 10) / 10, reflect: reg.reflect,
           offset_mm: reg.t.map(Math.round), pairs: reg.n, agree: reg.inliers, rms_mm: Math.round(reg.rms),
         },
       });
       this._loadPeers();
     } catch (err) {
-      this._align = { entryId, error: `Alignment failed: ${err.message || err.code}` };
+      this._align = { radarId, error: `Alignment failed: ${err.message || err.code}` };
       this._renderSide();
     }
   }
@@ -1667,7 +1693,7 @@ class RadarZonePresencePanel extends HTMLElement {
   /** History of every door contact over the loaded window, and how each lines up with this radar. */
   async _loadDoors() {
     const ids = [...new Set([...this._doorCandidates(), ...this.zones.map(z => z.door_entity_id).filter(Boolean)])];
-    const entryId = this.entryId;
+    const radarId = this.radarId;
     this.doors = {};
     if (!ids.length || !this.hist) return;
     try {
@@ -1675,7 +1701,7 @@ class RadarZonePresencePanel extends HTMLElement {
         type: 'history/history_during_period', entity_ids: ids, minimal_response: true, no_attributes: true,
         significant_changes_only: false, start_time: new Date(this.hist.start * 1000).toISOString(), end_time: new Date().toISOString(),
       });
-      if (entryId !== this.entryId) return;
+      if (radarId !== this.radarId) return;
       for (const id of ids) this.doors[id] = { rows: (res[id] || []).map(r => [r.lu ?? r.last_updated ?? this.hist.start, r.s ?? r.state]) };
     } catch (err) {
       this._toast(`Door history unavailable: ${err.message || err.code}`, true);

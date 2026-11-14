@@ -1,7 +1,7 @@
 // Lovelace card: live view of one radar with its zones and targets.
 //
 //   type: custom:radar-zone-presence-card
-//   entry_id: <config entry id>   # picked in the card editor
+//   radar_id: <radar id>          # picked in the card editor
 //   title: Living room            # optional
 //   height: 320                   # optional, px
 //   trail: 10                     # optional, seconds of live trail
@@ -31,9 +31,9 @@ class RadarZonePresenceCard extends HTMLElement {
   static async getStubConfig(hass) {
     try {
       const res = await hass.callWS({ type: `${DOMAIN}/list` });
-      return { entry_id: res.radars[0]?.entry_id || '' };
+      return { radar_id: res.radars[0]?.radar_id || '' };
     } catch {
-      return { entry_id: '' };
+      return { radar_id: '' };
     }
   }
 
@@ -57,12 +57,12 @@ class RadarZonePresenceCard extends HTMLElement {
         .chip.on { background: #43a047; color: #fff; }
         .err { padding: 16px; color: var(--error-color, #c00); }
       </style>
-      <ha-card><div class="head"><span class="title"></span><a href="/radar-zones#entry=${c.entry_id}">Edit zones</a></div>
+      <ha-card><div class="head"><span class="title"></span><a href="/radar-zones#radar=${c.radar_id}">Edit zones</a></div>
       <rzp-plot></rzp-plot><div class="chips"></div></ha-card>`;
-    if (!c.entry_id) { this.shadowRoot.querySelector('ha-card').innerHTML = '<div class="err">Pick a radar in the card editor.</div>'; return; }
+    if (!c.radar_id) { this.shadowRoot.querySelector('ha-card').innerHTML = '<div class="err">Pick a radar in the card editor.</div>'; return; }
     this.plot = this.shadowRoot.querySelector('rzp-plot');
     try {
-      this.cfg = await this._hass.callWS({ type: `${DOMAIN}/config`, entry_id: c.entry_id });
+      this.cfg = await this._hass.callWS({ type: `${DOMAIN}/config`, radar_id: c.radar_id });
     } catch (err) {
       this.shadowRoot.querySelector('ha-card').innerHTML = `<div class="err">Radar unavailable: ${err.message || err.code}</div>`;
       return;
@@ -81,7 +81,7 @@ class RadarZonePresenceCard extends HTMLElement {
     });
     this.plot.fit();
     this._renderChips({});
-    this._unsub = this._hass.connection.subscribeMessage(ev => this._onFrame(ev), { type: `${DOMAIN}/frames/subscribe`, entry_id: c.entry_id });
+    this._unsub = this._hass.connection.subscribeMessage(ev => this._onFrame(ev), { type: `${DOMAIN}/frames/subscribe`, radar_id: c.radar_id });
   }
 
   _onFrame(ev) {
@@ -127,13 +127,13 @@ class RadarZonePresenceCardEditor extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>label { display: block; margin: 8px 0 4px; font-size: 13px; } select, input { width: 100%; padding: 6px; box-sizing: border-box; }</style>
       <label>Radar</label>
-      <select id="entry">${r.map(x => `<option value="${x.entry_id}" ${x.entry_id === this._config.entry_id ? 'selected' : ''}>${x.title}${x.area ? ` · ${x.area}` : ''}</option>`).join('')}</select>
+      <select id="entry">${r.map(x => `<option value="${x.radar_id}" ${x.radar_id === this._config.radar_id ? 'selected' : ''}>${x.title}${x.area ? ` · ${x.area}` : ''}</option>`).join('')}</select>
       <label>Title (optional)</label><input id="title" value="${this._config.title || ''}">
       <label>Height (px)</label><input id="height" type="number" value="${this._config.height || 320}">
       <label>Trail (s)</label><input id="trail" type="number" value="${this._config.trail || 10}">`;
     for (const id of ['entry', 'title', 'height', 'trail']) {
       this.shadowRoot.getElementById(id).addEventListener('change', e => {
-        const key = id === 'entry' ? 'entry_id' : id;
+        const key = id === 'entry' ? 'radar_id' : id;
         const value = id === 'height' || id === 'trail' ? Number(e.target.value) : e.target.value;
         this._config = { ...this._config, [key]: value };
         this.dispatchEvent(new CustomEvent('config-changed', { detail: { config: this._config }, bubbles: true, composed: true }));

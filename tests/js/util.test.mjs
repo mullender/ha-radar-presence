@@ -40,9 +40,9 @@ test('door geometry: "in" swings towards the radar, hinge end flips', async () =
 test('radar transforms chain through alignments in either direction', async () => {
   const { radarTransforms, affineApply, alignmentAffine } = await import('../../custom_components/radar_zone_presence/frontend/util.js');
   // kitchen -> living, island -> living (both saved on the non-reference radar)
-  const kitchen = { entry_id: 'k', aligned_to: { entry_id: 'l', angle_deg: -155.1, reflect: false, offset_mm: [2300, 5445] } };
-  const island = { entry_id: 'b', aligned_to: { entry_id: 'l', angle_deg: -104.3, reflect: true, offset_mm: [1646, 2758] } };
-  const living = { entry_id: 'l' };
+  const kitchen = { radar_id: 'k', aligned_to: { radar_id: 'l', angle_deg: -155.1, reflect: false, offset_mm: [2300, 5445] } };
+  const island = { radar_id: 'b', aligned_to: { radar_id: 'l', angle_deg: -104.3, reflect: true, offset_mm: [1646, 2758] } };
+  const living = { radar_id: 'l' };
   const radars = [living, kitchen, island];
   const p = [500, 2500]; // a point in the island radar's frame
   const inLiving = affineApply(alignmentAffine(island.aligned_to), p);
@@ -51,5 +51,5 @@ test('radar transforms chain through alignments in either direction', async () =
   const back = affineApply(alignmentAffine(kitchen.aligned_to), inKitchen); // kitchen -> living
   assert.ok(Math.hypot(back[0] - inLiving[0], back[1] - inLiving[1]) < 1e-6);
   assert.equal(radarTransforms('l', radars).size, 2);
-  assert.equal(radarTransforms('x', [...radars, { entry_id: 'x' }]).size, 0, 'unaligned radar: nothing connected');
+  assert.equal(radarTransforms('x', [...radars, { radar_id: 'x' }]).size, 0, 'unaligned radar: nothing connected');
 });

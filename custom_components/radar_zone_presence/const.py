@@ -18,6 +18,11 @@ CONF_ZONES = "zones"
 CONF_RECONNECT_GRACE = "reconnect_grace_s"
 CONF_DISPLAY = "display"
 CONF_UNIT = "unit"  # last known unit of the coordinate entities (fallback)
+CONF_RADAR = "radar"  # zone subentry: the radar subentry whose frame the polygon is drawn in
+CONF_IMPORT_ZONES = "import_zones"  # radar subentry: legacy polygons to turn into zones on setup
+
+SUBENTRY_RADAR = "radar"
+SUBENTRY_ZONE = "zone"
 
 PROFILE_EVERYTHING_PRESENCE = "everything_presence"
 PROFILE_SCREEK_2A = "screek_2a"

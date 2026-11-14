@@ -47,6 +47,9 @@ class Frame:
     t: float  # epoch seconds of the newest update in the frame
     targets: tuple[Target, ...]
     available: bool = True  # False when every coordinate entity is unavailable
+    # Slots that disappeared because they merged into another target
+    # (multi-radar fusion), not because the person vanished.
+    gone: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)

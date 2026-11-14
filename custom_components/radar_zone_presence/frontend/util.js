@@ -230,16 +230,16 @@ export function alignmentAffine(al) {
 }
 /**
  * Transforms from every radar connected to `fromId` through saved alignments
- * into `fromId`'s frame. `radars`: [{entry_id, aligned_to}]. Returns Map id -> affine.
+ * into `fromId`'s frame. `radars`: [{radar_id, aligned_to}]. Returns Map id -> affine.
  */
 export function radarTransforms(fromId, radars) {
-  const edges = new Map(radars.map(r => [r.entry_id, []]));
+  const edges = new Map(radars.map(r => [r.radar_id, []]));
   for (const r of radars) {
     const al = r.aligned_to;
-    if (!al || !edges.has(al.entry_id) || !al.offset_mm) continue;
+    if (!al || !edges.has(al.radar_id) || !al.offset_mm) continue;
     const A = alignmentAffine(al); // r -> ref
-    edges.get(r.entry_id).push([al.entry_id, A]);
-    edges.get(al.entry_id).push([r.entry_id, affineInvert(A)]); // ref -> r
+    edges.get(r.radar_id).push([al.radar_id, A]);
+    edges.get(al.radar_id).push([r.radar_id, affineInvert(A)]); // ref -> r
   }
   // BFS: T[id] maps id's frame into fromId's frame.
   const T = new Map([[fromId, [[1, 0, 0], [0, 1, 0]]]]);

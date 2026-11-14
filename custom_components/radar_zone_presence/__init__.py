@@ -6,21 +6,33 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from . import websocket_api
-from .const import CONF_DEVICE_ID, CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN, PANEL_COMPONENT, PANEL_URL, STATIC_URL
+from .const import (
+    CONF_IMPORT_ZONES,
+    CONF_RADAR,
+    CONF_TARGETS,
+    CONF_UNIT,
+    DOMAIN,
+    PANEL_COMPONENT,
+    PANEL_URL,
+    STATIC_URL,
+    SUBENTRY_RADAR,
+    SUBENTRY_ZONE,
+)
 from .devices import zone_device_identifier
-from .discovery import async_resolve_units, common_unit
-from .engine import KIND_INCLUDE
-from .runtime import RadarRuntime
+from .discovery import async_device_geometry, async_resolve_units, common_unit
+from .home import HomeRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +41,7 @@ FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-type RadarConfigEntry = ConfigEntry[RadarRuntime]
+type HomeConfigEntry = ConfigEntry[HomeRuntime]
 
 
 def _frontend_version() -> str:
@@ -61,87 +73,99 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: RadarConfigEntry) -> bool:
-    _remember_unit(hass, entry)
-    runtime = RadarRuntime(hass, entry)
+async def async_setup_entry(hass: HomeAssistant, entry: HomeConfigEntry) -> bool:
+    # Runs before the update listener is registered, so these updates do not reload.
+    _remember_units(hass, entry)
+    _import_legacy_zones(hass, entry)
+    runtime = HomeRuntime(hass, entry)
+    for rid, feed in runtime.feeds.items():
+        runtime.set_max_distance(rid, async_device_geometry(hass, feed.device_id)["max_distance_mm"])
     entry.runtime_data = runtime
-    _remove_stale_entities(hass, entry)
+    _remove_stale_entities(hass, entry, runtime)
     runtime.async_start()
     entry.async_on_unload(runtime.async_stop)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    _sync_zone_areas(hass, entry)
-    entry.async_on_unload(entry.add_update_listener(_async_reload))
+    _sync_zone_areas(hass, runtime)
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: RadarConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: HomeConfigEntry) -> bool:
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def _async_reload(hass: HomeAssistant, entry: RadarConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+async def _async_entry_updated(hass: HomeAssistant, entry: HomeConfigEntry) -> None:
+    """Reload once for a batch of changes (the panel saves several subentries at a time)."""
+    runtime = entry.runtime_data
+    if runtime.reload_scheduled:
+        return
+    runtime.reload_scheduled = True
+    hass.config_entries.async_schedule_reload(entry.entry_id)
 
 
 @callback
-def _remember_unit(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Store the radar's coordinate unit so restarts with unit-less states still convert correctly."""
-    ids = [e for t in entry.data[CONF_TARGETS] for e in (t["x"], t["y"])]
-    unit = common_unit(async_resolve_units(hass, ids, entry.data.get(CONF_UNIT)))
-    if unit and unit != entry.data.get(CONF_UNIT):
-        # Runs before the update listener is registered, so this does not reload.
-        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: unit})
+def _remember_units(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Store each radar's coordinate unit so restarts with unit-less states still convert correctly."""
+    for sub in list(entry.subentries.values()):
+        if sub.subentry_type != SUBENTRY_RADAR:
+            continue
+        ids = [e for t in sub.data[CONF_TARGETS] for e in (t["x"], t["y"])]
+        unit = common_unit(async_resolve_units(hass, ids, sub.data.get(CONF_UNIT)))
+        if unit and unit != sub.data.get(CONF_UNIT):
+            hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, CONF_UNIT: unit})
 
 
 @callback
-def _expected_unique_ids(entry: ConfigEntry) -> set[str]:
-    p = entry.entry_id
-    ids: set[str] = set()
-    for z in entry.options.get(CONF_ZONES, []):
-        if z.get("kind", KIND_INCLUDE) == KIND_INCLUDE:
-            ids |= {f"{p}_{z['id']}", f"{p}_{z['id']}_targets"}
-    return ids
+def _import_legacy_zones(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Polygons picked up by the radar subentry flow become zone subentries on the first setup."""
+    for sub in list(entry.subentries.values()):
+        if sub.subentry_type != SUBENTRY_RADAR or not sub.data.get(CONF_IMPORT_ZONES):
+            continue
+        for z in sub.data[CONF_IMPORT_ZONES]:
+            add_zone_subentry(hass, entry, {**z, CONF_RADAR: sub.subentry_id})
+        hass.config_entries.async_update_subentry(
+            entry, sub, data={k: v for k, v in sub.data.items() if k != CONF_IMPORT_ZONES}
+        )
 
 
 @callback
-def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Drop entities of zones that were deleted or turned into exclusions/exits, and their devices."""
+def add_zone_subentry(hass: HomeAssistant, entry: ConfigEntry, zone: dict[str, Any]) -> None:
+    data = {k: v for k, v in zone.items() if k != "kind"}
+    hass.config_entries.async_add_subentry(
+        entry, ConfigSubentry(data=MappingProxyType(data), subentry_type=SUBENTRY_ZONE, title=data["name"], unique_id=data["id"])
+    )
+
+
+@callback
+def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry, runtime: HomeRuntime) -> None:
+    """Drop entities that are no longer created (e.g. a radar no longer covers a zone)."""
+    expected: set[str] = set()
+    for zid in runtime.zones:
+        expected |= {zid, f"{zid}_targets"}
+        coverage = runtime.coverage(zid)
+        if len(coverage) > 1:
+            expected |= {f"{zid}_seen_{rid}" for rid in coverage}
     ent_reg = er.async_get(hass)
-    expected = _expected_unique_ids(entry)
     for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
         if e.unique_id not in expected:
             _LOGGER.debug("Removing stale entity %s", e.entity_id)
             ent_reg.async_remove(e.entity_id)
-    dev_reg = dr.async_get(hass)
-    keep = {zone_device_identifier(z["id"]) for z in entry.options.get(CONF_ZONES, []) if z.get("kind", KIND_INCLUDE) == KIND_INCLUDE}
-    for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
-        ours = {i for i in device.identifiers if i[0] == DOMAIN}
-        if ours and not ours & keep:
-            dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
 
 
 @callback
-def _sync_zone_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
+def _sync_zone_areas(hass: HomeAssistant, runtime: HomeRuntime) -> None:
     """Zone presence devices live in an area: the zone's own, or by default the radar's.
 
     An area chosen in the panel is applied to the device; without one, a new
     device starts in the radar's area and is then left alone (it can be moved
-    in HA like any device). Entity-level overrides from older versions are
-    cleared so entities follow their device.
+    in HA like any device).
     """
-    ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
-    radar = dev_reg.async_get(entry.data[CONF_DEVICE_ID])
-    p = entry.entry_id
-    for z in entry.options.get(CONF_ZONES, []):
-        if z.get("kind", KIND_INCLUDE) != KIND_INCLUDE:
-            continue
-        device = dev_reg.async_get_device(identifiers={zone_device_identifier(z["id"])})
+    for zd in runtime.zones.values():
+        device = dev_reg.async_get_device_by_identifier(zone_device_identifier(zd.zone.id), runtime.entry.entry_id)
         if device is None:
             continue
-        want = z.get("area_id") or (device.area_id or (radar.area_id if radar else None))
+        radar = dev_reg.async_get(runtime.feeds[zd.radar_id].device_id)
+        want = zd.zone.area_id or (device.area_id or (radar.area_id if radar else None))
         if want != device.area_id:
             dev_reg.async_update_device(device.id, area_id=want)
-        for domain, uid in (("binary_sensor", f"{p}_{z['id']}"), ("sensor", f"{p}_{z['id']}_targets")):
-            eid = ent_reg.async_get_entity_id(domain, DOMAIN, uid)
-            if eid and (reg := ent_reg.async_get(eid)) and reg.area_id and reg.area_id == want:
-                ent_reg.async_update_entity(eid, area_id=None)  # follow the device
