@@ -22,6 +22,9 @@ svg { overflow: hidden; }
 .grid line { stroke: var(--divider-color, #ddd); stroke-width: 1; }
 .grid line.major { stroke: var(--secondary-text-color, #999); stroke-opacity: .35; }
 .grid text, .ring text { fill: var(--secondary-text-color, #777); font: 11px sans-serif; }
+.flip-info { cursor: help; pointer-events: all; }
+.flip-info circle { fill: var(--card-background-color, #fff); stroke: var(--primary-color, #03a9f4); stroke-width: 1.5; }
+.flip-info text { fill: var(--primary-color, #03a9f4); font: italic bold 11px serif; pointer-events: none; }
 .fov { fill: var(--primary-color, #03a9f4); fill-opacity: .03; stroke: var(--secondary-text-color, #888); stroke-dasharray: 4 4; stroke-opacity: .6; }
 .ring circle { fill: none; stroke: var(--secondary-text-color, #999); stroke-opacity: .25; stroke-dasharray: 2 4; }
 .devzone { fill: none; stroke: var(--secondary-text-color, #888); stroke-dasharray: 6 4; stroke-opacity: .8; }
@@ -571,6 +574,26 @@ export class RzpPlot extends HTMLElement {
       const p = this._s([0, j * step]);
       if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) g.append(svg('text', { x: p[0] + 3, y: p[1] - 3 }, document.createTextNode(label(j * step))));
     }
+    if (this.display.mirror) g.append(this._flipInfo(x0, x1, step, w, h));
+    return g;
+  }
+
+  /** ⓘ on the X axis of a flipped view, explaining why its values count up to the left. */
+  _flipInfo(x0, x1, step, w, h) {
+    let best = null;
+    for (let i = x0; i <= x1; i++) {
+      const p = this._s([i * step, 0]);
+      if (p[0] > 16 && p[0] < w - 16 && p[1] > 16 && p[1] < h - 16 && (!best || p[0] > best[0])) best = p;
+    }
+    const g = svg('g', { class: 'flip-info' });
+    if (!best) return g;
+    const [cx, cy] = [best[0] - 4, best[1] - 14];
+    g.append(
+      svg('title', {}, document.createTextNode(
+        'Sensor mounted upside down: left and right are swapped so the map matches the room as seen from behind the sensor. '
+        + 'This axis shows the sensor\'s own X values, so they count up to the left. Change it under Sensor settings → Mounting.')),
+      svg('circle', { cx, cy, r: 7 }),
+      svg('text', { x: cx, y: cy + 3.5, 'text-anchor': 'middle' }, document.createTextNode('i')));
     return g;
   }
 
