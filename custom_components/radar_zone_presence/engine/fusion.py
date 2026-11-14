@@ -30,11 +30,15 @@ a line-by-line port.
 
 from __future__ import annotations
 
+import heapq
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from .frames import Target
+from .align import IDENTITY, Affine, apply, transform_polygon
+from .frames import Frame, Target
+from .geometry import point_in_polygon
+from .zones import KIND_EXCLUDE, KIND_EXIT, KIND_INCLUDE, Zone, ZoneEngine
 
 MERGE_MM = 600.0
 SPLIT_MM = 1200.0
@@ -180,3 +184,69 @@ class Fuser:
             gone=tuple(sorted(gone)),
             radars={tr.id: frozenset(m[0] for m in tr.members) for tr in ordered},
         )
+
+
+def replay_group(
+    own_frames: Sequence[Frame],
+    own_zones: Sequence[Zone],
+    peers: Sequence[tuple[Sequence[Frame], Sequence[Zone], Affine]] = (),
+    reconnect_grace_s: float = 0.0,
+) -> list[tuple[float, str, bool]]:
+    """Offline equivalent of a group of radars (``home.GroupRuntime``), in the first radar's frame.
+
+    Each radar applies its own exclusions and reconnect grace; the kept
+    targets are transformed, fused and run through one engine with the first
+    radar's include zones and every radar's exits. Returns transitions like
+    ``replay`` (key "presence": the first radar sees anyone). The reference
+    for ``frontend/fusion.js`` ``replayGroup``.
+    """
+    radars = [(own_frames, own_zones, IDENTITY), *peers]
+    include = [z for z in own_zones if z.kind == KIND_INCLUDE]
+    exits = [
+        Zone(f"{k}:{z.id}", z.name, KIND_EXIT, transform_polygon(a, z.polygon))
+        for k, (_, zones, a) in enumerate(radars)
+        for z in zones
+        if z.kind == KIND_EXIT
+    ]
+    engine = ZoneEngine([*include, *exits], 0.0)
+    fuser = Fuser()
+    kept: list[list[Observation]] = [[] for _ in radars]
+    available = [True] * len(radars)
+    grace_until = [-math.inf] * len(radars)
+    exclude = [[z for z in zones if z.kind == KIND_EXCLUDE] for _, zones, _ in radars]
+    out: list[tuple[float, str, bool]] = []
+    prev = {z.id: False for z in include} | {"presence": False}
+    presence = False
+
+    def emit(t: float) -> None:
+        cur = {zid: zs.occupied for zid, zs in engine.snapshot().zones.items()} | {"presence": presence}
+        for k in prev:
+            if cur[k] != prev[k]:
+                out.append((t, k, cur[k]))
+                prev[k] = cur[k]
+
+    events = heapq.merge(*([(f.t, k, f) for f in frames] for k, (frames, _, _) in enumerate(radars)), key=lambda e: (e[0], e[1]))
+    for t, k, frame in events:
+        if frame.available and not available[k]:
+            grace_until[k] = t + reconnect_grace_s
+        available[k] = frame.available
+        a = radars[k][2]
+        kept[k] = []
+        if t >= grace_until[k]:
+            for tg in frame.targets:
+                if any(point_in_polygon(tg.x, tg.y, z.polygon) for z in exclude[k]):
+                    continue
+                x, y = apply(a, tg.x, tg.y)
+                kept[k].append(Observation(k, tg.slot, x, y))
+        if k == 0:
+            presence = bool(kept[0])
+        while (d := engine.next_deadline()) is not None and d <= t:
+            engine.advance(d)
+            emit(d)
+        fused = fuser.fuse([o for obs in kept for o in obs])
+        engine.process(Frame(t, fused.targets, any(available), fused.gone))
+        emit(t)
+    while (d := engine.next_deadline()) is not None:
+        engine.advance(d)
+        emit(d)
+    return out

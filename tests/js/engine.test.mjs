@@ -8,7 +8,7 @@ import { replayHistory, validatePolygon, pointInPolygon, fovPolygon } from '../.
 
 const dir = new URL('../vectors/', import.meta.url).pathname;
 
-for (const file of readdirSync(dir).filter(f => f.endsWith('.json'))) {
+for (const file of readdirSync(dir).filter(f => f.endsWith('.json') && !f.startsWith('group_'))) {
   const vec = JSON.parse(readFileSync(join(dir, file), 'utf8'));
   for (const [name, c] of Object.entries(vec.cases)) {
     test(`${file} :: ${name}`, () => {

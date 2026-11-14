@@ -83,3 +83,54 @@ def test_vectors_up_to_date(fixture: str, grace: float) -> None:
     assert json.loads(path.read_text()) == json.loads(json.dumps(vector)), "vectors stale: UPDATE_VECTORS=1"
     # Sanity: the cases exercise something.
     assert any(c["transitions"] for c in cases.values())
+
+
+GROUP_VECTOR = "group_252dd0_b3b6c4.json"
+
+
+def test_group_vector_up_to_date() -> None:
+    """Two radars fused (frontend/fusion.js replayGroup must match engine.fusion.replay_group)."""
+    from dataclasses import replace
+
+    from custom_components.radar_zone_presence.engine.align import alignment_affine
+    from custom_components.radar_zone_presence.engine.fusion import replay_group
+
+    own_doc, peer_doc = fx.load("epl_252dd0_busy_10min.json"), fx.load("screek_b3b6c4_busy_10min.json")
+    own = list(assemble(fx.assembler(own_doc), fx.events(own_doc)))
+    peer = list(assemble(fx.assembler(peer_doc), fx.events(peer_doc)))
+    shift = own[0].t - peer[0].t + 0.013  # overlap the two recordings, interleaved
+    peer = [replace(f, t=f.t + shift) for f in peer]
+    own_packed, peer_packed = pack_frames(own, own[0].t), pack_frames(peer, peer[0].t)
+    # The island Screek aligned to the living-room EPL (as measured in dev).
+    alignment = {"angle_deg": -104.3, "reflect": True, "offset_mm": [1646, 2758]}
+    a = alignment_affine(alignment)
+    hold = {"hold_until_exit": True, "hold_max_s": 300.0, "edge_margin_mm": 150.0, "off_delay_s": 2.0}
+    own_zones = [
+        # Seen by both radars (the peer's targets land around x 2200-3400, y 2400-4000 here).
+        {"id": "shared", "name": "Shared", "kind": "include", "polygon": [[1500, 2000], [3500, 2000], [3500, 4200], [1500, 4200]], "filters": hold},
+        {"id": "desk", "name": "Desk", "kind": "include", "polygon": [[0, 4000], [700, 4000], [700, 5000], [0, 5000]], "filters": {}},
+        {"id": "stairs", "name": "Stairs", "kind": "exit", "polygon": [[600, 0], [1700, 0], [1700, 1150], [600, 1150]]},
+    ]
+    peer_zones = [
+        {"id": "pex", "name": "Fridge", "kind": "exclude", "polygon": [[-500, 3000], [500, 3000], [500, 4000], [-500, 4000]]},
+        {"id": "pexit", "name": "Hall", "kind": "exit", "polygon": [[-2000, 500], [-1000, 500], [-1000, 1500], [-2000, 1500]]},
+    ]
+    transitions = replay_group(
+        unpack_frames(own_packed),
+        [Zone.from_dict(z) for z in own_zones],
+        [(unpack_frames(peer_packed), [Zone.from_dict(z) for z in peer_zones], a)],
+        2.0,
+    )
+    vector = {
+        "own": {"frames": own_packed, "zones": own_zones},
+        "peers": [{"frames": peer_packed, "zones": peer_zones, "aligned_to": alignment}],
+        "reconnect_grace_s": 2.0,
+        "transitions": [[round(t, 6), k, v] for t, k, v in transitions],
+    }
+    path = VECTORS / GROUP_VECTOR
+    if os.environ.get("UPDATE_VECTORS"):
+        path.write_text(json.dumps(vector, separators=(",", ":")))
+    assert path.exists(), "run with UPDATE_VECTORS=1"
+    assert json.loads(path.read_text()) == json.loads(json.dumps(vector)), "vectors stale: UPDATE_VECTORS=1"
+    assert sum(k == "shared" for _, k, _ in transitions) >= 2
+    assert sum(k == "desk" for _, k, _ in transitions) >= 2

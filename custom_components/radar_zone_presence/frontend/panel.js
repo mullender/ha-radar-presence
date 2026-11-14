@@ -4,6 +4,7 @@
 import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
+import { replayGroup } from './fusion.js';
 import {
   classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, suggestHold, suggestMaxHold, trailStats, viewToMatch,
@@ -302,6 +303,13 @@ class RadarZonePresencePanel extends HTMLElement {
         const peer = this.peers.get(id);
         if (!peer || ev.closed || !ev.targets || radarId !== this.radarId) return;
         peer.live = ev.targets;
+        const h = this.peerHist?.get(id);
+        if (h && ev.t - h.start > (h.frame_t[h.frame_t.length - 1] ?? -1)) {
+          h.frame_t.push(ev.t - h.start);
+          h.frame_n.push(ev.targets.length);
+          h.frame_available?.push(ev.available === false ? 0 : 1);
+          for (const [slot, x, y] of ev.targets) { h.slot.push(slot); h.x.push(x); h.y.push(y); }
+        }
         if (this.showPeers && this.mode !== 'replay') this._updatePlot();
       }, { type: `${DOMAIN}/frames/subscribe`, radar_id: id });
       sub.catch(() => {});
@@ -309,6 +317,7 @@ class RadarZonePresencePanel extends HTMLElement {
     }
     this._renderToolbar();
     this._updatePlot();
+    if (this.peerHist?.size) this._recomputePreview();
   }
 
   _peerTransforms() {
@@ -520,10 +529,15 @@ class RadarZonePresencePanel extends HTMLElement {
     const end = new Date();
     const start = new Date(end.getTime() - this.rangeS * 1000);
     try {
-      const [hist, events] = await Promise.all([
-        this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: this.radarId, start: start.toISOString(), end: end.toISOString() }),
-        this.hass.callWS({ type: `${DOMAIN}/zone_events`, radar_id: this.radarId, start: start.toISOString(), end: end.toISOString() }),
+      const range = { start: start.toISOString(), end: end.toISOString() };
+      // Radars aligned with this one evaluate its zones too: the preview needs their frames.
+      const groupPeers = (this.config?.group?.members || []).filter(id => id !== this.radarId);
+      const [hist, events, ...peerHists] = await Promise.all([
+        this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: this.radarId, ...range }),
+        this.hass.callWS({ type: `${DOMAIN}/zone_events`, radar_id: this.radarId, ...range }),
+        ...groupPeers.map(id => this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: id, ...range }).catch(() => null)),
       ]);
+      this.peerHist = new Map(groupPeers.map((id, i) => [id, peerHists[i]]).filter(([, h]) => h));
       this._setHistory(hist);
       this.actual = {};
       for (const [zid, rows] of Object.entries(events.zones)) {
@@ -593,11 +607,16 @@ class RadarZonePresencePanel extends HTMLElement {
     const run = () => {
       if (!this.hist) { this.preview = null; this._renderTimeline(); this._renderSide(); return; }
       const zones = this.zones.filter(z => !validatePolygon(z.polygon));
-      const res = replayHistory(this.hist, zones, this.settings.reconnect_grace_s, { perFrameStates: true });
+      const peers = this._groupPeers();
+      const replay = (zs, grace, opts) => (peers.length
+        ? replayGroup({ hist: this.hist, zones: zs }, peers, grace, opts)
+        : replayHistory(this.hist, zs, grace, opts));
+      const res = replay(zones, this.settings.reconnect_grace_s, { perFrameStates: true });
       const keys = [...zones.filter(z => z.kind === 'include').map(z => z.id), 'presence'];
       // Same zones without filters, to show what the filters remove.
-      const unfiltered = replayHistory(this.hist, zones.map(z => ({ ...z, filters: {} })), 0);
+      const unfiltered = replay(zones.map(z => ({ ...z, filters: {} })), 0);
       this.preview = {
+        radars: peers.length + 1,
         perFrame: res.perFrame,
         summary: summarize(res.transitions, keys, this.hist.start, this.hist.end),
         unfiltered: summarize(unfiltered.transitions, keys, this.hist.start, this.hist.end),
@@ -611,6 +630,21 @@ class RadarZonePresencePanel extends HTMLElement {
     };
     if (immediate) run();
     else this._previewTimer = setTimeout(run, 150);
+  }
+
+  /** Aligned radars whose history is loaded, as replayGroup peers (frames, own exclusions/exits, transform into this frame). */
+  _groupPeers() {
+    if (!this.peerHist?.size || !this.peers?.size) return [];
+    const T = this._peerTransforms();
+    const out = [];
+    for (const [id, hist] of this.peerHist) {
+      const peer = this.peers.get(id);
+      if (!peer || !T.has(id)) continue;
+      const zones = peer.cfg.zones.filter(z => z.kind !== 'include' && !validatePolygon(z.polygon))
+        .map(z => ({ ...z, filters: z.filters || {} }));
+      out.push({ hist, zones, T: T.get(id) });
+    }
+    return out;
   }
 
   _updateFlags() {
@@ -1446,6 +1480,8 @@ class RadarZonePresencePanel extends HTMLElement {
     const filtered = raw && raw.triggers.length !== s.triggers.length;
     box.replaceChildren(el('div', { style: { marginTop: '10px' } },
       el('h3', {}, `Preview · last ${RANGES.find(r => r[1] === this.rangeS)?.[0] || ''}`),
+      this.preview.radars > 1 ? el('div', { class: 'help', style: { marginBottom: '4px' } },
+        `Combines this radar with ${this.preview.radars - 1} aligned radar${this.preview.radars > 2 ? 's' : ''}, like Home Assistant does: the same person seen by two radars counts once.`) : '',
       el('div', { class: 'stat' }, el('span', {}, 'Would have turned on'), el('b', {}, `${s.triggers.length}×`)),
       filtered ? el('div', { class: 'stat' }, el('span', { class: 'help' }, 'without filters'), el('b', { class: 'help' }, `${raw.triggers.length}×`)) : '',
       el('div', { class: 'stat' }, el('span', {}, 'Occupied'), el('b', {}, fmtDuration(s.occupied))),
