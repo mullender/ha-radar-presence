@@ -230,12 +230,14 @@ async def test_exit_zone_keeps_door_and_creates_no_entity(hass: HomeAssistant, r
             "entry_id": entry.entry_id,
             "zones": [
                 {"id": "zdoor", "name": "Front door", "kind": "exit", "door_entity_id": "binary_sensor.front_door",
+                 "door": {"swing": "in"},
                  "polygon": mm([[-60, 50], [-20, 50], [-20, 90], [-60, 90]])},
             ],
         }
     )
     (saved,) = (await client.receive_json())["result"]["zones"]
     assert saved["kind"] == "exit" and saved["door_entity_id"] == "binary_sensor.front_door"
+    assert saved["door"] == {"swing": "in", "hinge_end": 0}
     await hass.async_block_till_done()
     ent_reg = er.async_get(hass)
     assert ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_zdoor") is None
