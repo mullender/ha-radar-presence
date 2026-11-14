@@ -70,6 +70,38 @@ async def test_config_flow_imports_legacy_polygons(hass: HomeAssistant, radar_de
     assert z["polygon"][2] == pytest.approx([1016.0, 3556.0])
 
 
+async def test_config_flow_labels_show_area_floor_and_live_targets(hass: HomeAssistant, radar_device: str) -> None:
+    from homeassistant.helpers import area_registry as ar, device_registry as dr, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Upstairs")
+    area = ar.async_get(hass).async_create("Office", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+
+    def label():
+        schema = result["data_schema"].schema
+        (sel,) = schema.values()
+        (opt,) = sel.config["options"]
+        return opt["label"]
+
+    async def labelled():
+        nonlocal result
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        text = label()
+        hass.config_entries.flow.async_abort(result["flow_id"])
+        return text
+
+    result = None
+    assert (await labelled()).endswith("— Office (Upstairs) · 0 targets now")
+    for slot in (1, 2, 3):
+        hass.states.async_set(f"sensor.{SLUG}_target_{slot}_y", "unavailable")
+    assert (await labelled()).endswith("— Office (Upstairs) · offline")
+    for slot in (1, 2, 3):
+        hass.states.async_set(f"sensor.{SLUG}_target_{slot}_y", "0", {"unit_of_measurement": "in"})
+    await move(hass, 2, 10, 80)
+    hass.states.async_set(f"input_text.{SLUG}_zone_polygon_1", "[[0, 100], [40, 100], [40, 140], [0, 140]]")
+    assert (await labelled()).endswith("— Office (Upstairs) · 1 target now · 1 polygon helper")
+
+
 async def test_config_flow_no_devices(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     assert result["type"] is FlowResultType.ABORT

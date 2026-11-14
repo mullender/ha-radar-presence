@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Pick a radar sensor",
-        "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Zones are drawn afterwards in the Radar Zones panel.",
+        "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). Zones are drawn afterwards in the Radar Zones panel.",
         "data": { "device_id": "Radar sensor" }
       },
       "import_legacy": {

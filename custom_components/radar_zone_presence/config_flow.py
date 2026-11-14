@@ -9,7 +9,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
-from homeassistant.helpers import selector
+from homeassistant.helpers import area_registry as ar, floor_registry as fr, selector
 
 from .const import CONF_DEVICE_ID, CONF_PROFILE, CONF_RECONNECT_GRACE, CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN
 from .discovery import RadarDevice, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
@@ -38,6 +38,37 @@ def _legacy_zones(flow_hass, radar: RadarDevice) -> list[dict[str, Any]]:
     return zones
 
 
+def _live_targets(hass, radar: RadarDevice) -> int | None:
+    """Targets the radar reports right now (y != 0), or None when it is offline."""
+    count = 0
+    online = False
+    for t in radar.targets:
+        state = hass.states.get(t.y)
+        try:
+            y = float(state.state) if state else None
+        except ValueError:
+            y = None
+        if y is None:
+            continue
+        online = True
+        count += y != 0
+    return count if online else None
+
+
+def _radar_label(hass, radar: RadarDevice) -> str:
+    """'Name — Area (Floor) · 1 target now · 2 polygon helpers' for the device picker."""
+    parts = [radar.name]
+    area = ar.async_get(hass).async_get_area(radar.area_id) if radar.area_id else None
+    if area:
+        floor = fr.async_get(hass).async_get_floor(area.floor_id) if area.floor_id else None
+        parts.append(f"— {area.name}" + (f" ({floor.name})" if floor else ""))
+    live = _live_targets(hass, radar)
+    details = ["offline" if live is None else f"{live} target{'s' if live != 1 else ''} now"]
+    if helpers := len(async_legacy_polygons(hass, radar.slug, None)):
+        details.append(f"{helpers} polygon helper{'s' if helpers != 1 else ''}")
+    return " ".join(parts) + " · " + " · ".join(details)
+
+
 class RadarZonePresenceConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
@@ -60,10 +91,7 @@ class RadarZonePresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self.async_step_import_legacy()
             return self._create([])
 
-        options = [
-            selector.SelectOptionDict(value=r.device_id, label=f"{r.name} ({len(r.targets)} targets)")
-            for r in radars.values()
-        ]
+        options = [selector.SelectOptionDict(value=r.device_id, label=_radar_label(self.hass, r)) for r in radars.values()]
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
