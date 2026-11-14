@@ -182,7 +182,7 @@ async def test_ws_live_frames(hass: HomeAssistant, radar_device: str, hass_ws_cl
     msg = await client.receive_json()
     ev = msg["event"]
     assert ev["targets"] == [[1, 508, 3048]]
-    assert ev["zones"]["chair"] == [True, 1]
+    assert ev["zones"]["chair"] == [True, 1, 0]
 
 
 async def test_unavailable_radar_makes_zones_unavailable(hass: HomeAssistant, radar_device: str) -> None:

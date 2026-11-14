@@ -76,7 +76,7 @@ export class ZoneEngine {
     this.include = zones.filter(z => z.kind !== 'exclude');
     this.exclude = zones.filter(z => z.kind === 'exclude');
     this.grace = reconnectGraceS;
-    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [] }]));
+    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), held: 0 }]));
     this.presence = { raw: false, state: false, since: 0 };
     this.available = true;
     this.graceUntil = -Infinity;
@@ -109,12 +109,22 @@ export class ZoneEngine {
       } else {
         inside = kept.filter(tg => pointInPolygon(tg[1], tg[2], z.polygon));
       }
-      rt.count = inside.length;
       rt.slots = inside.map(tg => tg[0]);
-      this._setRaw(rt, inside.length > 0, t, z.filters);
+      const hold = !!z.filters?.hold_until_exit;
+      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots));
+      else if (!hold) rt.held = 0;
+      rt.count = inside.length + rt.held;
+      this._setRaw(rt, inside.length > 0 || rt.held > 0, t, z.filters);
     }
     this._setRaw(this.presence, kept.length > 0, t, null);
     this.lastT = t;
+  }
+
+  _updateHold(rt, kept, insideSlots) {
+    const cur = new Map(kept.map(tg => [tg[0], insideSlots.has(tg[0])]));
+    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot)) rt.held += 1;
+    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.held > 0) rt.held -= 1;
+    rt.prevInside = cur;
   }
 
   advance(t) {

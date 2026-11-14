@@ -39,6 +39,8 @@ class ZonePresenceSensor(RadarEntity, BinarySensorEntity):
         if zs is None:
             return False
         attrs: dict[str, Any] = {"target_count": zs.count, "targets": list(zs.slots), "zone_id": self.zone.id}
+        if self.zone.filters.hold_until_exit:
+            attrs["held"] = zs.held  # occupants that went still inside and were not seen leaving
         changed = zs.occupied != self._attr_is_on or attrs != self._attr_extra_state_attributes
         self._attr_is_on = zs.occupied
         self._attr_extra_state_attributes = attrs

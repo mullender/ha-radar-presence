@@ -150,6 +150,7 @@ FILTERS_SCHEMA = vol.Schema(
         vol.Optional("on_delay_s", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
         vol.Optional("off_delay_s", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
         vol.Optional("edge_margin_mm", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=2000)),
+        vol.Optional("hold_until_exit", default=False): bool,
     }
 )
 ZONE_SCHEMA = vol.Schema(
@@ -223,7 +224,7 @@ def _frame_message(frame: Frame, snap: EngineSnapshot) -> dict[str, Any]:
         "t": frame.t,
         "available": frame.available,
         "targets": [[tg.slot, round(tg.x), round(tg.y)] for tg in frame.targets],
-        "zones": {zid: [zs.occupied, zs.count] for zid, zs in snap.zones.items()},
+        "zones": {zid: [zs.occupied, zs.count, zs.held] for zid, zs in snap.zones.items()},
         "presence": snap.presence,
         "excluded": snap.excluded_count,
         "suppressed": snap.suppressed,

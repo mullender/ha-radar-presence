@@ -24,6 +24,10 @@ class ZoneFilters:
     on_delay_s: float = 0.0  # occupied must persist this long before turning on
     off_delay_s: float = 0.0  # unoccupied must persist this long before turning off
     edge_margin_mm: float = 0.0  # hysteresis band around the polygon edge
+    # Stay occupied until someone is *seen* leaving: a target that vanishes
+    # inside the zone (sitting still) is held as an occupant until a target
+    # walks out across the edge or (re)appears outside the zone.
+    hold_until_exit: bool = False
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any] | None) -> ZoneFilters:
@@ -32,13 +36,15 @@ class ZoneFilters:
             float(d.get("on_delay_s", 0) or 0),
             float(d.get("off_delay_s", 0) or 0),
             float(d.get("edge_margin_mm", 0) or 0),
+            bool(d.get("hold_until_exit", False)),
         )
 
-    def as_dict(self) -> dict[str, float]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "on_delay_s": self.on_delay_s,
             "off_delay_s": self.off_delay_s,
             "edge_margin_mm": self.edge_margin_mm,
+            "hold_until_exit": self.hold_until_exit,
         }
 
 
@@ -80,13 +86,16 @@ class _ZoneRuntime:
     since: float = 0.0  # when `raw` last changed
     count: int = 0
     slots: tuple[int, ...] = ()
+    prev_inside: dict[int, bool] = field(default_factory=dict)  # slot -> inside, previous frame
+    held: int = 0  # occupants that vanished inside and were not seen leaving
 
 
 @dataclass(frozen=True, slots=True)
 class ZoneSnapshot:
     occupied: bool
-    count: int
+    count: int  # targets inside, plus held occupants
     slots: tuple[int, ...]
+    held: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,14 +154,31 @@ class ZoneEngine:
                 inside = [tg for tg in kept if signed_distance(tg.x, tg.y, zone.polygon) >= threshold]
             else:
                 inside = [tg for tg in kept if point_in_polygon(tg.x, tg.y, zone.polygon)]
-            rt.count = len(inside)
             rt.slots = tuple(tg.slot for tg in inside)
-            self._set_raw(rt, bool(inside), t, zone.filters)
+            if zone.filters.hold_until_exit and t >= self._grace_until:
+                self._update_hold(rt, kept, set(rt.slots))
+            elif not zone.filters.hold_until_exit:
+                rt.held = 0
+            rt.count = len(inside) + rt.held
+            self._set_raw(rt, bool(inside) or rt.held > 0, t, zone.filters)
 
         self._set_raw(self._presence, bool(kept), t, ZoneFilters())
         self._presence.count = len(kept)
         self._last_t = t
         return self.snapshot()
+
+    @staticmethod
+    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int]) -> None:
+        cur = {tg.slot: tg.slot in inside_slots for tg in kept}
+        for slot, was_inside in rt.prev_inside.items():
+            if was_inside and slot not in cur:
+                rt.held += 1  # vanished inside: still there, just not detected
+        for slot, is_inside in cur.items():
+            if slot not in rt.prev_inside and rt.held > 0:
+                # A target (re)appeared: inside = the held person re-detected;
+                # outside = they left without being seen crossing the edge.
+                rt.held -= 1
+        rt.prev_inside = cur
 
     def advance(self, t: float) -> None:
         """Apply delayed transitions that are due at time ``t``."""
@@ -193,7 +219,7 @@ class ZoneEngine:
         return EngineSnapshot(
             t=self._last_t,
             zones={
-                z.id: ZoneSnapshot(self._rt[z.id].state, self._rt[z.id].count, self._rt[z.id].slots)
+                z.id: ZoneSnapshot(self._rt[z.id].state, self._rt[z.id].count, self._rt[z.id].slots, self._rt[z.id].held)
                 for z in self.include
             },
             presence=self._presence.state,

@@ -229,3 +229,41 @@ def test_busy_fixtures_one_frame_per_firmware_cycle(name):
     # Frames come every ~0.3-0.55 s; nothing should be split into ms-apart pieces.
     assert gaps[len(gaps) // 100] > 0.1
     assert len(frames) < len(evs)
+
+
+# ------------------------------------------------------------ hold until exit
+
+
+def test_hold_keeps_still_person_until_seen_leaving():
+    eng = ZoneEngine([zone(hold_until_exit=True)])
+    eng.process(frame(0, (500, 1500)))  # sits down
+    snap = eng.process(frame(1))  # goes still: radar drops the target
+    assert snap.zones["z1"].occupied and snap.zones["z1"].held == 1
+    assert eng.process(frame(60)).zones["z1"].occupied  # still held a minute later
+    snap = eng.process(frame(61, (520, 1480)))  # re-detected inside
+    assert snap.zones["z1"].held == 0 and snap.zones["z1"].count == 1
+    snap = eng.process(frame(62, (1500, 1500)))  # walks out across the edge
+    assert not snap.zones["z1"].occupied
+
+
+def test_hold_released_when_target_reappears_outside():
+    eng = ZoneEngine([zone(hold_until_exit=True)])
+    eng.process(frame(0, (500, 1500)))
+    eng.process(frame(1))
+    snap = eng.process(frame(900, (3000, 4000)))  # shows up elsewhere: left unseen
+    assert not snap.zones["z1"].occupied and snap.zones["z1"].held == 0
+
+
+def test_without_hold_still_person_turns_zone_off():
+    eng = ZoneEngine([zone()])
+    eng.process(frame(0, (500, 1500)))
+    assert not eng.process(frame(1)).zones["z1"].occupied
+
+
+def test_hold_exit_never_without_entry_on_desk_fixture():
+    """Production data: with hold on, the busy fixture never holds more people than slots."""
+    doc = fx.load("epl_252dd0_busy_10min.json")
+    poly = fx.legacy_polygons_mm(doc)[2]
+    eng = ZoneEngine([Zone("p2", "Polygon 2", "include", tuple(poly), ZoneFilters(hold_until_exit=True))])
+    for f in assemble(fx.assembler(doc), fx.events(doc)):
+        assert eng.process(f).zones["p2"].held <= 3
