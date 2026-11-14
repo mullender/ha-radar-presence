@@ -4,6 +4,7 @@
 import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
+import { classify, findDwellSpots, fitHull, offsetConvex, percentile, suggestHold, trailStats } from './analysis.js';
 import {
   EXCLUDE_COLOR, ZONE_COLORS, clone, el, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
@@ -91,6 +92,13 @@ td input { width: 70px; text-align: right; }
 .toast.error { background: var(--error-color, #c62828); }
 .empty { padding: 40px; text-align: center; color: var(--secondary-text-color, #666); line-height: 1.6; }
 .loading { position: absolute; right: 12px; top: 8px; font-size: 12px; color: var(--secondary-text-color, #666); background: var(--card-background-color, #fff); padding: 2px 8px; border-radius: 10px; }
+.spot-row { padding: 6px; border-radius: 6px; margin: 0 -6px; }
+.spot-row:hover { background: var(--secondary-background-color, #f2f2f2); }
+.spot-head { display: flex; gap: 8px; align-items: baseline; }
+.spot-head .badge { margin-left: auto; }
+.check { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
+.check input { width: auto; margin-top: 2px; }
+.trail { margin-top: 10px; }
 .plot-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
 `;
 
@@ -139,6 +147,11 @@ class RadarZonePresencePanel extends HTMLElement {
     this._unsubLive = null;
     this._previewTimer = 0;
     this._loadingHistory = false;
+    this.spots = null; // dwell-spot suggestions from the loaded history
+    this.spotMargin = null; // mm, signed; null = unit default (12 in / 30 cm)
+    this.hoverSpot = null;
+    this.showSpots = true;
+    this.fitPreview = null; // polygon previewed by hovering 'Fit to points'
   }
 
   set hass(hass) {
@@ -218,7 +231,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _editable(z) {
     return {
       id: z.id, name: z.name, kind: z.kind, polygon: z.polygon.map(p => [p[0], p[1]]),
-      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, ...(z.filters || {}) },
+      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, ...(z.filters || {}) },
       area_id: z.area_id ?? z.registry_area_id ?? null,
     };
   }
@@ -352,8 +365,10 @@ class RadarZonePresencePanel extends HTMLElement {
         summary: summarize(res.transitions, keys, this.hist.start, this.hist.end),
         unfiltered: summarize(unfiltered.transitions, keys, this.hist.start, this.hist.end),
       };
+      this._computeSpots();
       this._renderTimeline();
       this._renderSideStats();
+      this._renderSpots();
       this._updateFlags();
       this._updatePlot();
     };
@@ -528,12 +543,12 @@ class RadarZonePresencePanel extends HTMLElement {
     this._renderHeader();
   }
 
-  _addZone(polygon, kind = 'include', name = null) {
+  _addZone(polygon, kind = 'include', name = null, filters = {}) {
     const n = this.zones.filter(z => z.kind === kind).length + 1;
     const zone = {
       id: newZoneId(), name: name || (kind === 'exclude' ? `Exclusion ${n}` : `Zone ${n}`), kind,
       polygon: polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
-      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0 }, area_id: null,
+      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, ...filters }, area_id: null,
     };
     const prev = JSON.stringify(this.zones);
     this.selectedId = zone.id;
@@ -685,6 +700,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.timeline.addEventListener('window', e => {
       const had = !!this.brush;
       this.brush = e.detail.brush;
+      this._scheduleAnalysis();
       this._updatePlot();
       if (had !== !!this.brush) this._renderTransport();
     });
@@ -803,7 +819,7 @@ class RadarZonePresencePanel extends HTMLElement {
           : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead · ←/→ 10 s, Shift 1 min, ,/. one frame · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
         replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : '',
         this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
-        this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
+        this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
     );
   }
 
@@ -862,6 +878,7 @@ class RadarZonePresencePanel extends HTMLElement {
       trails,
       trailLabels: this.trailLabels,
       showContext: this.showContext,
+      suggestions: this._suggestionOverlays(),
     });
   }
 
@@ -928,9 +945,10 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'btn', onclick: () => { this.drawKind = 'exclude'; this._setTool('draw'); } }, '+ Exclusion'),
         el('button', { class: 'btn', title: 'Zone covering the whole field of view', onclick: () => this._addZone(fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 12), 'include', 'Whole room') }, 'Fill detection area'),
         legacy.length ? el('button', { class: 'btn', title: legacy.map(l => l.entity_id).join('\n'), onclick: () => legacy.forEach(lp => this._addZone(lp.polygon, 'include', `Polygon ${lp.n}`)) }, `Import ${legacy.length} legacy polygon(s)`) : ''));
-    s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', this._settingsSection());
+    s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', el('div', { class: 'section spots' }), this._settingsSection());
     this._renderLiveBadges();
     this._renderSideStats();
+    this._renderSpots();
   }
 
   _zoneEditor() {
@@ -963,8 +981,27 @@ class RadarZonePresencePanel extends HTMLElement {
           el('label', {}, `Edge margin (${u.label})`),
           num(Math.round(u.toDisplay(f.edge_margin_mm) * 10) / 10, e => this._patchZone(z.id, { filters: { ...f, edge_margin_mm: Math.max(0, u.fromDisplay(+e.target.value || 0)) } })),
           el('div', { class: 'help full' }, 'On delay ignores short blips (ghosts are often < 2 s). Edge margin adds hysteresis: a target must be this far inside to enter and this far outside to leave.'),
+          el('label', { class: 'check full' },
+            el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked } }) }),
+            el('span', {}, 'Stay occupied until seen leaving',
+              el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, a target that disappears inside the zone keeps it occupied until someone walks out across the edge or shows up elsewhere in the room.'))),
         ] : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
       ),
+      this.hist ? el('div', { class: 'actions' },
+        el('button', {
+          class: 'btn', title: 'Replace this polygon with a hull around where targets dwelt inside it, plus the margin',
+          onmouseenter: () => { this.fitPreview = this._fitZone(z); this._updatePlot(); },
+          onmouseleave: () => { this.fitPreview = null; this._updatePlot(); },
+          onclick: () => {
+            const poly = this._fitZone(z);
+            this.fitPreview = null;
+            if (!poly) { this._toast('Nothing to fit: no dwell inside this polygon (or the inward margin collapses it).', true); return; }
+            this._patchZone(z.id, { polygon: poly }, { renderSide: true });
+          },
+        }, 'Fit to points'),
+        el('span', { class: 'help', style: { alignSelf: 'center' } }, `margin (${u.label})`),
+        this._marginInput(() => this._renderSide())) : '',
+      el('div', { class: 'trail' }),
       el('div', { class: 'zone-stats' }),
       el('details', { open: z.polygon.length <= 8 },
         el('summary', { class: 'help', style: { cursor: 'pointer', marginTop: '8px' } }, `Vertices (${z.polygon.length}) — ${u.label}`),
@@ -994,10 +1031,41 @@ class RadarZonePresencePanel extends HTMLElement {
         el('td', {}, z.polygon.length > 3 ? el('button', { class: 'tb', title: 'Delete vertex', onclick: () => this._patchZone(z.id, { polygon: z.polygon.filter((_, k) => k !== i) }, { renderSide: true }) }, '✕') : '')))));
   }
 
+  _fitZone(z) {
+    const exclusions = this.zones.filter(q => q.kind === 'exclude' && q.id !== z.id && !validatePolygon(q.polygon));
+    if (validatePolygon(z.polygon)) return null;
+    return fitHull(this.hist, z.polygon, this._margin(), { exclusions, window: this._analysisWindow() });
+  }
+
+  _renderTrail(z) {
+    const box = this.side?.querySelector('.trail');
+    if (!box) return;
+    if (!this.hist || validatePolygon(z.polygon)) { box.replaceChildren(); return; }
+    const exclusions = this.zones.filter(q => q.kind === 'exclude' && q.id !== z.id && !validatePolygon(q.polygon));
+    const st = trailStats(this.hist, z.polygon, { exclusions, window: this._analysisWindow() });
+    const cls = classify(st);
+    const row = (k, v) => el('div', { class: 'stat' }, el('span', {}, k), el('b', {}, v));
+    const notes = [];
+    if (z.kind === 'exclude' && cls.kind === 'spot') notes.push('Careful: people walk in and out of this exclusion, it looks like a real spot, not a ghost.');
+    if (z.kind === 'include' && cls.kind === 'ghost') notes.push('Most occupancy here starts with a target appearing in place: likely a ghost. Consider an exclusion.');
+    if (z.kind === 'include' && !z.filters.hold_until_exit && suggestHold(st)) notes.push('People often go still in here and are re-detected later: consider "Stay occupied until seen leaving".');
+    const exitsUnseen = st.endOther;
+    box.replaceChildren(
+      el('h3', {}, `Trails · ${cls.label}`),
+      row('Visits', `${st.startWalk + st.startAppear}`),
+      row('…began walking in', `${st.startWalk}`),
+      row('…began appearing inside', `${st.startAppear}`),
+      row('…ended walking out', `${st.endWalk}`),
+      exitsUnseen ? row('…ended unseen', `${exitsUnseen}`) : '',
+      st.stillGaps.length ? row('Went still inside', `${st.stillGaps.length}× · p50 ${fmtDuration(percentile(st.stillGaps, 0.5))} · p90 ${fmtDuration(percentile(st.stillGaps, 0.9))}`) : '',
+      ...notes.map(n => el('div', { class: 'help', style: { color: 'var(--warning-color, #e65100)', marginTop: '4px' } }, n)));
+  }
+
   _renderSideStats() {
     const box = this.side?.querySelector('.zone-stats');
     const z = this.zones.find(q => q.id === this.selectedId);
     if (!box || !z) return;
+    this._renderTrail(z);
     if (!this.hist || !this.preview) { box.replaceChildren(el('div', { class: 'help' }, 'Load history to preview this zone.')); return; }
     if (z.kind === 'exclude') {
       let n = 0;
@@ -1009,7 +1077,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const s = this.preview.summary[z.id];
     const raw = this.preview.unfiltered[z.id];
     const actual = this.actual[z.id];
-    if (!s) { box.replaceChildren(el('div', { class: 'help' }, 'Polygon is invalid: fix crossing edges to preview.')); return; }
+    if (!s) { box.replaceChildren(el('div', { class: 'help' }, validatePolygon(z.polygon) ? 'Polygon is invalid: fix crossing edges to preview.' : 'Computing preview…')); return; }
     const filtered = raw && raw.triggers.length !== s.triggers.length;
     box.replaceChildren(el('div', { style: { marginTop: '10px' } },
       el('h3', {}, `Preview · last ${RANGES.find(r => r[1] === this.rangeS)?.[0] || ''}`),
@@ -1027,6 +1095,111 @@ class RadarZonePresencePanel extends HTMLElement {
         return el('div', { onclick: () => this._jumpTo(t, z.id), title: 'Replay this trigger' },
           el('span', {}, fmtDateTime(t)), el('span', { class: 'help' }, iv ? fmtDuration(iv[1] - iv[0]) : ''));
       }))));
+  }
+
+  // ------------------------------------------------------------ analysis
+
+  /** Trim selection as history-relative seconds (analysis follows the trimmer). */
+  _analysisWindow() {
+    if (!this.brush || !this.hist) return undefined;
+    return { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
+  }
+
+  _margin() {
+    return this.spotMargin ?? (this.units.imperial ? 304.8 : 300);
+  }
+
+  _scheduleAnalysis() {
+    clearTimeout(this._analysisTimer);
+    this._analysisTimer = setTimeout(() => {
+      this._computeSpots();
+      this._renderSpots();
+      this._renderSideStats();
+      this._updatePlot();
+    }, 250);
+  }
+
+  _computeSpots() {
+    if (!this.hist) { this.spots = null; return; }
+    const exclusions = this.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon));
+    const includes = this.zones.filter(z => z.kind === 'include' && !validatePolygon(z.polygon));
+    const window = this._analysisWindow();
+    const margin = this._margin();
+    this.spots = findDwellSpots(this.hist, { exclusions, window }).map((sp, i) => {
+      const polygon = offsetConvex(sp.hull, margin) || sp.hull;
+      const stats = trailStats(this.hist, polygon, { exclusions, window });
+      const covered = includes.find(z => pointInPolygon(sp.centroid[0], sp.centroid[1], z.polygon));
+      return { ...sp, n: i + 1, polygon, stats, cls: classify(stats), hold: suggestHold(stats), covered };
+    });
+  }
+
+  _suggestionOverlays() {
+    const out = [];
+    if (this.showSpots && this.spots) {
+      this.spots.forEach((sp, i) => {
+        if (sp.covered && this.hoverSpot !== i) return;
+        out.push({ polygon: sp.polygon, kind: sp.cls.kind, label: this.hoverSpot === i || !sp.covered ? `Spot ${sp.n}` : '', active: this.hoverSpot === i });
+      });
+    }
+    if (this.fitPreview) out.push({ polygon: this.fitPreview, kind: 'fit', label: 'fitted', active: true });
+    return out;
+  }
+
+  _marginInput(onchange) {
+    const u = this.units;
+    return el('input', {
+      type: 'number', step: u.imperial ? 1 : 5, value: Math.round(u.toDisplay(this._margin()) * 10) / 10, style: { width: '80px' },
+      title: 'Positive grows the hull outward; negative shrinks it so only the core of the spot counts',
+      onchange: e => { this.spotMargin = u.fromDisplay(+e.target.value || 0); onchange(); },
+    });
+  }
+
+  _trailSummary(st) {
+    const starts = st.startWalk + st.startAppear;
+    const p90 = percentile(st.stillGaps, 0.9);
+    return [
+      starts ? `walked in ${st.startWalk} of ${starts} times` : 'no visits',
+      st.stillGaps.length ? `still up to ${fmtDuration(p90)} (p90)` : '',
+    ].filter(Boolean).join(' · ');
+  }
+
+  _renderSpots() {
+    const box = this.side?.querySelector('.spots');
+    if (!box) return;
+    const head = el('h3', {}, el('span', { class: 'grow' }, 'Suggested zones'),
+      el('label', { class: 'help', style: { textTransform: 'none', letterSpacing: 0, display: 'flex', gap: '4px', alignItems: 'center' } },
+        el('input', { type: 'checkbox', checked: this.showSpots, onchange: e => { this.showSpots = e.target.checked; this._updatePlot(); } }), 'on map'));
+    if (!this.hist) { box.replaceChildren(head, el('div', { class: 'help' }, 'Load history to find the spots where people spend time.')); return; }
+    const u = this.units;
+    const rows = (this.spots || []).map((sp, i) => {
+      const kindColor = sp.cls.kind === 'ghost' ? EXCLUDE_COLOR : sp.cls.kind === 'spot' ? '#43a047' : '#f9a825';
+      const create = kind => {
+        const poly = offsetConvex(sp.hull, this._margin());
+        if (!poly) { this._toast('Margin too negative: the spot collapses. Use a smaller inward margin.', true); return; }
+        const hold = kind === 'include' && sp.hold;
+        this.hoverSpot = null;
+        this._addZone(poly, kind, kind === 'exclude' ? `Ghost ${sp.n}` : `Spot ${sp.n}`, hold ? { hold_until_exit: true } : {});
+        if (hold) this._toast('People go still in this spot: "Stay occupied until seen leaving" is on for the new zone.');
+      };
+      return el('div', {
+        class: 'spot-row', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); },
+      },
+        el('div', { class: 'spot-head' },
+          el('b', {}, `Spot ${sp.n}`),
+          el('span', { class: 'help' }, `${fmtDuration(sp.dwell)} · ${u.fmtLong(Math.hypot(...sp.centroid))} away`),
+          el('span', { class: 'badge', style: { background: kindColor, color: '#fff' }, title: sp.cls.share === null ? '' : `${Math.round(sp.cls.share * 100)}% of visits began with a trail walking in` }, sp.cls.label)),
+        el('div', { class: 'help' }, this._trailSummary(sp.stats)),
+        sp.covered ? el('div', { class: 'help' }, `inside zone “${sp.covered.name}”`) : '',
+        el('div', { class: 'actions', style: { marginTop: '4px' } },
+          el('button', { class: 'btn', onclick: () => create('include') }, '+ Zone'),
+          el('button', { class: sp.cls.kind === 'ghost' ? 'btn primary' : 'btn', onclick: () => create('exclude') }, '+ Exclusion')));
+    });
+    box.replaceChildren(head,
+      el('div', { class: 'help' }, `Where targets dwelt${this.brush ? ' in the trimmed range' : ''}. A real spot (desk, chair) has trails walking in and out; a ghost (plant, fan, reflection) appears and vanishes in place.`),
+      el('div', { class: 'form', style: { margin: '8px 0' } },
+        el('label', {}, `Margin (${u.label})`),
+        this._marginInput(() => { this._computeSpots(); this._renderSpots(); this._updatePlot(); })),
+      ...(rows.length ? rows : [el('div', { class: 'help' }, 'No dwell spots in this range.')]));
   }
 
   _settingsSection() {

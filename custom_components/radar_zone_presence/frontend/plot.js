@@ -87,6 +87,7 @@ export class RzpPlot extends HTMLElement {
     this.trailLabels = false;
     this.readonly = false; // dashboard card: no editing, no wheel capture
     this.showContext = true; // faded full cloud behind the replay trail
+    this.suggestions = []; // [{polygon, kind: 'spot'|'ghost'|..., label, active}] dashed overlays
 
     // View
     this.scale = 0.08; // px per mm
@@ -523,6 +524,7 @@ export class RzpPlot extends HTMLElement {
     root.append(this._grid(w, h));
     root.append(this._fovLayer());
     root.append(this._deviceZoneLayer());
+    root.append(this._suggestionLayer());
     root.append(this._zoneLayer());
     root.append(this._trailLayer());
     root.append(this._sensor());
@@ -597,6 +599,24 @@ export class RzpPlot extends HTMLElement {
       g.append(svg('path', { class: 'devzone', d: this._path(dz.polygon) }));
       const s = this._s(dz.polygon[3]);
       g.append(svg('text', { class: 'devzone-label', x: s[0] + 3, y: s[1] + 11 }, document.createTextNode(`device ${dz.key.replace(/_/g, ' ')}`)));
+    }
+    return g;
+  }
+
+  _suggestionLayer() {
+    const g = svg('g', { style: 'pointer-events:none' });
+    for (const sg of this.suggestions || []) {
+      if (!sg.polygon || sg.polygon.length < 3) continue;
+      const color = sg.kind === 'ghost' ? EXCLUDE_COLOR : sg.kind === 'fit' ? 'var(--primary-color, #03a9f4)' : '#f9a825';
+      g.append(svg('path', {
+        d: this._path(sg.polygon), fill: color, 'fill-opacity': sg.active ? 0.18 : 0.05,
+        stroke: color, 'stroke-width': sg.active ? 2.5 : 1.5, 'stroke-dasharray': '5 4',
+      }));
+      if (sg.label) {
+        const top = sg.polygon.reduce((a, p) => (this._s(p)[1] < this._s(a)[1] ? p : a), sg.polygon[0]);
+        const s = this._s(top);
+        g.append(svg('text', { class: 'zone-label', x: s[0], y: s[1] - 6, 'text-anchor': 'middle', fill: color }, document.createTextNode(sg.label)));
+      }
     }
     return g;
   }
