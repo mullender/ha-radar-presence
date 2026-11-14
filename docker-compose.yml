@@ -1,0 +1,14 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:dev
+    container_name: ha_radar_dev
+    volumes:
+      - ./ha_config:/config
+      - ./custom_components:/config/custom_components
+    ports:
+      # Offset from ha-tides (8123/5678) so both dev containers can run at once.
+      - "8124:8123"
+      - "5679:5678"   # debugpy
+    environment:
+      - TZ=America/Los_Angeles
+    restart: unless-stopped

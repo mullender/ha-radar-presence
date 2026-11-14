@@ -1,0 +1,12 @@
+# Seed config for the dev container. Copy to ha_config/ on first run:
+#   mkdir -p ha_config && cp dev/configuration.yaml ha_config/
+default_config:
+
+debugpy:
+  start: true
+  wait: false
+
+logger:
+  default: warning
+  logs:
+    custom_components.radar_zone_presence: debug
