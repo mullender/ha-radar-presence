@@ -86,6 +86,7 @@ export class RzpPlot extends HTMLElement {
     this.trails = new Map(); // slot -> [{x, y, t}]
     this.trailLabels = false;
     this.readonly = false; // dashboard card: no editing, no wheel capture
+    this.showContext = true; // faded full cloud behind the replay trail
 
     // View
     this.scale = 0.08; // px per mm
@@ -514,7 +515,7 @@ export class RzpPlot extends HTMLElement {
     const w = this.clientWidth, h = this.clientHeight;
     if (!w || !h) return;
     this._mat = this._matrix();
-    this.points.draw({ view: this._viewMatrixGL(), window: this.window, cursor: this.cursor, trail: this.trailSeconds, colorMode: this.colorMode });
+    this.points.draw({ view: this._viewMatrixGL(), window: this.window, cursor: this.cursor, trail: this.trailSeconds, colorMode: this.colorMode, context: this.showContext });
 
     const root = this.svgEl;
     root.replaceChildren();

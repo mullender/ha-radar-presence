@@ -122,8 +122,8 @@ if (cmd === 'open') {
     await s.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: +args[0], y: +args[1], deltaX: 0, deltaY: +args[2] });
   } else if (cmd === 'key') {
     const key = args[0];
-    const codes = { Enter: 13, Escape: 27, Backspace: 8, Delete: 46, ' ': 32 };
-    for (const type of ['keyDown', 'keyUp']) await s.send('Input.dispatchKeyEvent', { type, key, windowsVirtualKeyCode: codes[key] || key.toUpperCase().charCodeAt(0), modifiers: args.includes('ctrl') ? 2 : args.includes('meta') ? 4 : 0 });
+    const codes = { Enter: 13, Escape: 27, Backspace: 8, Delete: 46, ' ': 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 };
+    for (const type of ['keyDown', 'keyUp']) await s.send('Input.dispatchKeyEvent', { type, key, windowsVirtualKeyCode: codes[key] || key.toUpperCase().charCodeAt(0), modifiers: args.includes('ctrl') ? 2 : args.includes('meta') ? 4 : args.includes('shift') ? 8 : 0, code: key.startsWith('Arrow') ? key : undefined });
   } else if (cmd === 'type') {
     await s.send('Input.insertText', { text: args[0] });
   } else console.log('unknown command');

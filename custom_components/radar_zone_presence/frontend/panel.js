@@ -130,6 +130,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.trailSeconds = 20;
     this.trailLabels = false;
     this.showFrames = false;
+    this.showContext = true;
     this.live = true;
     this.liveTargets = [];
     this.liveTrails = new Map();
@@ -470,7 +471,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _stepFrame(dir) {
     if (!this.hist) return;
-    const tRel = (this.cursor ?? this.hist.end) - this.hist.start;
+    const tRel = (this.cursor ?? (this.brush ? this.brush.t1 : this.hist.end)) - this.hist.start;
     let i = this._frameAt(tRel);
     i = Math.max(0, Math.min(this.hist.frame_t.length - 1, i + dir + (dir < 0 && this.hist.frame_t[i] < tRel ? 1 : 0)));
     this._seek(this.hist.start + this.hist.frame_t[i]);
@@ -606,7 +607,15 @@ class RadarZonePresencePanel extends HTMLElement {
     const inInput = path.some(n => n instanceof HTMLElement && (n.tagName === 'INPUT' || n.tagName === 'SELECT' || n.tagName === 'TEXTAREA'));
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); if (this._dirty()) this._save(); return; }
-    if (inInput) return;
+    if (inInput || e.defaultPrevented) return; // e.g. the plot used the arrows to nudge a vertex
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && this.hist && !mod) {
+      e.preventDefault();
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      this.playing = false;
+      if (e.shiftKey) this._seek((this.cursor ?? (this.brush ? this.brush.t1 : this.hist.end)) + dir * 10);
+      else this._stepFrame(dir);
+      return;
+    }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this._redo() : this._undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); this._redo(); return; }
     if (mod) return;
@@ -776,21 +785,22 @@ class RadarZonePresencePanel extends HTMLElement {
     const replay = this.mode === 'replay';
     t.replaceChildren(
       el('div', { class: 'group' },
-        this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (,)', !this.hist),
+        this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (← or ,) · Shift+← jumps 10 s', !this.hist),
         this._tb(this.playing ? '⏸' : '▶', this.playing, () => this._togglePlay(), 'Play / pause (Space)', !this.hist),
-        this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (.)', !this.hist),
+        this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (→ or .) · Shift+→ jumps 10 s', !this.hist),
         el('select', { onchange: e => { this.speed = +e.target.value; }, title: 'Playback speed' },
           SPEEDS.map(s => el('option', { value: s, selected: s === this.speed }, `${s}×`)))),
       el('div', { class: 'group' },
         el('label', {}, 'Trail',
           el('select', { onchange: e => { this.trailSeconds = +e.target.value; this._updatePlot(); } },
             [5, 10, 20, 30, 60, 120, 300].map(s => el('option', { value: s, selected: s === this.trailSeconds }, `${s} s`)))),
+        this._tb('Cloud', this.showContext, () => { this.showContext = !this.showContext; this._updatePlot(); this._renderTransport(); }, 'Keep the (trimmed) point cloud visible, faded, behind the replay trail'),
         this._tb('Timestamps', this.trailLabels, () => { this.trailLabels = !this.trailLabels; this._updatePlot(); this._renderTransport(); }, 'Label trail points with their time'),
         this._tb('Frames', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the frame table around the cursor')),
       el('div', { class: 'group' },
         replay
           ? el('span', { class: 'replay-label', style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
-          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · click to replay · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
+          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead or use ←/→ (Shift = 10 s) · wheel zooms · bars = draft preview ▼, dark line = recorded ▲' : ''),
         replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : '',
         this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
         this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
@@ -826,6 +836,7 @@ class RadarZonePresencePanel extends HTMLElement {
       trails = r.trails;
       states = r.states;
       cursor = this.cursor - this.hist.start;
+      if (this.brush) window = { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
     } else {
       if (this.live) { targets = this.liveTargets; trails = this.liveTrails; states = this.liveStates; }
       if (this.brush && this.hist) window = { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
@@ -850,6 +861,7 @@ class RadarZonePresencePanel extends HTMLElement {
       targets,
       trails,
       trailLabels: this.trailLabels,
+      showContext: this.showContext,
     });
   }
 

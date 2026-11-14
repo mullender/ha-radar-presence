@@ -13,6 +13,7 @@ uniform mat3 u_view;      // mm -> clip space
 uniform vec2 u_window;    // visible [t0, t1]
 uniform float u_cursor;   // replay cursor (s); < 0 disables fading
 uniform float u_trail;    // seconds of trail shown behind the cursor
+uniform float u_context;  // 1 = keep the rest of the windowed cloud, faded, during replay
 uniform float u_size;
 uniform int u_colorMode;  // 0 slot, 1 highlight, 2 age
 uniform vec3 u_slotColors[6];
@@ -33,10 +34,16 @@ void main() {
   float size = u_size;
   if (u_cursor >= 0.0) {
     float age = u_cursor - a_t;
-    if (age < 0.0 || age > u_trail) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
-    float k = 1.0 - age / u_trail;
-    alpha = 0.15 + 0.85 * k;
-    size = u_size + 3.0 * k;
+    if (age < 0.0 || age > u_trail) {
+      if (u_context < 0.5) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
+      // Context: the rest of the cloud stays visible, faded and desaturated.
+      c = mix(c, vec3(0.5), 0.35);
+      alpha = u_colorMode == 1 ? alpha * 0.7 : 0.22;
+    } else {
+      float k = 1.0 - age / u_trail;
+      alpha = 0.15 + 0.85 * k;
+      size = u_size + 3.0 * k;
+    }
   }
   gl_PointSize = size;
   v_color = vec4(c, alpha);
@@ -74,7 +81,7 @@ export class PointLayer {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     this.prog = prog;
     this.loc = Object.fromEntries(
-      ['u_view', 'u_window', 'u_cursor', 'u_trail', 'u_size', 'u_colorMode', 'u_slotColors'].map(n => [n, gl.getUniformLocation(prog, n)]),
+      ['u_view', 'u_window', 'u_cursor', 'u_trail', 'u_context', 'u_size', 'u_colorMode', 'u_slotColors'].map(n => [n, gl.getUniformLocation(prog, n)]),
     );
     this.vao = gl.createVertexArray();
     this.buffers = {};
@@ -118,7 +125,7 @@ export class PointLayer {
   }
 
   /** view: column-major mat3 (Float32Array 9) mapping mm to clip space. */
-  draw({ view, window, cursor = -1, trail = 30, size = 2.5, colorMode = 0 }) {
+  draw({ view, window, cursor = -1, trail = 30, size = 2.5, colorMode = 0, context = true }) {
     if (!this.ok) return;
     const gl = this.gl;
     const dpr = window?.dpr || devicePixelRatio || 1;
@@ -135,6 +142,7 @@ export class PointLayer {
     gl.uniform2f(this.loc.u_window, window.t0, window.t1);
     gl.uniform1f(this.loc.u_cursor, cursor);
     gl.uniform1f(this.loc.u_trail, trail);
+    gl.uniform1f(this.loc.u_context, context ? 1 : 0);
     gl.uniform1f(this.loc.u_size, size * (devicePixelRatio || 1));
     gl.uniform1i(this.loc.u_colorMode, colorMode);
     gl.uniform3fv(this.loc.u_slotColors, this.slotColors);
