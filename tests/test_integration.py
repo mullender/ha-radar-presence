@@ -206,3 +206,22 @@ async def test_diagnostics(hass: HomeAssistant, radar_device: str) -> None:
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["snapshot"]["zones"]["chair"]["occupied"] is True
     assert diag["last_frame"]["targets"][0]["slot"] == 1
+
+
+async def test_zone_area_override_and_inherit(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    entry = await setup_entry(hass, radar_device, [{**zone("chair", "Reading chair", CHAIR_IN), "area_id": kitchen.id}])
+    ent_reg = er.async_get(hass)
+    chair = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
+    assert ent_reg.async_get(chair).area_id == kitchen.id
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": f"{DOMAIN}/zones/save", "entry_id": entry.entry_id,
+         "zones": [{**zone("chair", "Reading chair", CHAIR_IN), "area_id": None}]}
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert ent_reg.async_get(chair).area_id is None  # back to inheriting the device area

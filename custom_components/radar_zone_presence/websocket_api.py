@@ -203,6 +203,16 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
         z.setdefault("area_id", None)
         zones.append(z)
 
+    # A zone switched back to "inherit": clear the override on its entities now.
+    old = {z["id"]: z for z in entry.options.get(CONF_ZONES, [])}
+    ent_reg = er.async_get(hass)
+    for z in zones:
+        if z["area_id"] is None and old.get(z["id"], {}).get("area_id"):
+            for domain, suffix in (("binary_sensor", ""), ("sensor", "_targets")):
+                eid = ent_reg.async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{z['id']}{suffix}")
+                if eid:
+                    ent_reg.async_update_entity(eid, area_id=None)
+
     options = {**entry.options, CONF_ZONES: zones}
     for key, value in msg.get("settings", {}).items():
         options[key] = value

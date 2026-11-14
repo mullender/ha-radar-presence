@@ -85,6 +85,7 @@ export class RzpPlot extends HTMLElement {
     this.targets = []; // [[slot, x, y]]
     this.trails = new Map(); // slot -> [{x, y, t}]
     this.trailLabels = false;
+    this.readonly = false; // dashboard card: no editing, no wheel capture
 
     // View
     this.scale = 0.08; // px per mm
@@ -291,6 +292,7 @@ export class RzpPlot extends HTMLElement {
   _changeZones(zones, commit) { this.zones = zones; this._emit('zones-change', { zones, commit }); this.requestRender(); }
 
   _onDown(e) {
+    if (this.readonly) return;
     this.svgEl.focus();
     const w = this._eventWorld(e);
     const t = e.target;
@@ -422,6 +424,7 @@ export class RzpPlot extends HTMLElement {
   }
 
   _onDbl(e) {
+    if (this.readonly) return;
     const t = e.target;
     if (this.tool === 'draw') { this._finishDraft(); return; }
     if (t.dataset?.role === 'vertex') {
@@ -434,6 +437,7 @@ export class RzpPlot extends HTMLElement {
   }
 
   _onWheel(e) {
+    if (this.readonly) return;
     e.preventDefault();
     const r = this.svgEl.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;

@@ -7,7 +7,7 @@ import json
 import logging
 from pathlib import Path
 
-from homeassistant.components import panel_custom
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -54,6 +54,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         require_admin=True,
         config={"version": version},
     )
+    # Dashboard card (custom:radar-zone-presence-card), loaded on every frontend page.
+    frontend.add_extra_js_url(hass, f"{STATIC_URL}/card.js?v={version}")
     return True
 
 
@@ -100,11 +102,11 @@ def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 @callback
 def _sync_zone_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Apply per-zone area overrides; zones without one inherit the device area."""
+    """Apply explicit per-zone area overrides (zones without one keep whatever the registry has)."""
     ent_reg = er.async_get(hass)
     p = entry.entry_id
     for z in entry.options.get(CONF_ZONES, []):
-        if "area_id" not in z:
+        if not z.get("area_id"):
             continue
         for uid in (f"{p}_{z['id']}", f"{p}_{z['id']}_targets"):
             eid = ent_reg.async_get_entity_id("binary_sensor" if not uid.endswith("_targets") else "sensor", DOMAIN, uid)

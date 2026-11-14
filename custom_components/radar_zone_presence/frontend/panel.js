@@ -218,7 +218,7 @@ class RadarZonePresencePanel extends HTMLElement {
     return {
       id: z.id, name: z.name, kind: z.kind, polygon: z.polygon.map(p => [p[0], p[1]]),
       filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, ...(z.filters || {}) },
-      area_id: z.area_id ?? null,
+      area_id: z.area_id ?? z.registry_area_id ?? null,
     };
   }
 
