@@ -210,3 +210,11 @@ Ideas not built yet:
   config's home coordinates (now a city-centre location).
 - Per-radar import files generated from the dev instance live in
   `dev/data/prod-import/` (gitignored: real room layout).
+- Installed in production from the Marketplace (Add from link, commit
+  86a4b04): no restart needed for the first install. Only the living-room
+  radar (252dd0) is configured for now, with its two legacy polygons plus
+  Desk (hold until exit, max 25 min, edge margin 150 mm). Desk went on for
+  the person sitting there right after saving.
+- HACS Action: brand icon (`brand/icon.png`, served by HA ≥ 2026.x from the
+  integration folder) and manifest `categories` fixed; the repository
+  description and topics have to be set on GitHub.
