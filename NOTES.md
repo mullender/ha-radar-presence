@@ -82,3 +82,35 @@ section. DESIGN.md is the spec; this file is the lab notebook.
 - Observation from the dev data: a box over living-room target 1's parking
   spot would have triggered 1052× in 24 h — exactly the ghost case the
   preview is meant to expose.
+- Debugging UX (ddd5107): recorded triggers (what HA actually did) listed
+  per zone and marked on the timeline, click → replay; trail arrowheads.
+- Hardening (44f3fda): zone entities unavailable while the radar is offline,
+  diagnostics download, discovery tests (Screek naming, device rectangles).
+- Dashboard card + area semantics (f1ca98d). 38 pytest + 17 node tests.
+
+## Status vs. the original requirements (2026-11-13 night)
+
+| Requirement | State |
+|---|---|
+| Pick a sensor, discover its target X/Y entities | done (EP Lite/Pro, Screek 2A, generic naming) |
+| Draw include/exclude polygons, snapping to right angles, angle/length readouts, edit | done |
+| Named presence entities per zone, inheriting the room | done (+ catch-all, counts, excluded diagnostic) |
+| History point cloud 24/48 h, "how often / when would it have triggered", what it includes/excludes | done (15 min–7 d; colour by selected zone) |
+| Time scrubber replaying movement and direction | done (trails, arrows, timestamps, frame table, recorded triggers) |
+| Catch-all zone | automatic `…_zone_presence_any` + "Fill detection area" button |
+| Server-side only, vendor-agnostic | done |
+
+## Open items / ideas for next session
+
+- Not pushed: commits are local only (user did not ask to push).
+- Try on production: push, add as HACS custom repo, add each radar (accept
+  the polygon import), run side by side with the YAML package for a day, then
+  remove `packages/presence_polygons.yaml` and the `input_text` helpers.
+- HACS action will want brand images (`custom_components/.../brand/`), repo
+  topics and a release tag; hassfest not run locally (needs Docker).
+- 7-day history of a busy radar is a ~15 MB JSON payload; switch
+  `frames/history` to a binary/base64 typed-array encoding if that is slow.
+- Floor-plan underlay image, multi-sensor rooms, per-zone notes.
+- The toolbar's colour dropdown doesn't reflect programmatic changes (cosmetic).
+- Dev HA is left running on :8124 (dev/dev) with a window open on the panel;
+  stop with `pkill -f "bin/hass -c"`.

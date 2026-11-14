@@ -251,13 +251,13 @@ removes them after checking the new entities.
 
 | | Scope |
 |---|---|
-| M0 | Repo scaffolding (this commit). |
-| M1 | Backend: profiles + config flow, frame assembler, zone engine, entities, zones in options, websocket config/zones/frames, input_text import. Tests with recorded production frames (including the 04:05 kitchen ghost). A dev-only simulator that replays exported history into fake target entities, so the dev container has realistic data. |
-| M2 | Panel: live view + polygon editor with snapping and readouts. |
-| M3 | History point cloud (WebGL) + trigger preview. |
-| M4 | Scrubber / replay + frame table + jump-to-trigger. |
-| M5 | Ghost filters with preview comparison; reconnect grace. |
-| Later | Floor-plan underlay image, live dashboard card, multi-sensor rooms. |
+| M0 | Repo scaffolding. **Done.** |
+| M1 | Backend: profiles + config flow, frame assembler, zone engine, entities, zones in options, websocket config/zones/frames, input_text import. Tests with recorded production frames (including the 04:05 kitchen ghost). A dev-only simulator that replays exported history into fake target entities, so the dev container has realistic data. **Done.** |
+| M2 | Panel: live view + polygon editor with snapping and readouts. **Done.** |
+| M3 | History point cloud (WebGL) + trigger preview. **Done.** |
+| M4 | Scrubber / replay + frame table + jump-to-trigger. **Done.** |
+| M5 | Ghost filters with preview comparison; reconnect grace. **Done** (filters editable per zone; preview shows with/without). |
+| Later | Floor-plan underlay image, multi-sensor rooms. (Live dashboard card: done.) |
 
 ## 11. Open questions
 
