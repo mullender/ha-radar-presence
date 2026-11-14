@@ -253,3 +253,19 @@ Ideas not built yet:
   to the left when flipped).
 - The dev simulator recreates the mounting entities (`extra_states` in the
   export meta; `tools/export_history.mjs` now captures them).
+
+## 2026-11-14: entry doors vs radar (exploration, 7 days of production data)
+
+- Entry radar (Screek) + three door contacts (coat closet, front door, garage
+  entry door). Analysis scripts lived in /tmp; nothing committed.
+- Every door open and close had a radar target at that moment; 40% of all
+  radar appearances fall within 5 s before to 15 s after a door opening
+  (chance: ~0.4%).
+- The target position at open/close places each door tightly (IQR ~0.3-0.5 m):
+  closet on one side, front and garage door on the other at different depths.
+  Arrivals from the garage (entry empty before) are first seen in the doorway,
+  further out than people leaving, who stand in front of the door.
+- Ideas: door markers / door areas located automatically from a chosen door
+  sensor; door events on the timeline; a door opening as the positive exit for
+  "stay occupied until seen leaving" (vanish near a door right after it opens =
+  left, not gone still).
