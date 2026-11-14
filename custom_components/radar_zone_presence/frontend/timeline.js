@@ -12,6 +12,8 @@ const ROW_H = 16;
 const LABEL_W = 120;
 const HANDLE_W = 10;
 const TRIM_COLOR = '#f9a825';
+const PLAYHEAD_W = 16; // slide-rule style cursor: wide grab band, hairline in the middle
+const PLAYHEAD_COLOR = '229,57,53';
 
 const css = `
 :host { display: block; position: relative; user-select: none; -webkit-user-select: none; }
@@ -105,6 +107,20 @@ export class RzpTimeline extends HTMLElement {
     return [Math.max(LABEL_W - HANDLE_W, this._x(t0) - HANDLE_W), Math.min(w - HANDLE_W, this._x(t1))];
   }
 
+  /** Playhead x: the replay cursor, or (idle) the end of the trimmed range. */
+  _playheadX() {
+    const w = this.clientWidth;
+    const t = this.cursor ?? this._trim.t1;
+    if (t < this.view.v0 || t > this.view.v1) return null;
+    const lo = LABEL_W + PLAYHEAD_W / 2, hi = w - HANDLE_W - PLAYHEAD_W / 2 - 1;
+    return Math.max(lo, Math.min(hi, this._x(t)));
+  }
+
+  _hitPlayhead(x) {
+    const px = this._playheadX();
+    return px !== null && Math.abs(x - px) <= PLAYHEAD_W / 2 + 2;
+  }
+
   _hitHandle(x) {
     const [h0, h1] = this._handleXs();
     if (x >= h0 - 3 && x <= h0 + HANDLE_W + 3) return 't0';
@@ -116,6 +132,12 @@ export class RzpTimeline extends HTMLElement {
     if (!this.range) return;
     const [x, y] = this._local(e);
     this.canvas.setPointerCapture(e.pointerId);
+    if (this._hitPlayhead(x)) {
+      // Grab keeps the offset between pointer and hairline, so the cursor doesn't jump.
+      this._drag = { kind: 'playhead', offset: x - this._playheadX(), moved: false };
+      this.canvas.style.cursor = 'grabbing';
+      return;
+    }
     const handle = this._hitHandle(x);
     if (handle) { this._drag = { kind: 'trim', handle }; return; }
     if (x < LABEL_W) return;
@@ -131,10 +153,18 @@ export class RzpTimeline extends HTMLElement {
   _move(e) {
     if (!this.range) return;
     const [x, y] = this._local(e);
-    this.canvas.style.cursor = this._drag?.kind === 'trim' || this._hitHandle(x) ? 'ew-resize' : this._hitTrigger(x, y) ? 'pointer' : 'crosshair';
     const d = this._drag;
+    this.canvas.style.cursor = d?.kind === 'playhead' ? 'grabbing'
+      : d?.kind === 'trim' ? 'ew-resize'
+      : this._hitPlayhead(x) ? 'grab'
+      : this._hitHandle(x) ? 'ew-resize'
+      : this._hitTrigger(x, y) ? 'pointer' : 'crosshair';
     if (!d) return;
     if (d.kind === 'scrub') this._emit('seek', { t: this._clamp(this._t(x)) });
+    else if (d.kind === 'playhead') {
+      d.moved = true;
+      this._emit('seek', { t: this._clamp(this._t(x - d.offset)) });
+    }
     else if (d.kind === 'trim') {
       const trim = { ...this._trim };
       const minSpan = Math.max(1, (this.view.v1 - this.view.v0) / 400);
@@ -155,8 +185,14 @@ export class RzpTimeline extends HTMLElement {
     }
   }
 
-  _up() {
+  _up(e) {
+    const d = this._drag;
     this._drag = null;
+    // Clicking the idle playhead (no drag) starts replay at its position.
+    if (d?.kind === 'playhead' && !d.moved && this.cursor === null) {
+      this._emit('seek', { t: this._clamp(this._t(this._playheadX())) });
+    }
+    if (e) this._move(e);
   }
 
   _dbl(e) {
@@ -323,20 +359,40 @@ export class RzpTimeline extends HTMLElement {
       }
     }
 
-    // Cursor
-    if (this.cursor !== null && this.cursor >= this.view.v0 && this.cursor <= this.view.v1) {
-      const x = xa(this.cursor);
-      ctx.strokeStyle = '#e53935';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    // Playhead: slide-rule cursor (translucent band + hairline + grip tab).
+    const px = this._playheadX();
+    if (px !== null) {
+      const idle = this.cursor === null;
+      const a = idle ? 0.45 : 1;
+      const top = 2, bottom = h - 1, half = PLAYHEAD_W / 2;
+      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.14 * a})`;
+      ctx.strokeStyle = `rgba(${PLAYHEAD_COLOR},${0.55 * a})`;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(px - half, top, PLAYHEAD_W, bottom - top, 4) : ctx.rect(px - half, top, PLAYHEAD_W, bottom - top);
+      ctx.fill();
+      ctx.stroke();
+      // Grip tab at the top
+      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.9 * a})`;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(px - half, top, PLAYHEAD_W, AXIS_H - 3, [4, 4, 2, 2]) : ctx.rect(px - half, top, PLAYHEAD_W, AXIS_H - 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
       ctx.lineWidth = 1;
-      const label = fmtTime(this.cursor, true, true);
-      const tw = ctx.measureText(label).width + 6;
-      const lx = Math.min(w - tw, x + 3);
-      ctx.fillStyle = '#e53935';
-      ctx.fillRect(lx, 0, tw, 14);
+      for (const dx of [-3, 0, 3]) { ctx.beginPath(); ctx.moveTo(px + dx + 0.5, top + 4); ctx.lineTo(px + dx + 0.5, AXIS_H - 5); ctx.stroke(); }
+      // Hairline
+      ctx.strokeStyle = `rgba(${PLAYHEAD_COLOR},${a})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(px, AXIS_H - 1); ctx.lineTo(px, bottom); ctx.stroke();
+      ctx.lineWidth = 1;
+      // Time label beside the tab
+      const t = this.cursor ?? this._trim.t1;
+      const label = idle ? `${fmtTime(t)} · drag to replay` : fmtTime(t, true, true);
+      const tw = ctx.measureText(label).width + 8;
+      const lx = px + half + 3 + tw > w ? px - half - 3 - tw : px + half + 3;
+      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.9 * a})`;
+      ctx.fillRect(lx, top, tw, AXIS_H - 3);
       ctx.fillStyle = '#fff';
-      ctx.fillText(label, lx + 3, 11);
+      ctx.fillText(label, lx + 4, AXIS_H - 6);
     }
   }
 }
