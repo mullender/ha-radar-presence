@@ -74,10 +74,14 @@ measurements.
 
 ## Install
 
-**With HACS** (custom repository):
+**From the Marketplace** (Home Assistant's built-in replacement for HACS):
 
-1. HACS → ⋮ → Custom repositories → `https://github.com/mullender/ha-radar-presence`, category *Integration*.
-2. Download *Radar Zone Presence*, restart Home Assistant.
+1. Settings → Marketplace → **Add from link** → `mullender/ha-radar-presence`
+   (type *Integration* if asked; needs the Marketplace's GitHub connection).
+2. Open the repository page, **Install**, and restart Home Assistant if asked.
+
+The same repository also works as a HACS custom repository on older
+installations.
 
 **Manually:** copy `custom_components/radar_zone_presence/` from this
 repository (Code → Download ZIP) into your Home Assistant's
