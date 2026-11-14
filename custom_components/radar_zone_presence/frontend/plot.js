@@ -88,6 +88,7 @@ export class RzpPlot extends HTMLElement {
     this.readonly = false; // dashboard card: no editing, no wheel capture
     this.showContext = true; // faded full cloud behind the replay trail
     this.suggestions = []; // [{polygon, kind: 'spot'|'ghost'|..., label, active}] dashed overlays
+    this.edgeWarnings = []; // [{a, b, label}] zone edges that targets flap across
 
     // View
     this.scale = 0.08; // px per mm
@@ -612,11 +613,16 @@ export class RzpPlot extends HTMLElement {
         d: this._path(sg.polygon), fill: color, 'fill-opacity': sg.active ? 0.18 : 0.05,
         stroke: color, 'stroke-width': sg.active ? 2.5 : 1.5, 'stroke-dasharray': '5 4',
       }));
-      if (sg.label) {
+      if (sg.label && sg.polygon) {
         const top = sg.polygon.reduce((a, p) => (this._s(p)[1] < this._s(a)[1] ? p : a), sg.polygon[0]);
         const s = this._s(top);
         g.append(svg('text', { class: 'zone-label', x: s[0], y: s[1] - 6, 'text-anchor': 'middle', fill: color }, document.createTextNode(sg.label)));
       }
+    }
+    for (const w of this.edgeWarnings || []) {
+      const a = this._s(w.a), b = this._s(w.b);
+      g.append(svg('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: '#e53935', 'stroke-width': 7, 'stroke-opacity': 0.45, 'stroke-linecap': 'round' }));
+      g.append(svg('text', { class: 'zone-label', x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2 - 8, 'text-anchor': 'middle', fill: '#e53935' }, document.createTextNode(w.label)));
     }
     return g;
   }

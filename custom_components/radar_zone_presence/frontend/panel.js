@@ -4,7 +4,7 @@
 import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
-import { classify, findDwellSpots, fitHull, offsetConvex, percentile, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
+import { classify, findDwellSpots, fitHull, flappingEdges, offsetConvex, percentile, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import {
   EXCLUDE_COLOR, ZONE_COLORS, clone, el, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
@@ -879,6 +879,7 @@ class RadarZonePresencePanel extends HTMLElement {
       trailLabels: this.trailLabels,
       showContext: this.showContext,
       suggestions: this._suggestionOverlays(),
+      edgeWarnings: this.selectedId ? this.edgeWarnings || [] : [],
     });
   }
 
@@ -1051,7 +1052,9 @@ class RadarZonePresencePanel extends HTMLElement {
   _renderTrail(z) {
     const box = this.side?.querySelector('.trail');
     if (!box) return;
-    if (!this.hist || validatePolygon(z.polygon)) { box.replaceChildren(); return; }
+    const prevWarn = JSON.stringify(this.edgeWarnings || []);
+    this.edgeWarnings = [];
+    if (!this.hist || validatePolygon(z.polygon)) { box.replaceChildren(); if (prevWarn !== '[]') this._updatePlot(); return; }
     const exclusions = this.zones.filter(q => q.kind === 'exclude' && q.id !== z.id && !validatePolygon(q.polygon));
     const st = trailStats(this.hist, z.polygon, { exclusions, window: this._analysisWindow() });
     const cls = classify(st);
@@ -1060,6 +1063,13 @@ class RadarZonePresencePanel extends HTMLElement {
     if (z.kind === 'exclude' && cls.kind === 'spot') notes.push('Careful: people walk in and out of this exclusion, it looks like a real spot, not a ghost.');
     if (z.kind === 'include' && cls.kind === 'ghost') notes.push('Most occupancy here starts with a target appearing in place: likely a ghost. Consider an exclusion.');
     if (z.kind === 'include' && !z.filters.hold_until_exit && suggestHold(st)) notes.push('People often go still in here and are re-detected later: consider "Stay occupied until seen leaving".');
+    // Edge jitter, evaluated the way the engine sees the zone (its own edge margin).
+    const margin = z.kind === 'include' ? z.filters.edge_margin_mm || 0 : 0;
+    const edgeStats = trailStats(this.hist, z.polygon, { exclusions, window: this._analysisWindow(), hysteresis: margin });
+    const flaps = flappingEdges(edgeStats, z.polygon);
+    this.edgeWarnings = flaps.map(e => ({ a: e.a, b: e.b, label: `${e.count} flaps` }));
+    if (flaps.length) notes.push(`${edgeStats.bounces} times a target crossed out and back in within 3 s (red edges). An edge runs through a spot where people stay: move it, use Fit to points, or add an edge margin.`);
+    if (JSON.stringify(this.edgeWarnings) !== prevWarn) queueMicrotask(() => this._updatePlot());
     const exitsUnseen = st.endOther;
     box.replaceChildren(
       el('h3', {}, `Trails · ${cls.label}`),

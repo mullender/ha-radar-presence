@@ -9,6 +9,20 @@ import { pointInPolygon, signedDistance, polygonArea } from './engine.js';
 import { lineIntersection } from './util.js';
 
 const MAX_GAP_S = 5; // a target's dwell is the time to the next frame, capped
+const BOUNCE_S = 3; // out and back in this fast = jitter across the edge, not a real exit
+
+/** Index i of the edge poly[i] -> poly[i+1] closest to (x, y). */
+export function nearestEdge(poly, x, y) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx * dx + dy * dy || 1;
+    const k = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / len2));
+    const d = Math.hypot(x - a[0] - k * dx, y - a[1] - k * dy);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
 
 /** Iterate frames: cb(i, t, targets[[slot,x,y]], available). Skips excluded targets. */
 function forEachFrame(hist, exclusions, cb, { t0 = -Infinity, t1 = Infinity } = {}) {
@@ -216,7 +230,9 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
     walkIn: 0, walkOut: 0, appearIn: 0, vanishIn: 0,
     episodes: 0, startWalk: 0, startAppear: 0, endWalk: 0, endOther: 0,
     reappearIn: 0, reappearOut: 0, stillGaps: [],
+    bounces: 0, edgeBounces: new Array(poly.length).fill(0), // out and back in within BOUNCE_S
   };
+  const lastOut = new Map(); // slot -> {t, edge}
   let prev = new Map(); // slot -> inside
   let held = 0;
   let heldSince = [];
@@ -237,7 +253,14 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
           if (ins) s.reappearIn++; else s.reappearOut++;
         } else if (ins) s.appearIn++;
       } else if (ins !== was) {
-        if (ins) { s.walkIn++; walkedIn = true; } else { s.walkOut++; walkedOut = true; }
+        if (ins) {
+          s.walkIn++; walkedIn = true;
+          const lo = lastOut.get(slot);
+          if (lo && t - lo.t <= BOUNCE_S) { s.bounces++; s.edgeBounces[lo.edge]++; }
+        } else {
+          s.walkOut++; walkedOut = true;
+          lastOut.set(slot, { t, edge: nearestEdge(poly, x, y) });
+        }
       }
     }
     for (const [slot, was] of prev) {
@@ -284,6 +307,16 @@ export function suggestHold(stats) {
 export function suggestMaxHold(stats) {
   const longest = stats.stillGaps.length ? Math.max(...stats.stillGaps) : 0;
   return Math.min(4 * 3600, Math.max(15 * 60, Math.ceil((1.5 * longest) / 300) * 300));
+}
+
+/** Edges where targets flap across (jitter): [{i, a, b, count}] worst first. */
+export function flappingEdges(stats, poly, { min = 10, share = 0.05 } = {}) {
+  const visits = stats.startWalk + stats.startAppear;
+  const thr = Math.max(min, share * visits);
+  return stats.edgeBounces
+    .map((count, i) => ({ i, a: poly[i], b: poly[(i + 1) % poly.length], count }))
+    .filter(e => e.count >= thr)
+    .sort((x, y) => y.count - x.count);
 }
 
 export function percentile(values, q) {

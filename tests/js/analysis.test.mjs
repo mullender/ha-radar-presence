@@ -113,3 +113,19 @@ test('desk visited by walking in is a dwell spot; blinking ghost is a ghost', ()
   assert.ok(Math.abs(polygonArea(fitted)) < Math.abs(polygonArea(loose)) / 4);
   assert.ok(pointInPolygon(-1500, 3000, fitted));
 });
+
+test('edge through a sitting spot is reported as flapping', async () => {
+  const { flappingEdges } = await import('../../custom_components/radar_zone_presence/frontend/analysis.js');
+  seed = 3;
+  // Someone sits at x ~ 0 jittering +-60 mm; the zone's right edge is x = 0.
+  const track = [];
+  for (let i = 0; i < 2000; i++) track.push([rnd() * 120, 3000 + rnd() * 120]);
+  const hist = pack(framesOf([track]));
+  const box = [[-1000, 2500], [0, 2500], [0, 3500], [-1000, 3500]];
+  const st = trailStats(hist, box, { hysteresis: 0 });
+  const flaps = flappingEdges(st, box);
+  assert.equal(flaps[0].i, 1); // edge [0,2500] -> [0,3500]
+  assert.ok(flaps[0].count > 100);
+  // An edge margin (hysteresis) larger than the jitter removes the flapping.
+  assert.equal(flappingEdges(trailStats(hist, box, { hysteresis: 150 }), box).length, 0);
+});
