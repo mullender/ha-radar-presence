@@ -237,3 +237,19 @@ Ideas not built yet:
 - Legacy `input_text` polygon helpers: only the one-time import in the setup
   flow remains (it only appears when such helpers exist); the panel button,
   picker hint and README claims are gone.
+
+## 2026-11-14: mounting orientation
+
+- The living-room map was mirrored (desk drawn left, actually right as seen
+  from the sensor). Both EP Lites are mounted upside down
+  (`switch.*_upside_down_mounting` on, installation angle 0). The server now
+  reads those settings (`device_mounting` in the config), and the view's
+  *Mounting* defaults to upside down = flipped left/right when the switch is
+  on. Display settings saved before (no `v`) take the device default once.
+- Screeks have no such switch and default to upright; if one is mounted
+  upside down, pick it under Sensor settings (walk-right check in the help).
+- Zones are not touched: they are stored in the sensor frame and flip with the
+  points. Axis labels still show the sensor's own X values (so they count up
+  to the left when flipped).
+- The dev simulator recreates the mounting entities (`extra_states` in the
+  export meta; `tools/export_history.mjs` now captures them).

@@ -63,6 +63,20 @@ async def test_device_geometry(hass: HomeAssistant, screek: str) -> None:
     (zone,) = geo["device_zones"]  # the all-zero zone1 is skipped
     assert zone["key"] == "zout1" and zone["kind"] == "exclude"
     assert zone["polygon"] == [[1016, 0], [2540, 0], [2540, 5080], [1016, 5080]]
+    assert geo["mounting"] == {}  # Screek firmware has no mounting settings
+
+
+async def test_device_geometry_reads_ep_lite_mounting(hass: HomeAssistant, screek: str) -> None:
+    ent_reg = er.async_get(hass)
+    source = hass.config_entries.async_entries("esphome")[0]
+    for domain, object_id, state in (
+        ("switch", "everything_presence_lite_252dd0_upside_down_mounting", "on"),
+        ("number", "everything_presence_lite_252dd0_installation_angle", "15.0"),
+    ):
+        ent_reg.async_get_or_create(domain, "esphome", object_id, suggested_object_id=object_id,
+                                    device_id=screek, config_entry=source)
+        hass.states.async_set(f"{domain}.{object_id}", state)
+    assert async_device_geometry(hass, screek)["mounting"] == {"upside_down": True, "installation_angle_deg": 15.0}
 
 
 async def test_legacy_polygons_skip_garbage(hass: HomeAssistant) -> None:

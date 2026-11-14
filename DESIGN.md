@@ -105,9 +105,13 @@ silent breakage.
 - Zones are stored in **millimetres in the sensor's reported frame**: origin at
   the sensor, +Y straight out, +X as the firmware reports it (after the
   firmware's own upside-down / installation-angle handling).
-- Display orientation is a per-sensor UI preference (default: sensor at the
-  bottom facing up, like the kitchen analysis; optional rotate 90°/180°/270°
-  and mirror). It never changes stored geometry.
+- Display orientation is a per-sensor setting (Sensor settings → Mounting /
+  Rotate view): sensor at the bottom facing up, *upside down* swaps left and
+  right, rotation is any angle (corner mounts). The mounting default follows
+  the device's `upside_down_mounting` switch where it exists (EP Lite / Pro;
+  both production EP Lites are mounted upside down and were drawn mirrored
+  before this). It never changes stored geometry: zones live in the sensor
+  frame and flip with the data.
 - Units shown in the UI follow the HA unit system (in/ft or cm/m).
 
 ## 6. Evaluation engine

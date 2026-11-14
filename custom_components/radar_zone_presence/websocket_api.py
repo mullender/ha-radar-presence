@@ -139,6 +139,7 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
             },
             "fov": {"half_angle_deg": FOV_HALF_ANGLE_DEG, "max_distance_mm": geometry["max_distance_mm"]},
             "device_zones": geometry["device_zones"],
+            "device_mounting": geometry["mounting"],
         },
     )
 

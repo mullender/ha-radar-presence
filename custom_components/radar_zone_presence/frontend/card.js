@@ -7,7 +7,7 @@
 //   trail: 10                     # optional, seconds of live trail
 
 import './plot.js';
-import { makeUnits } from './util.js';
+import { makeUnits, normalizeDisplay } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 
@@ -75,7 +75,7 @@ class RadarZonePresenceCard extends HTMLElement {
       fov: this.cfg.fov,
       deviceZones: [],
       zones: this.cfg.zones,
-      display: { rotation: 0, mirror: false, ...(this.cfg.settings.display || {}) },
+      display: normalizeDisplay(this.cfg.settings.display || {}, { upsideDown: this.cfg.device_mounting?.upside_down }),
       showMeasurements: false,
       trailSeconds: Number(c.trail) || 10,
     });

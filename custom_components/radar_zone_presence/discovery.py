@@ -22,6 +22,8 @@ DEVICE_RECT_RE = re.compile(
     r"(?P<field>begin_x|end_x|begin_y|end_y|x_begin|x_end|y_begin|y_end)$"
 )
 MAX_DISTANCE_RE = re.compile(r"^number\..+_max_distance$")
+INSTALL_ANGLE_RE = re.compile(r"^number\..+_installation_angle$")  # EP Lite / Pro
+UPSIDE_DOWN_RE = re.compile(r"^switch\..+_upside_down_mounting$")  # EP Lite / Pro
 
 
 @dataclass
@@ -90,16 +92,25 @@ def _float_state(hass: HomeAssistant, entity_id: str) -> tuple[float, str | None
 
 @callback
 def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
-    """Read-only overlay info from the device: max distance and firmware zones (mm)."""
+    """Read-only info from the device: max distance, firmware zones (mm) and mounting settings."""
     ent_reg = er.async_get(hass)
     rects: dict[str, dict[str, float]] = {}
     max_distance = DEFAULT_MAX_DISTANCE_MM
+    mounting: dict[str, Any] = {}
     for entry in er.async_entries_for_device(ent_reg, device_id):
         if entry.disabled_by is not None:
             continue
         if MAX_DISTANCE_RE.match(entry.entity_id):
             if (v := _float_state(hass, entry.entity_id)) is not None:
                 max_distance = to_mm(v[0], v[1])
+            continue
+        if INSTALL_ANGLE_RE.match(entry.entity_id):
+            if (v := _float_state(hass, entry.entity_id)) is not None:
+                mounting["installation_angle_deg"] = v[0]
+            continue
+        if UPSIDE_DOWN_RE.match(entry.entity_id):
+            if (state := hass.states.get(entry.entity_id)) is not None and state.state in ("on", "off"):
+                mounting["upside_down"] = state.state == "on"
             continue
         m = DEVICE_RECT_RE.match(entry.entity_id)
         if not m or (v := _float_state(hass, entry.entity_id)) is None:
@@ -125,7 +136,9 @@ def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]
                 "polygon": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
             }
         )
-    return {"max_distance_mm": max_distance, "device_zones": device_zones}
+    # The firmware applies its mounting settings to the coordinates it reports;
+    # they are shown for reference only.
+    return {"max_distance_mm": max_distance, "device_zones": device_zones, "mounting": mounting}
 
 
 @callback

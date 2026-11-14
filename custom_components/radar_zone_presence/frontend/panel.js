@@ -6,7 +6,7 @@ import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { classify, findDwellSpots, fitHull, flappingEdges, offsetConvex, percentile, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import {
-  EXCLUDE_COLOR, ZONE_COLORS, clone, el, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, ZONE_COLORS, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
@@ -117,7 +117,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.units = makeUnits('in');
     this.zones = [];
     this.saved = '[]';
-    this.settings = { reconnect_grace_s: 0, display: { rotation: 0, mirror: false } };
+    this.settings = { reconnect_grace_s: 0, display: normalizeDisplay() };
     this.savedSettings = JSON.stringify(this.settings);
     this.undoStack = [];
     this.redoStack = [];
@@ -230,7 +230,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.saved = JSON.stringify(this.zones);
     this.settings = {
       reconnect_grace_s: cfg.settings.reconnect_grace_s || 0,
-      display: { rotation: 0, mirror: false, ...(cfg.settings.display || {}) },
+      display: normalizeDisplay(cfg.settings.display || {}, { upsideDown: cfg.device_mounting?.upside_down }),
     };
     this.savedSettings = JSON.stringify(this.settings);
     this._renderAll();
@@ -965,17 +965,13 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Fit', false, () => this.plot.fit(), 'Fit view (F)'),
         this._tb('⟲', false, () => this._rotate(-90), 'Rotate view'),
         this._tb('⟳', false, () => this._rotate(90), 'Rotate view'),
-        this._tb('⇋', this.settings.display.mirror, () => { this.settings.display = { ...this.settings.display, mirror: !this.settings.display.mirror }; this._updatePlot(); this.plot.fit(); this._renderToolbar(); this._renderHeader(); }, 'Mirror view (display only)'),
+        this._tb('⇋', this.settings.display.mirror, () => this._setDisplay({ mirror: !this.settings.display.mirror }), 'Flip left / right (view only; zones are not moved)'),
         this._tb('Live', this.live, () => { this.live = !this.live; this._updatePlot(); this._renderToolbar(); }, 'Show live targets')),
     );
   }
 
   _rotate(d) {
-    const r = (((this.settings.display.rotation || 0) + d) % 360 + 360) % 360;
-    this.settings.display = { ...this.settings.display, rotation: r };
-    this._updatePlot();
-    this.plot.fit();
-    this._renderHeader();
+    this._setDisplay({ rotation: (this.settings.display.rotation || 0) + d });
   }
 
   _renderTransport() {
@@ -1428,8 +1424,37 @@ class RadarZonePresencePanel extends HTMLElement {
         el('label', {}, 'Reconnect grace (s)'),
         el('input', { type: 'number', min: 0, step: 1, value: this.settings.reconnect_grace_s, onchange: e => { this.settings = { ...this.settings, reconnect_grace_s: Math.max(0, +e.target.value || 0) }; this._renderHeader(); this._recomputePreview(); } }),
         el('div', { class: 'help full' }, 'Ignore detections for this long after the radar comes back from unavailable (ghosts often appear right after a reconnect).'),
-        el('label', {}, 'View'),
-        el('span', { class: 'help' }, `rotated ${this.settings.display.rotation || 0}°${this.settings.display.mirror ? ', mirrored' : ''} (saved with zones)`)));
+      ),
+      this._orientationSection());
+  }
+
+  _setDisplay(patch) {
+    this.settings = { ...this.settings, display: normalizeDisplay({ ...this.settings.display, ...patch }) };
+    this._updatePlot();
+    this.plot.fit();
+    this._renderToolbar();
+    this._renderHeader();
+    this._renderSide();
+  }
+
+  /** How the map is drawn relative to the room. View only: zones stay in the sensor's frame. */
+  _orientationSection() {
+    const d = this.settings.display;
+    const dev = this.config.device_mounting || {};
+    const fw = [];
+    if (dev.upside_down !== undefined) fw.push(`upside-down mounting ${dev.upside_down ? 'on' : 'off'}`);
+    if (dev.installation_angle_deg !== undefined) fw.push(`installation angle ${dev.installation_angle_deg}°`);
+    return el('div', { class: 'form', style: { marginTop: '10px' } },
+      el('label', {}, 'Mounting'),
+      el('select', { onchange: e => this._setDisplay({ mirror: e.target.value === '1' }) },
+        el('option', { value: '0', selected: !d.mirror }, 'Upright'),
+        el('option', { value: '1', selected: d.mirror }, 'Upside down (left ↔ right)')),
+      el('label', {}, 'Rotate view (°)'),
+      el('input', { type: 'number', step: 5, value: d.rotation, title: 'Any angle, e.g. 45 for a sensor mounted in a corner', onchange: e => this._setDisplay({ rotation: +e.target.value || 0 }) }),
+      el('div', { class: 'help full' },
+        'Check: stand behind the sensor and walk to your right; your dot should move right on the map (sensor at the bottom). If it moves left, switch this. ',
+        'Only the view changes; zones stay where they are relative to the sensor. Saved with the zones.'),
+      fw.length ? el('div', { class: 'help full' }, `Device: ${fw.join(', ')} (the default here follows it).`) : '');
   }
 
   _renderLiveBadges() {

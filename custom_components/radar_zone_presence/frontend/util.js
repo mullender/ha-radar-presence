@@ -136,6 +136,24 @@ export function newZoneId() {
 
 export const clone = v => JSON.parse(JSON.stringify(v));
 
+/**
+ * View orientation for a radar. `mirror` = the sensor is mounted upside down,
+ * which swaps left and right (checked on two upside-down EP Lites, 2026-11);
+ * the default follows the device's own `upside_down_mounting` switch when it
+ * has one. `rotation` turns the view (any angle, e.g. 45 for a corner mount).
+ * View only: zones stay in the sensor's frame, so they flip with the data.
+ *
+ * Settings saved before v2 never chose a mounting and take the device default.
+ */
+export function normalizeDisplay(display = {}, { upsideDown = false } = {}) {
+  const d = { rotation: 0, mirror: !!upsideDown, ...display };
+  if (!display.v) d.mirror = !!upsideDown;
+  d.v = 2;
+  d.mirror = !!d.mirror;
+  d.rotation = ((Number(d.rotation) || 0) % 360 + 360) % 360;
+  return d;
+}
+
 export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {

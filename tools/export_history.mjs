@@ -69,6 +69,10 @@ const devices = await evaluate(async hass => {
     d.legacy_presence = Object.keys(hass.states)
       .filter(id => id.startsWith(`binary_sensor.${d.slug}_zone_polygon_`));
     d.units = Object.fromEntries(d.entities.map(id => [id, hass.states[id]?.attributes.unit_of_measurement ?? null]));
+    // Device settings the integration reads (mounting, range), as current state.
+    d.extra_states = Object.fromEntries(ents
+      .filter(e => e.device_id === d.device_id && !e.disabled_by && /_(upside_down_mounting|installation_angle|max_distance)$/.test(e.entity_id))
+      .map(e => [e.entity_id, hass.states[e.entity_id]?.state]).filter(([, v]) => v !== undefined));
   }
   return Object.values(out).filter(d => d.slug);
 });
