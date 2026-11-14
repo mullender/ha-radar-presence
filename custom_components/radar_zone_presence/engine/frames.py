@@ -139,3 +139,52 @@ def assemble(
         assembler.update(entity_id, state, t)
     if assembler.pending_since is not None:
         yield assembler.build()
+
+
+def pack_frames(frames: Iterable[Frame], t0: float, max_frames: int | None = None) -> dict:
+    """Columnar encoding used by the websocket API and the JS engine.
+
+    frame_t: seconds since t0; frame_n: targets per frame; slot/x/y: flattened
+    targets (mm, rounded); frame_available: 0/1.
+    """
+    ft: list[float] = []
+    fn: list[int] = []
+    avail: list[int] = []
+    slot: list[int] = []
+    xs: list[int] = []
+    ys: list[int] = []
+    truncated = False
+    for frame in frames:
+        if max_frames is not None and len(ft) >= max_frames:
+            truncated = True
+            break
+        ft.append(round(max(frame.t, t0) - t0, 3))
+        fn.append(len(frame.targets))
+        avail.append(1 if frame.available else 0)
+        for tg in frame.targets:
+            slot.append(tg.slot)
+            xs.append(round(tg.x))
+            ys.append(round(tg.y))
+    return {
+        "start": t0,
+        "frame_t": ft,
+        "frame_n": fn,
+        "frame_available": avail,
+        "slot": slot,
+        "x": xs,
+        "y": ys,
+        "truncated": truncated,
+    }
+
+
+def unpack_frames(packed: dict) -> list[Frame]:
+    out = []
+    p = 0
+    for i, t in enumerate(packed["frame_t"]):
+        n = packed["frame_n"][i]
+        targets = tuple(
+            Target(packed["slot"][k], float(packed["x"][k]), float(packed["y"][k])) for k in range(p, p + n)
+        )
+        p += n
+        out.append(Frame(packed["start"] + t, targets, bool(packed["frame_available"][i])))
+    return out

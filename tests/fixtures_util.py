@@ -44,7 +44,7 @@ def events(doc: dict, include_count: bool = False) -> list[tuple[float, str, str
 
 def legacy_polygons_mm(doc: dict) -> dict[int, list[tuple[float, float]]]:
     """input_text polygons (in the target sensors' unit) converted to mm."""
-    unit = next(iter(doc["meta"]["units"].values()))
+    unit = next(u for e, u in doc["meta"]["units"].items() if _TARGET_RE.match(e))
     out = {}
     for eid, state in doc["meta"]["polygons"].items():
         n = int(eid.rsplit("_", 1)[1])

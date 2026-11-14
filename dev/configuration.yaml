@@ -1,12 +1,31 @@
-# Seed config for the dev container. Copy to ha_config/ on first run:
-#   mkdir -p ha_config && cp dev/configuration.yaml ha_config/
-default_config:
+# Dev config (venv run: dev/run.sh). Copied to ha_config/ on first run.
+# Kept minimal so HA does not install dozens of default_config requirements.
+homeassistant:
+  name: Radar Dev
+  unit_system: us_customary
+  time_zone: America/Los_Angeles
+  latitude: 47.6062
+  longitude: -122.3321
 
-debugpy:
-  start: true
-  wait: false
+http:
+  server_port: 8124
+
+frontend:
+config:
+history:
+logbook:
+recorder:
+  purge_keep_days: 10
+  commit_interval: 5
+input_text:
+system_health:
+energy:
 
 logger:
   default: warning
   logs:
     custom_components.radar_zone_presence: debug
+    custom_components.radar_sim: info
+
+radar_sim:
+  data_dir: !env_var RADAR_SIM_DATA

@@ -14,6 +14,7 @@ from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import HomeAssistant, State
 
 from .engine import FrameAssembler, TargetEntities, assemble
+from .engine.frames import pack_frames
 
 # Hard cap to keep websocket payloads sane (~48 h of a busy EP Lite is ~100k frames).
 MAX_FRAMES = 400_000
@@ -68,36 +69,9 @@ async def async_history_frames(
             events.extend((t, eid, s) for t, s in _state_rows(rows))
         events.sort(key=lambda e: e[0])
         asm = FrameAssembler(targets, units=units)
-        t0 = start.timestamp()
-        ft: list[float] = []
-        fn: list[int] = []  # number of targets in each frame
-        slot: list[int] = []
-        xs: list[int] = []
-        ys: list[int] = []
-        avail: list[int] = []
-        truncated = False
-        for frame in assemble(asm, events):
-            if len(ft) >= MAX_FRAMES:
-                truncated = True
-                break
-            ft.append(round(max(frame.t, t0) - t0, 3))
-            fn.append(len(frame.targets))
-            avail.append(1 if frame.available else 0)
-            for tg in frame.targets:
-                slot.append(tg.slot)
-                xs.append(round(tg.x))
-                ys.append(round(tg.y))
-        return {
-            "start": t0,
-            "end": end.timestamp(),
-            "frame_t": ft,
-            "frame_n": fn,
-            "frame_available": avail,
-            "slot": slot,
-            "x": xs,
-            "y": ys,
-            "truncated": truncated,
-        }
+        packed = pack_frames(assemble(asm, events), start.timestamp(), MAX_FRAMES)
+        packed["end"] = end.timestamp()
+        return packed
 
     return await hass.async_add_executor_job(build)
 

@@ -1,0 +1,11 @@
+{
+  "domain": "radar_sim",
+  "name": "Radar simulator (dev only)",
+  "codeowners": ["@mullender"],
+  "config_flow": true,
+  "dependencies": ["recorder"],
+  "documentation": "https://github.com/mullender/ha-radar-presence/blob/main/DEVELOPMENT.md",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.1.0"
+}
