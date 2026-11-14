@@ -171,14 +171,25 @@ with margins, and zones that only end on a positive exit. All three built
   require the appearing target to persist.
 - Fit to points / spot hulls are convex: an L-shaped cloud gets a convex
   hull. Fine for desks and chairs; concave hulls (alpha shape) later.
-- The dev config has a "Ghost corner" exclusion I made earlier; the panel now
-  flags it as a real spot (it is the desk).
+- The dev config's old "Ghost corner" exclusion (flagged as a real spot) was
+  replaced by a saved "Desk" zone created from the suggestion (hold, 150 mm
+  margin, max hold 25 min).
+- Simulator: entities are seeded with their state at the replay position on
+  start (they stayed unavailable for hours after a restart in quiet stretches);
+  state file read moved off the event loop.
 - Design discussion deferred (two modes, edit menu, time picker, default
   15 min): DESIGN §8.5.
 
+- Flapping edges: the editor flags zone edges that targets cross out and
+  back in within 3 s (red on the map). A box whose edge cuts the desk: 244
+  flaps / 24 h on that edge.
+
 Ideas not built yet:
-- Doorway detection: where trails start/end (appear/vanish points away from
-  dwell spots) → suggest doorways; could also tell "left the room" from
-  "lost while sitting".
+- Doorway detection: checked the data (room empty → first appearance, and
+  last position before empty). In the living room most room sessions start
+  and end *at the desk*, not a door: the room goes 'empty' while the user sits
+  still. Doors don't stand out in any radar's data, so auto doorways are not
+  viable; a user-drawn 'exit area' for a whole-room hold zone could be
+  (vanishing inside an exit area = left).
 - Suggest on-delay from blip durations of likely-ghost visits.
 - Multi-sensor fusion in one room (two radars agree → ghost unlikely).

@@ -91,7 +91,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sims.append(DeviceSim(hass, doc))
 
     state_file = Path(hass.config.path(".radar_sim.json"))
-    saved = json.loads(state_file.read_text()) if state_file.exists() else {}
+    saved = await hass.async_add_executor_job(
+        lambda: json.loads(state_file.read_text()) if state_file.exists() else {}
+    )
     tasks: list[asyncio.Task] = []
 
     async def start(_hass: HomeAssistant | None = None) -> None:
@@ -186,6 +188,13 @@ class DeviceSim:
             elapsed = (time.time() - anchor) % self.span
             loop_base = time.time() - elapsed  # wall time of export start in this loop
             i = bisect.bisect_left(self.times, self.start + elapsed)
+            # Seed every entity with its state at this point of the export;
+            # otherwise it stays unavailable until its next change (hours if quiet).
+            current: dict[str, str] = {}
+            for _t, eid, s in self.events[:i]:
+                current[eid] = s
+            for eid, s in current.items():
+                self._set(eid, s)
             while i < len(self.events):
                 t, eid, s = self.events[i]
                 delay = (t - self.start) + loop_base - time.time()
