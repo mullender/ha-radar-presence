@@ -323,3 +323,58 @@ removes them after checking the new entities.
 - ~~Zone storage~~ — decided: config entry options.
 - Keep the JS state machine (preview) and the Python engine in lock-step:
   shared JSON test vectors run by both test suites.
+
+## 9. Proposal: a home of radars and virtual presence devices (under discussion)
+
+Goal: the integration should feel native in HA. Rooms show presence; radars
+are hardware that feeds it. Today zones are entities on the radar's device,
+which reads as "the living-room radar has a Kitchen sensor" and breaks down
+once one zone is seen by several radars.
+
+### 9.1 Model
+
+| HA concept | What it is here |
+|---|---|
+| Config entry (one) | **The home**: the shared map, alignments, exits/doors, zones. |
+| Subentry `radar` | One physical radar (picks the ESPHome device). Holds mounting, its exclusions (the fan in front of *this* radar) and its alignment to the home map. Adds a few diagnostic entities to the existing radar device (anyone in view, target count, excluded targets). No new device. |
+| Subentry `zone` -> **device** | A virtual presence device, e.g. "Kitchen" or "Desk": own device, assigned to an area, model "Room" or "Spot", connected via its main radar. Entities: Occupancy (binary_sensor, device class occupancy), People (count), diagnostics (held, contributing radars). |
+| Exits / doors | Home geometry (stairs, doorways, doors with swing and contact sensor), not owned by a radar. |
+
+A single-radar home is the same model: the home map is that radar's frame
+and nothing needs aligning.
+
+### 9.2 How it looks in HA
+
+- Devices: "Kitchen · Radar zone · Kitchen", "Desk · Radar zone · Living room".
+- Area pages / area dashboards: the zone's Occupancy sensor makes the room
+  show as occupied, like any other presence device in that area.
+- Integration page: one entry with "Radars (3)" and "Zones (6)"; add or
+  rename from there (subentry flows) or from the panel.
+- Radar (ESPHome) device pages: a few diagnostic entities, nothing else.
+- Automations target "Kitchen occupancy", not "8519b4 polygon 2".
+
+### 9.3 Logic
+
+- Zones are drawn once on the home map; every aligned radar that covers part
+  of a zone evaluates its share (polygon transformed into its frame).
+  Occupied = any radar sees someone inside.
+- Hold until seen leaving works per zone across radars: a target lost by one
+  radar but picked up by another nearby within ~2 s is a hand-over, not a
+  vanish; leaving through an exit (or a door that just moved) releases.
+- Exclusions stay per radar (ghosts are a property of one sensor's view).
+
+### 9.4 Migration
+
+Production has one radar entry (living room) with three zone entities.
+Convert it into the home entry with one radar subentry and three zone
+subentries, keeping entity ids (unique-id migration), so automations keep
+working.
+
+### 9.5 Open decisions
+
+1. Zones as their own devices (proposed) vs entities on the radar device.
+2. One home entry with radar subentries (proposed) vs one entry per radar
+   plus a separate entry for shared zones.
+3. Device naming: "Kitchen" vs "Kitchen presence" (entity becomes
+   `binary_sensor.kitchen_occupancy` either way with has_entity_name).
+4. Keep the radar-level "anyone in view" sensor (proposed: diagnostic).
