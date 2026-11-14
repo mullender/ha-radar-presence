@@ -130,6 +130,24 @@ async def test_off_delay_timer(hass: HomeAssistant, radar_device: str) -> None:
     assert hass.states.get(chair).state == "off"
 
 
+async def test_hold_until_exit_with_max_hold(hass: HomeAssistant, radar_device: str) -> None:
+    entry = await setup_entry(
+        hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN, hold_until_exit=True, hold_max_s=60)]
+    )
+    chair = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
+    await move(hass, 1, 20, 120)
+    await move(hass, 1, 0, 0)  # goes still: radar reports no target
+    state = hass.states.get(chair)
+    assert state.state == "on" and state.attributes["held"] == 1
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
+    await hass.async_block_till_done()
+    assert hass.states.get(chair).state == "on"
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
+    await hass.async_block_till_done()
+    state = hass.states.get(chair)
+    assert state.state == "off" and state.attributes["held"] == 0
+
+
 async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
     client = await hass_ws_client(hass)

@@ -277,6 +277,15 @@ export function suggestHold(stats) {
   return stats.vanishIn / visits >= 0.2 && stats.reappearIn >= 2 * stats.reappearOut;
 }
 
+/**
+ * A safe 'max hold' for a zone: 1.5x the longest time someone went still
+ * there, rounded up to 5 min, between 15 min and 4 h.
+ */
+export function suggestMaxHold(stats) {
+  const longest = stats.stillGaps.length ? Math.max(...stats.stillGaps) : 0;
+  return Math.min(4 * 3600, Math.max(15 * 60, Math.ceil((1.5 * longest) / 300) * 300));
+}
+
 export function percentile(values, q) {
   if (!values.length) return 0;
   const v = [...values].sort((a, b) => a - b);

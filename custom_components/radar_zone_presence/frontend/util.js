@@ -145,7 +145,7 @@ export function el(tag, attrs = {}, ...children) {
     else if (v === true) e.setAttribute(k, '');
     else if (v !== false && v !== null && v !== undefined) e.setAttribute(k, v);
   }
-  for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) e.append(c);
+  for (const c of children.flat(Infinity)) if (c !== null && c !== undefined && c !== false) e.append(c);
   return e;
 }
 
@@ -153,6 +153,6 @@ export const SVGNS = 'http://www.w3.org/2000/svg';
 export function svg(tag, attrs = {}, ...children) {
   const e = document.createElementNS(SVGNS, tag);
   for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined && v !== false) e.setAttribute(k, v);
-  for (const c of children.flat()) if (c) e.append(c);
+  for (const c of children.flat(Infinity)) if (c) e.append(c);
   return e;
 }

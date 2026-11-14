@@ -151,6 +151,7 @@ FILTERS_SCHEMA = vol.Schema(
         vol.Optional("off_delay_s", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=3600)),
         vol.Optional("edge_margin_mm", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=2000)),
         vol.Optional("hold_until_exit", default=False): bool,
+        vol.Optional("hold_max_s", default=0): vol.All(vol.Coerce(float), vol.Range(min=0, max=86400)),
     }
 )
 ZONE_SCHEMA = vol.Schema(

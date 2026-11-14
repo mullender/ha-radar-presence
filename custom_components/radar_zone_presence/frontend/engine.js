@@ -76,7 +76,7 @@ export class ZoneEngine {
     this.include = zones.filter(z => z.kind !== 'exclude');
     this.exclude = zones.filter(z => z.kind === 'exclude');
     this.grace = reconnectGraceS;
-    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), held: 0 }]));
+    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), heldSince: [] }]));
     this.presence = { raw: false, state: false, since: 0 };
     this.available = true;
     this.graceUntil = -Infinity;
@@ -111,24 +111,39 @@ export class ZoneEngine {
       }
       rt.slots = inside.map(tg => tg[0]);
       const hold = !!z.filters?.hold_until_exit;
-      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots));
-      else if (!hold) rt.held = 0;
-      rt.count = inside.length + rt.held;
-      this._setRaw(rt, inside.length > 0 || rt.held > 0, t, z.filters);
+      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), t);
+      else if (!hold) rt.heldSince.length = 0;
+      rt.count = inside.length + rt.heldSince.length;
+      this._setRaw(rt, inside.length > 0 || rt.heldSince.length > 0, t, z.filters);
     }
     this._setRaw(this.presence, kept.length > 0, t, null);
     this.lastT = t;
   }
 
-  _updateHold(rt, kept, insideSlots) {
+  _updateHold(rt, kept, insideSlots, t) {
     const cur = new Map(kept.map(tg => [tg[0], insideSlots.has(tg[0])]));
-    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot)) rt.held += 1;
-    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.held > 0) rt.held -= 1;
+    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot)) rt.heldSince.push(t);
+    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.heldSince.length) rt.heldSince.shift();
     rt.prevInside = cur;
   }
 
+  _expireHolds(rt, t, f) {
+    const max = f?.hold_max_s || 0;
+    if (max <= 0) return;
+    while (rt.heldSince.length && rt.heldSince[0] + max <= t + EPS) {
+      const expiredAt = rt.heldSince.shift() + max;
+      rt.count -= 1;
+      const raw = rt.slots.length > 0 || rt.heldSince.length > 0;
+      if (raw !== rt.raw) { rt.raw = raw; rt.since = expiredAt; }
+    }
+  }
+
   advance(t) {
-    for (const z of this.include) this._applyDelay(this.rt.get(z.id), t, z.filters);
+    for (const z of this.include) {
+      const rt = this.rt.get(z.id);
+      this._expireHolds(rt, t, z.filters);
+      this._applyDelay(rt, t, z.filters);
+    }
     this.lastT = Math.max(this.lastT, t);
   }
 
@@ -138,6 +153,11 @@ export class ZoneEngine {
       const rt = this.rt.get(z.id);
       if (rt.raw !== rt.state) {
         const d = rt.since + (rt.raw ? z.filters?.on_delay_s || 0 : z.filters?.off_delay_s || 0);
+        best = best === null ? d : Math.min(best, d);
+      }
+      const max = z.filters?.hold_max_s || 0;
+      if (rt.heldSince.length && max > 0) {
+        const d = rt.heldSince[0] + max;
         best = best === null ? d : Math.min(best, d);
       }
     }

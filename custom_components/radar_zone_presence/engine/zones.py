@@ -28,6 +28,9 @@ class ZoneFilters:
     # inside the zone (sitting still) is held as an occupant until a target
     # walks out across the edge or (re)appears outside the zone.
     hold_until_exit: bool = False
+    # Safety net for hold_until_exit: a held occupant expires after this many
+    # seconds (0 = never), in case they left without being seen.
+    hold_max_s: float = 0.0
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any] | None) -> ZoneFilters:
@@ -37,6 +40,7 @@ class ZoneFilters:
             float(d.get("off_delay_s", 0) or 0),
             float(d.get("edge_margin_mm", 0) or 0),
             bool(d.get("hold_until_exit", False)),
+            float(d.get("hold_max_s", 0) or 0),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -45,6 +49,7 @@ class ZoneFilters:
             "off_delay_s": self.off_delay_s,
             "edge_margin_mm": self.edge_margin_mm,
             "hold_until_exit": self.hold_until_exit,
+            "hold_max_s": self.hold_max_s,
         }
 
 
@@ -87,7 +92,12 @@ class _ZoneRuntime:
     count: int = 0
     slots: tuple[int, ...] = ()
     prev_inside: dict[int, bool] = field(default_factory=dict)  # slot -> inside, previous frame
-    held: int = 0  # occupants that vanished inside and were not seen leaving
+    held_since: list[float] = field(default_factory=list)  # vanish times of held occupants, oldest first
+
+    @property
+    def held(self) -> int:
+        """Occupants that vanished inside and were not seen leaving."""
+        return len(self.held_since)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,9 +166,9 @@ class ZoneEngine:
                 inside = [tg for tg in kept if point_in_polygon(tg.x, tg.y, zone.polygon)]
             rt.slots = tuple(tg.slot for tg in inside)
             if zone.filters.hold_until_exit and t >= self._grace_until:
-                self._update_hold(rt, kept, set(rt.slots))
+                self._update_hold(rt, kept, set(rt.slots), t)
             elif not zone.filters.hold_until_exit:
-                rt.held = 0
+                rt.held_since.clear()
             rt.count = len(inside) + rt.held
             self._set_raw(rt, bool(inside) or rt.held > 0, t, zone.filters)
 
@@ -168,22 +178,36 @@ class ZoneEngine:
         return self.snapshot()
 
     @staticmethod
-    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int]) -> None:
+    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int], t: float) -> None:
         cur = {tg.slot: tg.slot in inside_slots for tg in kept}
         for slot, was_inside in rt.prev_inside.items():
             if was_inside and slot not in cur:
-                rt.held += 1  # vanished inside: still there, just not detected
-        for slot, is_inside in cur.items():
-            if slot not in rt.prev_inside and rt.held > 0:
+                rt.held_since.append(t)  # vanished inside: still there, just not detected
+        for slot in cur:
+            if slot not in rt.prev_inside and rt.held_since:
                 # A target (re)appeared: inside = the held person re-detected;
                 # outside = they left without being seen crossing the edge.
-                rt.held -= 1
+                rt.held_since.pop(0)
         rt.prev_inside = cur
+
+    @staticmethod
+    def _expire_holds(rt: _ZoneRuntime, t: float, f: ZoneFilters) -> None:
+        if f.hold_max_s <= 0:
+            return
+        while rt.held_since and rt.held_since[0] + f.hold_max_s <= t + 1e-6:
+            expired_at = rt.held_since.pop(0) + f.hold_max_s
+            rt.count -= 1
+            raw = bool(rt.slots) or bool(rt.held_since)
+            if raw != rt.raw:
+                rt.raw = raw
+                rt.since = expired_at
 
     def advance(self, t: float) -> None:
         """Apply delayed transitions that are due at time ``t``."""
         for zone in self.include:
-            self._apply_delay(self._rt[zone.id], t, zone.filters)
+            rt = self._rt[zone.id]
+            self._expire_holds(rt, t, zone.filters)
+            self._apply_delay(rt, t, zone.filters)
         self._last_t = max(self._last_t, t)
 
     def next_deadline(self) -> float | None:
@@ -194,6 +218,9 @@ class ZoneEngine:
             if rt.raw != rt.state:
                 delay = zone.filters.on_delay_s if rt.raw else zone.filters.off_delay_s
                 d = rt.since + delay
+                best = d if best is None else min(best, d)
+            if rt.held_since and zone.filters.hold_max_s > 0:
+                d = rt.held_since[0] + zone.filters.hold_max_s
                 best = d if best is None else min(best, d)
         return best
 

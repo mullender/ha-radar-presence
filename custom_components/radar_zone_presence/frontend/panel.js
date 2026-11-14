@@ -4,7 +4,7 @@
 import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
-import { classify, findDwellSpots, fitHull, offsetConvex, percentile, suggestHold, trailStats } from './analysis.js';
+import { classify, findDwellSpots, fitHull, offsetConvex, percentile, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import {
   EXCLUDE_COLOR, ZONE_COLORS, clone, el, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
@@ -231,7 +231,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _editable(z) {
     return {
       id: z.id, name: z.name, kind: z.kind, polygon: z.polygon.map(p => [p[0], p[1]]),
-      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, ...(z.filters || {}) },
+      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...(z.filters || {}) },
       area_id: z.area_id ?? z.registry_area_id ?? null,
     };
   }
@@ -548,7 +548,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const zone = {
       id: newZoneId(), name: name || (kind === 'exclude' ? `Exclusion ${n}` : `Zone ${n}`), kind,
       polygon: polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
-      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, ...filters }, area_id: null,
+      filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...filters }, area_id: null,
     };
     const prev = JSON.stringify(this.zones);
     this.selectedId = zone.id;
@@ -982,9 +982,14 @@ class RadarZonePresencePanel extends HTMLElement {
           num(Math.round(u.toDisplay(f.edge_margin_mm) * 10) / 10, e => this._patchZone(z.id, { filters: { ...f, edge_margin_mm: Math.max(0, u.fromDisplay(+e.target.value || 0)) } })),
           el('div', { class: 'help full' }, 'On delay ignores short blips (ghosts are often < 2 s). Edge margin adds hysteresis: a target must be this far inside to enter and this far outside to leave.'),
           el('label', { class: 'check full' },
-            el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked } }) }),
+            el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked, hold_max_s: e.target.checked && !f.hold_max_s ? this._suggestedMaxHold(z) : f.hold_max_s || 0 } }, { renderSide: true }) }),
             el('span', {}, 'Stay occupied until seen leaving',
               el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, a target that disappears inside the zone keeps it occupied until someone walks out across the edge or shows up elsewhere in the room.'))),
+          f.hold_until_exit ? [
+            el('label', {}, 'Max hold (min)'),
+            num(Math.round((f.hold_max_s || 0) / 6) / 10, e => this._patchZone(z.id, { filters: { ...f, hold_max_s: Math.max(0, Math.round((+e.target.value || 0) * 60)) } }), { title: '0 = hold until seen leaving, however long' }),
+            el('div', { class: 'help full' }, 'Safety net in case someone slips out unseen: a held occupant is dropped after this long (0 = never).'),
+          ] : '',
         ] : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
       ),
       this.hist ? el('div', { class: 'actions' },
@@ -1029,6 +1034,12 @@ class RadarZonePresencePanel extends HTMLElement {
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[0]), onchange: e => set(i, 0, +e.target.value) })),
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[1]), onchange: e => set(i, 1, +e.target.value) })),
         el('td', {}, z.polygon.length > 3 ? el('button', { class: 'tb', title: 'Delete vertex', onclick: () => this._patchZone(z.id, { polygon: z.polygon.filter((_, k) => k !== i) }, { renderSide: true }) }, '✕') : '')))));
+  }
+
+  _suggestedMaxHold(z) {
+    if (!this.hist || validatePolygon(z.polygon)) return 1800;
+    const exclusions = this.zones.filter(q => q.kind === 'exclude' && !validatePolygon(q.polygon));
+    return suggestMaxHold(trailStats(this.hist, z.polygon, { exclusions }));
   }
 
   _fitZone(z) {
@@ -1178,8 +1189,10 @@ class RadarZonePresencePanel extends HTMLElement {
         if (!poly) { this._toast('Margin too negative: the spot collapses. Use a smaller inward margin.', true); return; }
         const hold = kind === 'include' && sp.hold;
         this.hoverSpot = null;
-        this._addZone(poly, kind, kind === 'exclude' ? `Ghost ${sp.n}` : `Spot ${sp.n}`, hold ? { hold_until_exit: true } : {});
-        if (hold) this._toast('People go still in this spot: "Stay occupied until seen leaving" is on for the new zone.');
+        const maxHold = suggestMaxHold(sp.stats);
+        // Edge margin: without it, position jitter at the edge reads as walking out and back in.
+        this._addZone(poly, kind, kind === 'exclude' ? `Ghost ${sp.n}` : `Spot ${sp.n}`, hold ? { hold_until_exit: true, hold_max_s: maxHold, edge_margin_mm: 150 } : {});
+        if (hold) this._toast(`People go still in this spot: "Stay occupied until seen leaving" is on (max ${Math.round(maxHold / 60)} min).`);
       };
       return el('div', {
         class: 'spot-row', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); },

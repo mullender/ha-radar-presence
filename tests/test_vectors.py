@@ -46,6 +46,7 @@ def _zones_for(doc: dict) -> dict[str, list[dict]]:
         "filters_exclusion": [*({**z, "filters": filt} for z in base), excl],
         "hold_until_exit": [{**z, "filters": {"hold_until_exit": True}} for z in base],
         "hold_filters_exclusion": [*({**z, "filters": {**filt, "hold_until_exit": True}} for z in base), excl],
+        "hold_max": [{**z, "filters": {"hold_until_exit": True, "hold_max_s": 20.0, "off_delay_s": 2.0}} for z in base],
     }
 
 

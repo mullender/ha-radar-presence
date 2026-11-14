@@ -254,6 +254,28 @@ def test_hold_released_when_target_reappears_outside():
     assert not snap.zones["z1"].occupied and snap.zones["z1"].held == 0
 
 
+def test_hold_expires_after_max_hold():
+    eng = ZoneEngine([zone(hold_until_exit=True, hold_max_s=600)])
+    frames = [frame(0, (500, 1500)), frame(1), frame(300), frame(1000)]  # goes still at t=1
+    # Turns off when the hold expires (t=601), not at the next frame.
+    assert replay(eng, frames) == [(0, "z1", True), (0, "presence", True), (1, "presence", False), (601, "z1", False)]
+
+
+def test_hold_expiry_respects_off_delay():
+    eng = ZoneEngine([zone(hold_until_exit=True, hold_max_s=60, off_delay_s=30)])
+    out = [tr for tr in replay(eng, [frame(0, (500, 1500)), frame(1), frame(500)]) if tr[1] == "z1"]
+    assert out == [(0, "z1", True), (91, "z1", False)]
+
+
+def test_hold_reappear_resets_expiry():
+    eng = ZoneEngine([zone(hold_until_exit=True, hold_max_s=60)])
+    eng.process(frame(0, (500, 1500)))
+    eng.process(frame(1))
+    eng.process(frame(50, (510, 1500)))  # re-detected before expiry
+    eng.process(frame(51))  # still again: new hold until 111
+    assert eng.next_deadline() == pytest.approx(111)
+
+
 def test_without_hold_still_person_turns_zone_off():
     eng = ZoneEngine([zone()])
     eng.process(frame(0, (500, 1500)))
