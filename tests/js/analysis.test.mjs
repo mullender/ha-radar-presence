@@ -160,3 +160,35 @@ test('door events locate the door: positions at open/close, stray targets droppe
   assert.ok(poly.length <= 8);
   assert.ok(Math.abs(polygonArea(poly)) < 2.5e6, 'a small area, not the room');
 });
+
+test('two radars seeing the same person: rotation, offset and handedness are recovered', async () => {
+  const { pairDetections, registerRigid, viewToMatch } = await import('../../custom_components/radar_zone_presence/frontend/analysis.js');
+  for (const truth of [{ ang: -156, reflect: false, t: [2300, 5450] }, { ang: 62, reflect: true, t: [-1500, 3000] }]) {
+    const a = (truth.ang * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    const toA = ([x, y]) => { const u = truth.reflect ? -x : x; return [c * u - s * y + truth.t[0], s * u + c * y + truth.t[1]]; };
+    const fa = [], fb = [];
+    for (let k = 0; k < 600; k++) {
+      const t = k * 0.6;
+      const q = [rnd() * 5000, 600 + (rnd() + 0.5) * 4000];
+      const p = k % 10 < 3 ? [rnd() * 6000, 3000 + rnd() * 3000] : toA(q); // 30% the radars see different people
+      fa.push([t, [[1, p[0] + rnd() * 150, p[1] + rnd() * 150]]]);
+      fb.push([t + 0.05, [[1, q[0] + rnd() * 150, q[1] + rnd() * 150]]]);
+    }
+    const pairs = pairDetections(pack(fa), pack(fb));
+    assert.ok(pairs.length > 500);
+    const reg = registerRigid(pairs);
+    assert.equal(reg.reflect, truth.reflect);
+    assert.ok(Math.abs(((reg.angleDeg - truth.ang + 540) % 360) - 180) < 2, `angle ${reg.angleDeg} vs ${truth.ang}`);
+    assert.ok(Math.hypot(reg.t[0] - truth.t[0], reg.t[1] - truth.t[1]) < 150);
+    assert.ok(reg.inliers / reg.n > 0.6 && reg.rms < 250);
+    // B's view then shows a direction the same way A's view does.
+    const refDisplay = { rotation: 30, mirror: true };
+    const view = viewToMatch(refDisplay, reg);
+    const disp = (d, [x, y]) => { const u = d.mirror ? -x : x; const r = (d.rotation * Math.PI) / 180; return [u * Math.cos(r) - y * Math.sin(r), u * Math.sin(r) + y * Math.cos(r)]; };
+    const q0 = [0, 0], q1 = [1000, 2000];
+    const pa = [toA(q0), toA(q1)].map(p => disp(refDisplay, p));
+    const pb = [q0, q1].map(q => disp(view, q));
+    const da = [pa[1][0] - pa[0][0], pa[1][1] - pa[0][1]], db = [pb[1][0] - pb[0][0], pb[1][1] - pb[0][1]];
+    assert.ok(Math.hypot(da[0] - db[0], da[1] - db[1]) < 60, `views agree: ${da} vs ${db}`);
+  }
+});

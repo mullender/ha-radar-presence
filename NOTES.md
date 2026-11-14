@@ -313,3 +313,21 @@ Ideas not built yet:
   without identities, counts drift when two people hold and one leaves unseen,
   so Max hold stays the safety net; holds are not started by ghosts here
   (2 of 204 at night, half tracked > 1.5 min).
+
+## 2026-11-14: aligning one radar's view with another
+
+- The living radar sees well into the kitchen, so moments when both radars
+  see exactly one target (within 0.3 s) are almost always the same person.
+  A RANSAC + least-squares rigid fit (both handednesses tried) over 48 h:
+  5,803 pairs, 3,450 agree within 0.4 m (rms 211 mm); the kitchen radar is
+  turned -155 deg relative to the living radar, ~2.3 m north / 5.4 m east of
+  it, facing west and ~24 deg north: towards the stairs, as the user said.
+  The mirrored fit is much worse (35%), so both report in the same handedness.
+- *Align with* (Sensor settings) runs this in the panel against another radar's
+  history and sets this radar's view rotation (and flip, if the handedness
+  differs) so both maps show the house the same way. It stores the fit
+  (`display.aligned_to`) with the zones. View only, our own setting: the EP
+  Lite installation angle is not used (it is a tilt, and whether the firmware
+  applies it to the coordinates is unknown).
+- The fitted offset would also allow drawing two radars on one map, or
+  handing a person over between radars; not built.

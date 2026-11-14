@@ -5,8 +5,8 @@ import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import {
-  classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, percentile, placeExit,
-  suggestHold, suggestMaxHold, trailStats,
+  classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
+  placeExit, registerRigid, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
   EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
@@ -1472,7 +1472,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const dev = this.config.device_mounting || {};
     const fw = [];
     if (dev.upside_down !== undefined) fw.push(`upside-down mounting ${dev.upside_down ? 'on' : 'off'}`);
-    if (dev.installation_angle_deg !== undefined) fw.push(`installation angle ${dev.installation_angle_deg}°`);
+    if (dev.installation_angle_deg !== undefined) fw.push(`installation angle ${dev.installation_angle_deg}° (not used here)`);
     return el('div', { class: 'form', style: { marginTop: '10px' } },
       el('label', {}, 'Mounting'),
       el('select', { onchange: e => this._setDisplay({ mirror: e.target.value === '1' }) },
@@ -1483,7 +1483,69 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'help full' },
         'Check: stand behind the sensor and walk to your right; your dot should move right on the map (sensor at the bottom). If it moves left, switch this. ',
         'Only the view changes; zones stay where they are relative to the sensor. Saved with the zones.'),
-      fw.length ? el('div', { class: 'help full' }, `Device: ${fw.join(', ')} (the default here follows it).`) : '');
+      fw.length ? el('div', { class: 'help full' }, `Device: ${fw.join(', ')}. Mounting defaults to the device's upside-down setting; the rotation here is this panel's own.`) : '',
+      ...this._alignControls());
+  }
+
+  /** Align this radar's view with another radar that sees part of the same space. */
+  _alignControls() {
+    const others = this.radars.filter(r => r.entry_id !== this.entryId);
+    if (!others.length) return [];
+    const a = this._align?.entryId === this.entryId ? this._align : null;
+    const saved = this.settings.display.aligned_to;
+    this._alignRef ||= saved?.entry_id && others.some(r => r.entry_id === saved.entry_id) ? saved.entry_id : others[0].entry_id;
+    let status = '';
+    if (a?.busy) status = `Matching against ${a.title}…`;
+    else if (a?.error) status = a.error;
+    else if (saved) {
+      status = `Aligned with ${saved.title}: ${saved.agree} of ${saved.pairs} moments when both saw one person agree. `
+        + `This radar is turned ${Math.abs(saved.angle_deg).toFixed(0)}° relative to it`
+        + `${saved.offset_mm ? `, about ${(Math.hypot(...saved.offset_mm) / 1000).toFixed(1)} m away` : ''}.`;
+    }
+    return [
+      el('label', {}, 'Align with'),
+      el('div', { style: { display: 'flex', gap: '6px' } },
+        el('select', { style: { flex: 1, minWidth: 0 }, onchange: e => { this._alignRef = e.target.value; } },
+          others.map(r => el('option', { value: r.entry_id, selected: r.entry_id === this._alignRef }, r.title))),
+        el('button', { class: 'btn', disabled: !this.hist || a?.busy, title: 'Rotate this view to match the other radar, from moments when both radars saw the same person', onclick: () => this._alignWith(this._alignRef) }, 'Align')),
+      el('div', { class: 'help full' }, 'For radars that overlap (e.g. one sees into the other\'s room): finds the rotation from the times both saw the same single person, and turns this view to match the other radar\'s.', status ? el('div', { style: { marginTop: '4px', color: a?.error ? 'var(--error-color, #db4437)' : '' } }, status) : ''),
+    ];
+  }
+
+  async _alignWith(refId) {
+    const ref = this.radars.find(r => r.entry_id === refId);
+    if (!this.hist || !ref) return;
+    const entryId = this.entryId;
+    this._align = { entryId, busy: true, title: ref.title };
+    this._renderSide();
+    try {
+      const range = { start: new Date(this.hist.start * 1000).toISOString(), end: new Date(this.hist.end * 1000).toISOString() };
+      const [cfg, refHist] = await Promise.all([
+        this.hass.callWS({ type: `${DOMAIN}/config`, entry_id: refId }),
+        this.hass.callWS({ type: `${DOMAIN}/frames/history`, entry_id: refId, ...range }),
+      ]);
+      if (entryId !== this.entryId) return;
+      const reg = registerRigid(pairDetections(refHist, this.hist));
+      if (!reg || reg.inliers < 30 || reg.inliers / reg.n < 0.3) {
+        this._align = { entryId, error: reg
+          ? `Not enough overlap with ${ref.title}: only ${reg.inliers} of ${reg.n} moments agree. Try a longer history range.`
+          : `${ref.title} and this radar rarely see one person at the same time in this range.` };
+        this._renderSide();
+        return;
+      }
+      const refDisplay = normalizeDisplay(cfg.settings.display || {}, { upsideDown: cfg.device_mounting?.upside_down });
+      this._align = { entryId };
+      this._setDisplay({
+        ...viewToMatch(refDisplay, reg),
+        aligned_to: {
+          entry_id: refId, title: ref.title, angle_deg: Math.round(reg.angleDeg * 10) / 10, reflect: reg.reflect,
+          offset_mm: reg.t.map(Math.round), pairs: reg.n, agree: reg.inliers, rms_mm: Math.round(reg.rms),
+        },
+      });
+    } catch (err) {
+      this._align = { entryId, error: `Alignment failed: ${err.message || err.code}` };
+      this._renderSide();
+    }
   }
 
   // ---------------------------------------------------------------- doors

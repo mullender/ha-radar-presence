@@ -426,3 +426,121 @@ export function placeExit(points, { margin = 150, minSize = 600, radius = 700, c
   const grown = offsetConvex(hull, small ? Math.max(margin, minSize / 3) : margin);
   return grown ? reduceConvex(simplifyConvex(grown), maxVerts) : square();
 }
+
+// ------------------------------------------------------- radar alignment
+
+/**
+ * Moments two radars each see exactly one target (within `maxDt` s): almost
+ * always the same person, so the pair ties the two radars' frames together.
+ * Returns [[[xa, ya], [xb, yb]], ...], thinned to one pair per `minGap` s.
+ */
+export function pairDetections(a, b, { maxDt = 0.3, minGap = 0.5 } = {}) {
+  const bt = b.frame_t.map(t => b.start + t);
+  const bStart = new Array(bt.length);
+  for (let i = 0, p = 0; i < bt.length; i++) { bStart[i] = p; p += b.frame_n[i]; }
+  const out = [];
+  let last = -Infinity;
+  for (let i = 0, p = 0; i < a.frame_t.length; p += a.frame_n[i], i++) {
+    if (a.frame_n[i] !== 1) continue;
+    const t = a.start + a.frame_t[i];
+    if (t - last < minGap) continue;
+    let lo = 0, hi = bt.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (bt[mid] < t) lo = mid + 1; else hi = mid; }
+    let best = -1;
+    for (const j of [lo - 1, lo]) {
+      if (j < 0 || j >= bt.length || b.frame_n[j] !== 1 || Math.abs(bt[j] - t) > maxDt) continue;
+      if (best < 0 || Math.abs(bt[j] - t) < Math.abs(bt[best] - t)) best = j;
+    }
+    if (best < 0) continue;
+    out.push([[a.x[p], a.y[p]], [b.x[bStart[best]], b.y[bStart[best]]]]);
+    last = t;
+  }
+  return out;
+}
+
+/** Least-squares 2-D rotation + translation p ≈ R(angle)·q + t (q already reflected if needed). */
+function kabsch2d(P, Q) {
+  const n = P.length;
+  let px = 0, py = 0, qx = 0, qy = 0;
+  for (let i = 0; i < n; i++) { px += P[i][0]; py += P[i][1]; qx += Q[i][0]; qy += Q[i][1]; }
+  px /= n; py /= n; qx /= n; qy /= n;
+  let sxy = 0, sdot = 0;
+  for (let i = 0; i < n; i++) {
+    const ax = Q[i][0] - qx, ay = Q[i][1] - qy, bx = P[i][0] - px, by = P[i][1] - py;
+    sdot += ax * bx + ay * by;
+    sxy += ax * by - ay * bx;
+  }
+  const ang = Math.atan2(sxy, sdot);
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return { ang, t: [px - (c * qx - s * qy), py - (s * qx + c * qy)] };
+}
+
+/**
+ * Robust rigid fit of radar B's frame onto radar A's from `pairs` ([[pA, pB]]):
+ * pA ≈ R(angle)·F·pB + t, F = mirror X when `reflect`. RANSAC over two-pair
+ * samples (seeded, so results repeat), then least squares on the inliers;
+ * both handednesses are tried and the one with more inliers wins.
+ * Returns {angleDeg, reflect, t, inliers, n, rms} or null.
+ */
+export function registerRigid(pairs, { inlier = 400, iterations = 1500, seed = 1 } = {}) {
+  if (pairs.length < 10) return null;
+  let best = null;
+  for (const reflect of [false, true]) {
+    const P = pairs.map(p => p[0]);
+    const Q = pairs.map(p => (reflect ? [-p[1][0], p[1][1]] : p[1]));
+    let s = seed;
+    const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    const residuals = ({ ang, t }) => {
+      const c = Math.cos(ang), sn = Math.sin(ang);
+      return Q.map((q, i) => Math.hypot(c * q[0] - sn * q[1] + t[0] - P[i][0], sn * q[0] + c * q[1] + t[1] - P[i][1]));
+    };
+    let top = null;
+    for (let it = 0; it < iterations; it++) {
+      const i = Math.floor(rnd() * P.length), j = Math.floor(rnd() * P.length);
+      if (i === j) continue;
+      const dq = [Q[j][0] - Q[i][0], Q[j][1] - Q[i][1]], dp = [P[j][0] - P[i][0], P[j][1] - P[i][1]];
+      if (Math.hypot(...dq) < 500 || Math.abs(Math.hypot(...dq) - Math.hypot(...dp)) > inlier) continue;
+      const ang = Math.atan2(dp[1], dp[0]) - Math.atan2(dq[1], dq[0]);
+      const c = Math.cos(ang), sn = Math.sin(ang);
+      const t = [P[i][0] - (c * Q[i][0] - sn * Q[i][1]), P[i][1] - (sn * Q[i][0] + c * Q[i][1])];
+      const n = residuals({ ang, t }).filter(e => e < inlier).length;
+      if (!top || n > top.n) top = { n, ang, t };
+    }
+    if (!top) continue;
+    let fit = { ang: top.ang, t: top.t };
+    for (let k = 0; k < 3; k++) { // refine on the inliers
+      const res = residuals(fit);
+      const idx = res.map((e, i) => (e < inlier ? i : -1)).filter(i => i >= 0);
+      if (idx.length < 3) break;
+      fit = kabsch2d(idx.map(i => P[i]), idx.map(i => Q[i]));
+    }
+    const res = residuals(fit);
+    const inl = res.filter(e => e < inlier);
+    const cand = {
+      angleDeg: (((fit.ang * 180) / Math.PI) + 540) % 360 - 180, reflect, t: fit.t,
+      inliers: inl.length, n: pairs.length, rms: Math.sqrt(inl.reduce((a, e) => a + e * e, 0) / Math.max(1, inl.length)),
+    };
+    if (!best || cand.inliers > best.inliers) best = cand;
+  }
+  return best;
+}
+
+/**
+ * View settings for radar B so its map shows the room the same way as the
+ * reference radar A's view ({rotation, mirror}), given B -> A registration.
+ * display = Rot(rotation)·diag(mirror ? -1 : 1, 1)·point.
+ */
+export function viewToMatch(refDisplay, reg) {
+  const mA = refDisplay.mirror ? -1 : 1;
+  const mirror = (mA * (reg.reflect ? -1 : 1)) < 0;
+  const mB = mirror ? -1 : 1;
+  const rA = (refDisplay.rotation * Math.PI) / 180, a = (reg.angleDeg * Math.PI) / 180;
+  // Rot(rB) = Rot(rA) · diag(mA,1) · Rot(a) · diag(f,1) · diag(mB,1)
+  const mul = (X, Y) => [[X[0][0] * Y[0][0] + X[0][1] * Y[1][0], X[0][0] * Y[0][1] + X[0][1] * Y[1][1]],
+    [X[1][0] * Y[0][0] + X[1][1] * Y[1][0], X[1][0] * Y[0][1] + X[1][1] * Y[1][1]]];
+  const rot = r => [[Math.cos(r), -Math.sin(r)], [Math.sin(r), Math.cos(r)]];
+  const diag = m => [[m, 0], [0, 1]];
+  const M = mul(mul(mul(mul(rot(rA), diag(mA)), rot(a)), diag(reg.reflect ? -1 : 1)), diag(mB));
+  const rotation = ((Math.round((Math.atan2(M[1][0], M[0][0]) * 180) / Math.PI) % 360) + 360) % 360;
+  return { rotation, mirror };
+}
