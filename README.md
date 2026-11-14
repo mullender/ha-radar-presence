@@ -11,9 +11,21 @@ nothing is written to the device.
 
 ## Features
 
-- **Pick a radar, get zones.** The config flow lists devices with per-target
-  X/Y sensors (with their area, floor and live target count) and discovers
-  the entities.
+- **One home, many radars.** The integration is set up once (the home);
+  radars and zones are added on its page (*Add radar*, *Add zone*). Adding a
+  radar lists devices with per-target X/Y sensors (with their area, floor and
+  live target count) and discovers the entities.
+- **Zones are presence devices** ("Desk Presence", "Kitchen Presence") in
+  their own area, connected via the radar, so area pages and automations see
+  them like any other occupancy sensor.
+- **Radars that overlap work together.** Align a radar with a neighbour
+  (from simultaneous detections, in the panel) and zones drawn on either are
+  evaluated by both: the same person seen by two radars counts once, and
+  walking from one radar's view into the other's is a hand-over, not someone
+  vanishing.
+- **Entry/exit points** (stairs, doorways, doors with swing and contact
+  sensor): vanishing in one means someone left, appearing in one is someone
+  new. Each exit logs *arrived* / *left* events.
 - **Radar Zones panel** (sidebar):
   - Draw polygons or rectangles; edges snap to 45°/90°, relative to the
     previous edge, and the closing corner squares up to the start. Vertex and
@@ -53,15 +65,23 @@ nothing is written to the device.
 
 ## Entities
 
-Per radar (all attached to the radar's existing device, so they inherit its
-area; a zone can override the area):
+Per zone, on its presence device (in the zone's area, or by default the
+radar's):
 
 | Entity | |
 |---|---|
-| `binary_sensor.<device>_<zone>` | Presence per include zone; attributes `target_count`, `targets`. |
-| `binary_sensor.<device>_zone_presence_any` | Any target not inside an exclusion. |
-| `sensor.<device>_<zone>_targets` | Target count per zone (disabled by default). |
-| `sensor.<device>_excluded_targets` | Diagnostic: targets currently excluded. |
+| `binary_sensor.<zone>_presence` | Occupancy; attributes `target_count`, `held`. |
+| `sensor.<zone>_presence_targets` | Target count (disabled by default). |
+| `binary_sensor.<zone>_presence_seen_by_<radar>` | Diagnostic, only for zones that several aligned radars cover: that radar sees someone in the zone. |
+
+Per exit, on a small device of ours linked to the radar's device:
+
+| Entity | |
+|---|---|
+| `event.<radar>_<exit>` | `arrived` / `left`. With a door sensor, only when the door moved within 30 s. |
+
+The radar firmware already has its own occupancy and target count, so there
+are no radar-level entities.
 
 ## Why not a template sensor?
 
@@ -92,13 +112,15 @@ Server add-on) and restart Home Assistant.
 
 Then:
 
-1. Settings → Devices & services → Add integration → *Radar Zone Presence*,
-   pick a radar. Repeat for each radar.
+1. Settings → Devices & services → Add integration → *Radar Zone Presence*
+   creates the home and asks for the first radar. More radars (and zones):
+   *Add radar* / *Add zone* on the integration's page.
 2. Open **Radar Zones** in the sidebar. It opens in live playback: what the
    radar sees right now, on top of the last 24 h. Zones exported from
    another instance load with *Import…*.
-3. Draw or adjust zones and press **Save**; the presence entities appear on
-   the radar's device.
+3. Draw or adjust zones and press **Save**; each include zone becomes a
+   presence device. With overlapping radars, *Align with* (Sensor settings)
+   lets them share zones.
 
 Status: early development (v0.1). See [DESIGN.md](DESIGN.md),
 [DEVELOPMENT.md](DEVELOPMENT.md) and [NOTES.md](NOTES.md).

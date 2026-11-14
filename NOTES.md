@@ -361,3 +361,20 @@ Ideas not built yet:
 - Panel deep links (#entry=..&zone=..) follow HA navigation: the panel element
   is recreated/reattached, so the hash is applied on location-changed.
 - Testing note: zsh does not word-split `$VAR`; use separate variables.
+
+## 2026-11-14: phase B (home entry, subentries, shared zones, exit events)
+
+- One home entry; radars and zones are subentries (see DESIGN §9.6). Clean
+  setup needed in production; dev was converted with
+  `tools/dev_merge_entries.py` (radar subentries reuse the old entry ids so
+  alignments keep working; our old entities are re-created with
+  `<zone>_presence` ids).
+- HA 2026.10: `async_get_device(identifiers=...)` is deprecated (identifiers
+  are only unique per config entry); use `async_get_device_by_identifier(id,
+  entry_id)`. `DeviceEntry.config_entries_subentries` is deprecated too.
+- `async_call_later` with a plain lambda runs it in the executor: wrap in
+  `@callback`.
+- A config flow's `next_flow` must point at a flow still in progress: when
+  the radar subentry flow aborts at once (no radars), do not chain it.
+- Dev floors created for the picker: Ground (Entry, Garage, Laundry), First
+  (Living, Kitchen), Second (Bedroom) — a guess, dev only.

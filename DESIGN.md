@@ -324,7 +324,7 @@ removes them after checking the new entities.
 - Keep the JS state machine (preview) and the Python engine in lock-step:
   shared JSON test vectors run by both test suites.
 
-## 9. Proposal: a home of radars and virtual presence devices (under discussion)
+## 9. A home of radars and virtual presence devices
 
 Goal: the integration should feel native in HA. Rooms show presence; radars
 are hardware that feeds it. Today zones are entities on the radar's device,
@@ -383,3 +383,55 @@ working.
 3. Device names get "Presence".
 4. No radar-level entities: the firmware already has occupancy and target
    counts. Removed (phase A); the panel still shows "any target" live.
+
+### 9.6 Phase B as built (2026-11-14)
+
+- **Storage.** One config entry (`single_config_entry`), the home: options
+  hold the reconnect grace. Subentry `radar`: device, targets, unit, view
+  (`display`, including `aligned_to = {radar_id, angle_deg, reflect,
+  offset_mm, ...}`) and the radar's exclusions and exits (its own frame).
+  Subentry `zone`: id, name, polygon, filters, area and `radar`, the radar
+  whose frame the polygon is drawn in. The panel still edits one radar at a
+  time; saving splits its zones into zone subentries and the radar's data,
+  and the home reloads once (debounced update listener).
+- **Maps = alignment groups, not floors.** Radars linked by saved alignments
+  form a group; the anchor (root of the chain) is the group's frame. Zones
+  and exits stay attached to the radar they were drawn on, so re-aligning a
+  radar moves its view, not the zones. HA floors only group the radar picker.
+  An abstract floor frame was rejected: unaligned radars would all sit at the
+  origin and evaluate each other's zones.
+- **Evaluation.** Per radar: frame assembly, its exclusions, reconnect grace.
+  Per group: kept targets transformed into the anchor frame, fused, one
+  `ZoneEngine` with the group's include zones and every member's exits.
+- **Fusion** (`engine/fusion.py`, JS port `frontend/fusion.js`): tracks keep
+  each radar's slot continuity; a new observation joins a track within
+  600 mm that has no observation from the same radar; converging tracks of
+  different radars merge (the absorbed id is reported in `Frame.gone`, so the
+  engine does not hold a phantom); a slot 1200 mm from its track's other
+  radar splits off; a track that loses a radar and lands 800 mm away is a
+  new track. Ids are `10 * radar_index + slot` when free, so a lone radar is
+  the identity and the old behaviour and vectors are unchanged.
+- **Hand-over.** Overlapping views: continuous track. A gap between views:
+  the vanish creates a hold that the appearance on the other radar absorbs.
+- **Entities.** Zone device: occupancy, target count, and per covering radar
+  (2+) a diagnostic *Seen by <radar>* (coverage = field-of-view test on the
+  zone's vertices, edge midpoints and centroid). "Connected via" is the zone's
+  own radar. Linked devices were considered for listing all radars: a device
+  belongs to one config entry, and a shared connection means "the same
+  hardware", so they do not fit; the diagnostics do.
+- **Exit passages.** A track appearing in an exit = arrived, vanishing in one
+  (not merged) = left; with a door sensor only if the door moved within 30 s
+  (pending until it does). Event entities live on a device of ours per radar
+  that carries the radar device's connections, so HA shows it as a linked
+  device of the ESPHome device.
+- **Preview.** The panel loads the aligned radars' history and replays the
+  same pipeline (`replayGroup`); `tests/vectors/group_*.json` keeps it equal
+  to `engine.fusion.replay_group`.
+- **Measured on dev data** (2.1 days, living EPL + kitchen EPL + island
+  Screek): Living room 88 -> 102 turn-ons, 23.0 -> 22.8 h occupied. The
+  difference is mostly phantom holds the lone radar kept while the person
+  was in the kitchen, seen there by the kitchen radars. Stairs to entry:
+  18 arrivals, 18 departures.
+- **Not done.** Per-zone choice of contributing radars; moving a zone to
+  another radar of its group; a floor-wide panel view (the current radar's
+  view plus *Others* stands in for it).
