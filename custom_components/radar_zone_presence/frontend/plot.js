@@ -22,7 +22,12 @@ svg { overflow: hidden; }
 .grid line { stroke: var(--divider-color, #ddd); stroke-width: 1; }
 .grid line.major { stroke: var(--secondary-text-color, #999); stroke-opacity: .35; }
 .grid text, .ring text { fill: var(--secondary-text-color, #777); font: 11px sans-serif; }
-.flip-info { cursor: help; pointer-events: all; }
+.flip-info { cursor: pointer; pointer-events: all; }
+.flip-popover { position: absolute; width: 280px; box-sizing: border-box; padding: 10px 12px; font: 13px/1.4 sans-serif; z-index: 2;
+  background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+.flip-popover p { margin: 6px 0 0; color: var(--secondary-text-color, #555); }
+.flip-popover .close { position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 18px; cursor: pointer; color: inherit; }
 .flip-info circle { fill: var(--card-background-color, #fff); stroke: var(--primary-color, #03a9f4); stroke-width: 1.5; }
 .flip-info text { fill: var(--primary-color, #03a9f4); font: italic bold 11px serif; pointer-events: none; }
 .fov { fill: var(--primary-color, #03a9f4); fill-opacity: .03; stroke: var(--secondary-text-color, #888); stroke-dasharray: 4 4; stroke-opacity: .6; }
@@ -298,6 +303,8 @@ export class RzpPlot extends HTMLElement {
   _changeZones(zones, commit) { this.zones = zones; this._emit('zones-change', { zones, commit }); this.requestRender(); }
 
   _onDown(e) {
+    if (e.target.closest?.('.flip-info')) { e.stopPropagation(); this._toggleFlipInfo(); return; }
+    if (this._flipPopover) this._toggleFlipInfo(false);
     if (this.readonly) return;
     this.svgEl.focus();
     const w = this._eventWorld(e);
@@ -575,6 +582,7 @@ export class RzpPlot extends HTMLElement {
       if (p[0] > 0 && p[0] < w && p[1] > 0 && p[1] < h) g.append(svg('text', { x: p[0] + 3, y: p[1] - 3 }, document.createTextNode(label(j * step))));
     }
     if (this.display.mirror) g.append(this._flipInfo(x0, x1, step, w, h));
+    else if (this._flipPopover) this._toggleFlipInfo(false);
     return g;
   }
 
@@ -588,13 +596,38 @@ export class RzpPlot extends HTMLElement {
     const g = svg('g', { class: 'flip-info' });
     if (!best) return g;
     const [cx, cy] = [best[0] - 4, best[1] - 14];
+    this._flipInfoAt = [cx, cy];
+    if (this._flipPopover) this._placeFlipPopover();
     g.append(
-      svg('title', {}, document.createTextNode(
-        'Sensor mounted upside down: left and right are swapped so the map matches the room as seen from behind the sensor. '
-        + 'This axis shows the sensor\'s own X values, so they count up to the left. Change it under Sensor settings → Mounting.')),
+      svg('title', {}, document.createTextNode('Sensor mounted upside down: click for details')),
       svg('circle', { cx, cy, r: 7 }),
       svg('text', { x: cx, y: cy + 3.5, 'text-anchor': 'middle' }, document.createTextNode('i')));
     return g;
+  }
+
+  /** Click on the ⓘ: a small popover explaining the flipped axis. */
+  _toggleFlipInfo(open = !this._flipPopover) {
+    if (!open) { this._flipPopover?.remove(); this._flipPopover = null; return; }
+    const box = document.createElement('div');
+    box.className = 'flip-popover';
+    box.innerHTML = `<button class="close" title="Close">×</button><b>Sensor mounted upside down</b>
+      <p>Left and right are swapped, so the map shows the room as seen from behind the sensor.</p>
+      <p>The X axis keeps the sensor's own coordinates, so its values count up to the left. Zones are not affected.</p>
+      <p>Set under Sensor settings → Mounting (it follows the device's own upside-down setting by default).</p>`;
+    box.addEventListener('pointerdown', e => e.stopPropagation());
+    box.querySelector('.close').addEventListener('click', () => this._toggleFlipInfo(false));
+    this.shadowRoot.append(box);
+    this._flipPopover = box;
+    this._placeFlipPopover();
+  }
+
+  _placeFlipPopover() {
+    const box = this._flipPopover;
+    if (!box || !this._flipInfoAt) return;
+    const [cx, cy] = this._flipInfoAt;
+    const w = 280;
+    box.style.left = `${Math.max(8, Math.min(this.clientWidth - w - 8, cx - w + 20))}px`;
+    box.style.bottom = `${Math.max(8, this.clientHeight - cy + 12)}px`;
   }
 
   _path(poly, close = true) {
