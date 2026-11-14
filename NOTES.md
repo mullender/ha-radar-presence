@@ -269,3 +269,22 @@ Ideas not built yet:
   sensor; door events on the timeline; a door opening as the positive exit for
   "stay occupied until seen leaving" (vanish near a door right after it opens =
   left, not gone still).
+
+## 2026-11-14: doors and entry/exit points (step 1)
+
+- New zone kind `exit` (entry/exit point: doorway, top of the stairs) with an
+  optional `door_entity_id`. No entity; the engines ignore exits for now.
+  Draw one with the *Exit* tool, or add one from the *Doors* section.
+- *Doors*: every door contact in HA (device class door / garage_door /
+  opening) is checked against the loaded history: was a target in view when
+  it opened or closed (frame within 1.5 s)? Those that line up (>= 50%, >= 2
+  events) are listed, wherever their HA area is; *+ Exit* places the exit on
+  the densest spot of those positions (0.7 m radius, hull + 150 mm).
+  The first placement (median, 2.5x median distance) made a 4 m sliver on the
+  entry: people walking up to the door spread out, the door itself does not.
+- Door open intervals show as a row on the timeline; the exit on the map shows
+  "open" (live, or at the replay cursor).
+- Dev: the simulator replays door contacts (`attributes` in the export meta)
+  and backfills entities added after the first backfill. The dev recorder had
+  to be rebuilt: it still held radar data from an older export than the
+  current files, so door events and radar frames were seconds to minutes apart.

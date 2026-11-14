@@ -85,6 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ent_reg.async_get_or_create(
                 domain, DOMAIN, eid, suggested_object_id=object_id, device_id=device.id, config_entry=entry,
                 unit_of_measurement=meta.get("units", {}).get(eid),  # like real ESPHome sensors
+                original_device_class=meta.get("attributes", {}).get(eid, {}).get("device_class"),
             )
         for eid, state in meta.get("extra_states", {}).items():  # mounting, max distance
             domain, object_id = eid.split(".", 1)
@@ -104,6 +105,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def start(_hass: HomeAssistant | None = None) -> None:
         nonlocal saved
+        if saved.get("backfilled"):
+            # Entities added to the exports after the first backfill (e.g. door
+            # contacts): backfill just those, over every replay loop so far.
+            done = set(saved.get("backfilled_entities") or [e for sim in sims for e in sim.entities if e.startswith("sensor.")])
+            for sim in sims:
+                if new := sim.entities - done:
+                    await sim.backfill_entities(new, saved["anchor"], time.time())
+            saved["backfilled_entities"] = sorted(e for sim in sims for e in sim.entities)
+            await hass.async_add_executor_job(state_file.write_text, json.dumps(saved))
         if entry.data.get("backfill", True) and not saved.get("backfilled"):
             # Wait for the recorder, then feed it in chunks: a startup burst of
             # ~300k states stalls the recorder's startup event processing.
@@ -112,7 +122,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             now = time.time()
             for sim in sims:
                 await sim.backfill(now, recorder, _dump_recorder_stack)
-            saved = {"backfilled": True, "anchor": now}
+            saved = {"backfilled": True, "anchor": now, "backfilled_entities": sorted(e for sim in sims for e in sim.entities)}
             await hass.async_add_executor_job(state_file.write_text, json.dumps(saved))
         anchor = saved.get("anchor", time.time())
         for sim in sims:
@@ -155,7 +165,9 @@ class DeviceSim:
         meta = doc["meta"]
         self.slug = meta["slug"]
         self.units = meta.get("units", {})
+        self.attributes = meta.get("attributes", {})  # e.g. door contacts: device_class, friendly_name
         keep = set(meta["entities"])
+        self.entities = keep
         events = [(t, eid, s) for eid, rows in doc["history"].items() if eid in keep for t, s in rows]
         events.sort(key=lambda e: e[0])
         self.events = events
@@ -165,6 +177,9 @@ class DeviceSim:
         self.span = self.end - self.start
 
     def _set(self, eid: str, state: str, timestamp: float | None = None) -> None:
+        if eid in self.attributes:
+            self.hass.states.async_set(eid, state, self.attributes[eid], timestamp=timestamp)
+            return
         attrs = {"unit_of_measurement": self.units.get(eid), "state_class": "measurement"}
         if attrs["unit_of_measurement"] is None:
             del attrs["unit_of_measurement"]
@@ -187,6 +202,21 @@ class DeviceSim:
                     if on_stall and abs(waited - 20) < 0.1:
                         on_stall()
         _LOGGER.info("radar_sim: backfilled %s (%d states)", self.slug, len(self.events))
+
+    async def backfill_entities(self, entities: set[str], anchor: float, now: float) -> None:
+        """Record ``entities`` as if they had been replayed from the start (one loop before ``anchor``) until ``now``."""
+        rows = [(t, eid, s) for t, eid, s in self.events if eid in entities]
+        k = -1
+        n = 0
+        while anchor + k * self.span < now:
+            for t, eid, s in rows:
+                wall = anchor + k * self.span + (t - self.start)
+                if wall <= now:
+                    self._set(eid, s, timestamp=wall)
+                    n += 1
+            k += 1
+            await asyncio.sleep(0)
+        _LOGGER.info("radar_sim: backfilled %d states of %s for %s", n, sorted(entities), self.slug)
 
     async def run(self, anchor: float) -> None:
         """Loop the export in real time. At ``anchor`` the replay is at the export start."""

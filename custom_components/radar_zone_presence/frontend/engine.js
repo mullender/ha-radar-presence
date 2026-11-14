@@ -73,7 +73,7 @@ const EPS = 1e-6;
  */
 export class ZoneEngine {
   constructor(zones, reconnectGraceS = 0) {
-    this.include = zones.filter(z => z.kind !== 'exclude');
+    this.include = zones.filter(z => (z.kind || 'include') === 'include'); // exits only mark doorways
     this.exclude = zones.filter(z => z.kind === 'exclude');
     this.grace = reconnectGraceS;
     this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), heldSince: [] }]));

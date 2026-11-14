@@ -3,6 +3,7 @@
 export const SLOT_COLORS = ['#1e88e5', '#43a047', '#f4511e', '#8e24aa', '#00acc1', '#fdd835'];
 export const ZONE_COLORS = ['#3f51b5', '#009688', '#ff9800', '#9c27b0', '#e91e63', '#4caf50', '#795548', '#00bcd4'];
 export const EXCLUDE_COLOR = '#757575';
+export const EXIT_COLOR = '#8d6e63';
 
 export const slotColor = slot => SLOT_COLORS[(slot - 1) % SLOT_COLORS.length];
 

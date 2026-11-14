@@ -26,7 +26,7 @@ from .const import (
     PRESENCE_KEY,
 )
 from .discovery import async_device_geometry, async_find_radars, async_resolve_units, common_unit
-from .engine import KIND_EXCLUDE, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
+from .engine import KIND_EXCLUDE, KIND_EXIT, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
 from .history import async_history_frames, async_zone_events
 from .runtime import RadarRuntime
 
@@ -157,10 +157,11 @@ ZONE_SCHEMA = vol.Schema(
     {
         vol.Optional("id"): vol.Any(None, str),
         vol.Required("name"): vol.All(str, vol.Strip, vol.Length(min=1, max=100)),
-        vol.Required("kind"): vol.In([KIND_INCLUDE, KIND_EXCLUDE]),
+        vol.Required("kind"): vol.In([KIND_INCLUDE, KIND_EXCLUDE, KIND_EXIT]),
         vol.Required("polygon"): [vol.ExactSequence([vol.Coerce(float), vol.Coerce(float)])],
         vol.Optional("filters", default={}): FILTERS_SCHEMA,
         vol.Optional("area_id"): vol.Any(None, str),
+        vol.Optional("door_entity_id"): vol.Any(None, vol.All(str, vol.Match(r"^binary_sensor\.\w+$"))),
     },
     extra=vol.REMOVE_EXTRA,
 )

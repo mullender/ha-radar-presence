@@ -221,6 +221,31 @@ async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_w
     assert hass.states.get(couch).state == "on"
 
 
+async def test_exit_zone_keeps_door_and_creates_no_entity(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    entry = await setup_entry(hass, radar_device)
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/zones/save",
+            "entry_id": entry.entry_id,
+            "zones": [
+                {"id": "zdoor", "name": "Front door", "kind": "exit", "door_entity_id": "binary_sensor.front_door",
+                 "polygon": mm([[-60, 50], [-20, 50], [-20, 90], [-60, 90]])},
+            ],
+        }
+    )
+    (saved,) = (await client.receive_json())["result"]["zones"]
+    assert saved["kind"] == "exit" and saved["door_entity_id"] == "binary_sensor.front_door"
+    await hass.async_block_till_done()
+    ent_reg = er.async_get(hass)
+    assert ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_zdoor") is None
+    await move(hass, 1, -40, 70)  # standing in the exit: only the sensor-wide presence reacts
+    assert hass.states.get(f"binary_sensor.{SLUG}_zone_presence_any").state == "on"
+    await client.send_json_auto_id({"type": f"{DOMAIN}/config", "entry_id": entry.entry_id})
+    cfg = (await client.receive_json())["result"]
+    assert cfg["zones"][0]["door_entity_id"] == "binary_sensor.front_door"
+
+
 async def test_ws_live_frames(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
     client = await hass_ws_client(hass)

@@ -324,3 +324,105 @@ export function percentile(values, q) {
   const v = [...values].sort((a, b) => a - b);
   return v[Math.min(v.length - 1, Math.floor(q * v.length))];
 }
+
+// ------------------------------------------------------------------ doors
+
+/** Door contact history rows ([[epoch_s, 'on'|'off'], ...]) -> state changes [{t, open}]. */
+export function doorEvents(rows) {
+  const out = [];
+  let prev = null;
+  for (const [t, s] of rows) {
+    if (s !== 'on' && s !== 'off') { prev = null; continue; }
+    if (prev !== null && s !== prev) out.push({ t, open: s === 'on' });
+    prev = s;
+  }
+  return out;
+}
+
+/** [[open_t, close_t], ...] intervals for the timeline (epoch s), open at the end runs to `end`. */
+export function doorIntervals(rows, end) {
+  const iv = [];
+  let open = null;
+  for (const [t, s] of rows) {
+    if (s === 'on' && open === null) open = t;
+    else if (s !== 'on' && open !== null) { iv.push([open, t]); open = null; }
+  }
+  if (open !== null) iv.push([open, end]);
+  return iv;
+}
+
+/**
+ * Where targets are when a door opens or closes: the targets of the frame
+ * nearest each event (within `tol` s). Whoever works a door stands at it, so
+ * these points locate the door in the radar's frame, and the share of events
+ * with someone there says whether the door is in view at all.
+ * Returns {events, hits, points: [[x, y]]}.
+ */
+export function doorPositions(hist, events, { tol = 1.5, exclusions = [] } = {}) {
+  const ft = hist.frame_t;
+  const starts = new Array(ft.length + 1);
+  let p = 0;
+  for (let i = 0; i < ft.length; i++) { starts[i] = p; p += hist.frame_n[i]; }
+  starts[ft.length] = p;
+  let hits = 0;
+  let considered = 0;
+  const points = [];
+  for (const ev of events) {
+    const tRel = ev.t - hist.start;
+    if (tRel < -tol || tRel > (hist.end - hist.start) + tol) continue;
+    considered++;
+    let lo = 0, hi = ft.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ft[mid] < tRel) lo = mid + 1; else hi = mid; }
+    let best = -1;
+    for (const j of [lo - 1, lo]) {
+      if (j < 0 || j >= ft.length || Math.abs(ft[j] - tRel) > tol || !hist.frame_n[j]) continue;
+      if (best < 0 || Math.abs(ft[j] - tRel) < Math.abs(ft[best] - tRel)) best = j;
+    }
+    if (best < 0) continue;
+    const pts = [];
+    for (let k = starts[best]; k < starts[best + 1]; k++) {
+      const x = hist.x[k], y = hist.y[k];
+      if (!exclusions.some(z => pointInPolygon(x, y, z.polygon))) pts.push([x, y]);
+    }
+    if (pts.length) { hits++; points.push(...pts); }
+  }
+  return { events: considered, hits, points };
+}
+
+/**
+ * A small exit area around where people stand at a door: centred on the
+ * densest spot of the door-event positions (people walking up from elsewhere
+ * spread out, the door itself does not), keeping points within `radius`,
+ * hulled and grown by `margin`; a `minSize` square when there is too little.
+ */
+export function placeExit(points, { margin = 150, minSize = 600, radius = 700, cell = 200, maxVerts = 8 } = {}) {
+  if (!points.length) return null;
+  const grid = new Map();
+  const key = (i, j) => `${i},${j}`;
+  for (const [x, y] of points) {
+    const k = key(Math.floor(x / cell), Math.floor(y / cell));
+    grid.set(k, (grid.get(k) || 0) + 1);
+  }
+  let best = null, bestN = -1;
+  for (const k of grid.keys()) {
+    const [i, j] = k.split(',').map(Number);
+    let n = 0;
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) n += grid.get(key(i + di, j + dj)) || 0;
+    if (n > bestN) { bestN = n; best = [i, j]; }
+  }
+  const block = points.filter(([x, y]) => Math.abs(Math.floor(x / cell) - best[0]) <= 1 && Math.abs(Math.floor(y / cell) - best[1]) <= 1);
+  const med = a => percentile(a, 0.5);
+  let cx = med(block.map(p => p[0])), cy = med(block.map(p => p[1]));
+  const kept = points.filter(p => Math.hypot(p[0] - cx, p[1] - cy) <= radius);
+  cx = med(kept.map(p => p[0])); cy = med(kept.map(p => p[1]));
+  const square = () => {
+    const h = minSize / 2;
+    return [[cx - h, cy - h], [cx + h, cy - h], [cx + h, cy + h], [cx - h, cy + h]];
+  };
+  if (kept.length < 3) return square();
+  const hull = convexHull(kept);
+  if (hull.length < 3) return square();
+  const small = Math.abs(polygonArea(hull)) < (minSize * minSize) / 4;
+  const grown = offsetConvex(hull, small ? Math.max(margin, minSize / 3) : margin);
+  return grown ? reduceConvex(simplifyConvex(grown), maxVerts) : square();
+}

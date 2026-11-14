@@ -4,9 +4,12 @@
 import './plot.js';
 import './timeline.js';
 import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
-import { classify, findDwellSpots, fitHull, flappingEdges, offsetConvex, percentile, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import {
-  EXCLUDE_COLOR, ZONE_COLORS, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, percentile, placeExit,
+  suggestHold, suggestMaxHold, trailStats,
+} from './analysis.js';
+import {
+  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
@@ -145,6 +148,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.liveTargets = [];
     this.liveTrails = new Map();
     this.liveStates = {};
+    this.doors = {}; // door contact entity -> {rows: [[t, state]], events, pos}
     this.livePresence = false;
     this.preferLive = true; // open in live playback; false once the user picks the plain point cloud
     this.windowEnd = 'now'; // the loaded window ends at "now" and keeps growing (absolute ends: future time picker)
@@ -163,7 +167,7 @@ class RadarZonePresencePanel extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._started) { this._started = true; this._start(); }
-    else if (this.config) this._refreshLiveBadges();
+    else if (this.config) { this._refreshLiveBadges(); this._updateDoorStates(); }
   }
   get hass() { return this._hass; }
 
@@ -242,6 +246,7 @@ class RadarZonePresencePanel extends HTMLElement {
       id: z.id, name: z.name, kind: z.kind, polygon: z.polygon.map(p => [p[0], p[1]]),
       filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...(z.filters || {}) },
       area_id: z.area_id ?? z.registry_area_id ?? null,
+      door_entity_id: z.door_entity_id ?? null,
     };
   }
 
@@ -455,6 +460,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this._lastTick = this.hist.end;
       this._startNowTimer();
       if (this.preferLive && this.mode === 'cloud') this._goLive({ width: 900 });
+      this._loadDoors();
     }
   }
 
@@ -500,7 +506,7 @@ class RadarZonePresencePanel extends HTMLElement {
       if (!this.hist) { this.preview = null; this._renderTimeline(); this._renderSide(); return; }
       const zones = this.zones.filter(z => !validatePolygon(z.polygon));
       const res = replayHistory(this.hist, zones, this.settings.reconnect_grace_s, { perFrameStates: true });
-      const keys = [...zones.filter(z => z.kind !== 'exclude').map(z => z.id), 'presence'];
+      const keys = [...zones.filter(z => z.kind === 'include').map(z => z.id), 'presence'];
       // Same zones without filters, to show what the filters remove.
       const unfiltered = replayHistory(this.hist, zones.map(z => ({ ...z, filters: {} })), 0);
       this.preview = {
@@ -691,10 +697,11 @@ class RadarZonePresencePanel extends HTMLElement {
     this._renderHeader();
   }
 
-  _addZone(polygon, kind = 'include', name = null, filters = {}) {
+  _addZone(polygon, kind = 'include', name = null, filters = {}, { door_entity_id = null } = {}) {
     const n = this.zones.filter(z => z.kind === kind).length + 1;
     const zone = {
-      id: newZoneId(), name: name || (kind === 'exclude' ? `Exclusion ${n}` : `Zone ${n}`), kind,
+      door_entity_id,
+      id: newZoneId(), name: name || ({ exclude: `Exclusion ${n}`, exit: `Exit ${n}` }[kind] || `Zone ${n}`), kind,
       polygon: polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...filters }, area_id: null,
     };
@@ -948,7 +955,8 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Measure', this.tool === 'measure', () => this._setTool('measure'), 'Measure distance and angle (M)')),
       el('div', { class: 'group' },
         this._tb('Include', this.drawKind === 'include', () => { this.drawKind = 'include'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are include zones'),
-        this._tb('Exclude', this.drawKind === 'exclude', () => { this.drawKind = 'exclude'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are exclusion zones')),
+        this._tb('Exclude', this.drawKind === 'exclude', () => { this.drawKind = 'exclude'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are exclusion zones'),
+        this._tb('Exit', this.drawKind === 'exit', () => { this.drawKind = 'exit'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are entry/exit points (a doorway, the top of the stairs)')),
       el('div', { class: 'group' },
         this._tb('∠ Angles', s.angle, () => { s.angle = !s.angle; this._updatePlot(); this._renderToolbar(); }, 'Snap edges to 45°/90°, relative to the previous edge (hold Shift to disable)'),
         this._tb('◦ Vertices', s.vertex, () => { s.vertex = !s.vertex; this._updatePlot(); this._renderToolbar(); }, 'Snap to existing vertices'),
@@ -1011,6 +1019,13 @@ class RadarZonePresencePanel extends HTMLElement {
     const sum = this.preview?.summary || {};
     this.zones.forEach((z, i) => {
       if (z.kind === 'exclude') return;
+      if (z.kind === 'exit') {
+        const d = z.door_entity_id && this.doors[z.door_entity_id];
+        if (!d || !this.hist) return;
+        const iv = doorIntervals(d.rows, this.hist.end);
+        rows.push({ id: z.id, name: `🚪 ${z.name}`, color: EXIT_COLOR, predicted: [], actual: iv, triggers: [], actualTriggers: iv.map(v => v[0]) });
+        return;
+      }
       rows.push({ id: z.id, name: z.name, color: ZONE_COLORS[i % ZONE_COLORS.length], predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
     });
     rows.push({ id: 'presence', name: 'Any (not excluded)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
@@ -1047,6 +1062,12 @@ class RadarZonePresencePanel extends HTMLElement {
     } else {
       if (this.live) { targets = this.liveTargets; trails = this.liveTrails; states = this.liveStates; }
       if (this.brush && this.hist) window = { t0: this.brush.t0 - this.hist.start, t1: this.brush.t1 - this.hist.start };
+    }
+    const exits = this.zones.filter(z => z.kind === 'exit' && z.door_entity_id);
+    if (exits.length) {
+      states = { ...states };
+      const at = this.mode === 'replay' ? this.cursor : null;
+      for (const z of exits) states[z.id] = this._doorOpenAt(z.door_entity_id, at);
     }
     this.plot.set({
       units: this.units,
@@ -1105,7 +1126,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _zoneColor(z) {
     const i = this.zones.indexOf(z);
-    return z.kind === 'exclude' ? EXCLUDE_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
+    return z.kind === 'exclude' ? EXCLUDE_COLOR : z.kind === 'exit' ? EXIT_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
   }
 
   _renderSide() {
@@ -1119,7 +1140,9 @@ class RadarZonePresencePanel extends HTMLElement {
         el('div', { class: 'swatch', style: { background: this._zoneColor(z), opacity: z.kind === 'exclude' ? 0.6 : 1 } }),
         el('div', {},
           el('div', { class: 'zone-name' }, z.name),
-          el('div', { class: 'zone-meta' }, z.kind === 'exclude' ? 'exclusion · ignored by all zones' : (eid || 'new — save to create entity'))),
+          el('div', { class: 'zone-meta' }, z.kind === 'exclude' ? 'exclusion · ignored by all zones'
+            : z.kind === 'exit' ? `exit${z.door_entity_id ? ` · ${this._doorName(z.door_entity_id)}` : ''}`
+              : (eid || 'new — save to create entity'))),
         el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'exclude' : '—'));
     });
     const sensor = el('div', { class: 'section' },
@@ -1138,7 +1161,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'actions' },
         el('button', { class: 'btn', title: 'Download these zones (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
         el('button', { class: 'btn', title: 'Load zones from an exported JSON file. Zones with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
-    s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', el('div', { class: 'section spots' }), this._settingsSection());
+    s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
     this._renderLiveBadges();
     this._renderSideStats();
     this._renderSpots();
@@ -1153,7 +1176,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const num = (value, onchange, attrs = {}) => el('input', { type: 'number', value, step: 'any', min: 0, ...attrs, onchange });
     const f = z.filters;
     const editor = el('div', { class: 'section' },
-      el('h3', {}, el('span', { class: 'grow' }, z.kind === 'exclude' ? 'Exclusion zone' : 'Zone'),
+      el('h3', {}, el('span', { class: 'grow' }, { exclude: 'Exclusion zone', exit: 'Entry / exit' }[z.kind] || 'Zone'),
         el('button', { class: 'btn danger', onclick: () => this._deleteZone(z.id) }, 'Delete')),
       el('div', { class: 'form' },
         el('label', {}, 'Name'),
@@ -1161,7 +1184,8 @@ class RadarZonePresencePanel extends HTMLElement {
         el('label', {}, 'Type'),
         el('select', { onchange: e => this._patchZone(z.id, { kind: e.target.value }, { renderSide: true }) },
           el('option', { value: 'include', selected: z.kind === 'include' }, 'Include (presence entity)'),
-          el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Exclude (ignored everywhere)')),
+          el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Exclude (ignored everywhere)'),
+          el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Entry / exit (doorway, stairs)')),
         z.kind === 'include' ? [
           el('label', {}, 'Area'),
           el('select', { onchange: e => this._patchZone(z.id, { area_id: e.target.value || null }) },
@@ -1183,9 +1207,10 @@ class RadarZonePresencePanel extends HTMLElement {
             num(Math.round((f.hold_max_s || 0) / 6) / 10, e => this._patchZone(z.id, { filters: { ...f, hold_max_s: Math.max(0, Math.round((+e.target.value || 0) * 60)) } }), { title: '0 = hold until seen leaving, however long' }),
             el('div', { class: 'help full' }, 'Safety net in case someone slips out unseen: a held occupant is dropped after this long (0 = never).'),
           ] : '',
-        ] : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
+        ] : z.kind === 'exit' ? this._exitEditor(z)
+          : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
       ),
-      this.hist ? el('div', { class: 'actions' },
+      this.hist && z.kind !== 'exit' ? el('div', { class: 'actions' },
         el('button', {
           class: 'btn', title: 'Replace this polygon with a hull around where targets dwelt inside it, plus the margin',
           onmouseenter: () => { this.fitPreview = this._fitZone(z); this._updatePlot(); },
@@ -1278,6 +1303,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const box = this.side?.querySelector('.zone-stats');
     const z = this.zones.find(q => q.id === this.selectedId);
     if (!box || !z) return;
+    if (z.kind === 'exit') { this.side.querySelector('.trail')?.replaceChildren(); box.replaceChildren(); return; }
     this._renderTrail(z);
     if (!this.hist || !this.preview) { box.replaceChildren(el('div', { class: 'help' }, 'Load history to preview this zone.')); return; }
     if (z.kind === 'exclude') {
@@ -1457,12 +1483,161 @@ class RadarZonePresencePanel extends HTMLElement {
       fw.length ? el('div', { class: 'help full' }, `Device: ${fw.join(', ')} (the default here follows it).`) : '');
   }
 
+  // ---------------------------------------------------------------- doors
+
+  /** Door contacts in Home Assistant (device class door / garage door / opening). */
+  _doorCandidates() {
+    return Object.values(this.hass.states)
+      .filter(st => st.entity_id.startsWith('binary_sensor.') && ['door', 'garage_door', 'opening'].includes(st.attributes.device_class))
+      .map(st => st.entity_id);
+  }
+
+  /** 'Garage Entry Door Sensor Door' -> 'Garage Entry Door'. */
+  _exitNameFor(id) {
+    return this._doorName(id).replace(/\b(contact|sensor)\b/gi, ' ').replace(/\s+/g, ' ').trim().replace(/\b(\w+)\s+\1$/i, '$1');
+  }
+
+  _doorName(id) {
+    return this.hass.states[id]?.attributes.friendly_name || id;
+  }
+
+  /** History of every door contact over the loaded window, and how each lines up with this radar. */
+  async _loadDoors() {
+    const ids = [...new Set([...this._doorCandidates(), ...this.zones.map(z => z.door_entity_id).filter(Boolean)])];
+    const entryId = this.entryId;
+    this.doors = {};
+    if (!ids.length || !this.hist) return;
+    try {
+      const res = await this.hass.callWS({
+        type: 'history/history_during_period', entity_ids: ids, minimal_response: true, no_attributes: true,
+        significant_changes_only: false, start_time: new Date(this.hist.start * 1000).toISOString(), end_time: new Date().toISOString(),
+      });
+      if (entryId !== this.entryId) return;
+      for (const id of ids) this.doors[id] = { rows: (res[id] || []).map(r => [r.lu ?? r.last_updated ?? this.hist.start, r.s ?? r.state]) };
+    } catch (err) {
+      this._toast(`Door history unavailable: ${err.message || err.code}`, true);
+      return;
+    }
+    this._analyseDoors();
+    this._renderTimeline();
+    this._renderSide();
+    this._updatePlot();
+  }
+
+  _analyseDoors() {
+    if (!this.hist) return;
+    const exclusions = this.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon));
+    for (const d of Object.values(this.doors)) {
+      d.events = doorEvents(d.rows);
+      d.pos = doorPositions(this.hist, d.events, { exclusions });
+    }
+  }
+
+  /** Live door changes (hass state updates) extend the door history. */
+  _updateDoorStates() {
+    let changed = false;
+    for (const [id, d] of Object.entries(this.doors || {})) {
+      const st = this.hass.states[id]?.state;
+      const last = d.rows[d.rows.length - 1];
+      if (st && (!last || last[1] !== st)) { d.rows.push([Date.now() / 1000, st]); changed = true; }
+    }
+    if (changed) { this._renderTimeline(); this._updatePlot(); this._renderLiveBadges(); }
+  }
+
+  /** Door open at epoch t (from its history), or now (null: current state). */
+  _doorOpenAt(id, t) {
+    if (t == null) return this.hass.states[id]?.state === 'on';
+    const rows = this.doors[id]?.rows || [];
+    let lo = 0, hi = rows.length - 1, ans = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (rows[mid][0] <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    return ans >= 0 && rows[ans][1] === 'on';
+  }
+
+  _doorStats(id) {
+    const pos = this.doors[id]?.pos;
+    if (!pos || !pos.events) return null;
+    return { events: pos.events, hits: pos.hits, share: pos.hits / pos.events };
+  }
+
+  /** Place (or re-place) an exit from where people stood when its door opened or closed. */
+  _placeFromDoor(id) {
+    const pos = this.doors[id]?.pos;
+    return pos && pos.points.length ? placeExit(pos.points) : null;
+  }
+
+  _exitEditor(z) {
+    const cands = Object.keys(this.doors).length ? Object.keys(this.doors) : this._doorCandidates();
+    const ranked = cands
+      .map(id => ({ id, st: this._doorStats(id) }))
+      .sort((a, b) => (b.st?.share || 0) - (a.st?.share || 0) || this._doorName(a.id).localeCompare(this._doorName(b.id)));
+    const st = z.door_entity_id ? this._doorStats(z.door_entity_id) : null;
+    return [
+      el('label', {}, 'Door sensor'),
+      el('select', { onchange: e => this._patchZone(z.id, { door_entity_id: e.target.value || null }, { renderSide: true }) },
+        el('option', { value: '', selected: !z.door_entity_id }, 'None (an open doorway or stairs)'),
+        ranked.map(({ id, st: s }) => el('option', { value: id, selected: id === z.door_entity_id },
+          `${this._doorName(id)}${s && s.events ? ` · seen at ${Math.round(s.share * 100)}% of ${s.events}` : ''}`))),
+      el('div', { class: 'help full' },
+        'An entry/exit point: where people come into and leave the room. With a door sensor, its openings show on the timeline and the map. ',
+        st ? `Someone was in view at ${st.hits} of the ${st.events} times this door opened or closed in the loaded range.` : ''),
+      z.door_entity_id && this.hist ? el('div', { class: 'actions full' },
+        el('button', {
+          class: 'btn', title: 'Redraw this exit around where people stood when the door opened or closed',
+          onmouseenter: () => { this.fitPreview = this._placeFromDoor(z.door_entity_id); this._updatePlot(); },
+          onmouseleave: () => { this.fitPreview = null; this._updatePlot(); },
+          onclick: () => {
+            const poly = this._placeFromDoor(z.door_entity_id);
+            this.fitPreview = null;
+            if (!poly) { this._toast('Nobody was in view when this door opened or closed in the loaded range.', true); return; }
+            this._patchZone(z.id, { polygon: poly }, { renderSide: true });
+          },
+        }, 'Place from door events')) : '',
+    ];
+  }
+
+  /** Door contacts that line up with this radar: someone in view when they open or close. */
+  _doorsSection() {
+    const linked = new Map(this.zones.filter(z => z.kind === 'exit' && z.door_entity_id).map(z => [z.door_entity_id, z]));
+    const rows = Object.keys(this.doors)
+      .map(id => ({ id, st: this._doorStats(id) }))
+      .filter(r => r.st && r.st.events >= 2 && r.st.share >= 0.5)
+      .sort((a, b) => b.st.share - a.st.share || b.st.events - a.st.events);
+    if (!rows.length && !linked.size) return '';
+    return el('div', { class: 'section' },
+      el('h3', {}, 'Doors'),
+      el('div', { class: 'help' }, 'Door sensors that line up with this radar: someone is in view when they open or close. Add one as an entry/exit point; it is placed where people stand at the door.'),
+      rows.map(({ id, st }) => {
+        const z = linked.get(id);
+        return el('div', { class: 'spot-row' },
+          el('div', { class: 'spot-head' }, el('b', {}, this._doorName(id))),
+          el('div', { class: 'help' }, `seen at ${st.hits} of ${st.events} openings/closings (${Math.round(st.share * 100)}%)`),
+          z ? el('div', { class: 'help' }, `exit “${z.name}”`)
+            : el('div', { class: 'actions' },
+              el('button', {
+                class: 'btn',
+                onmouseenter: () => { this.fitPreview = this._placeFromDoor(id); this._updatePlot(); },
+                onmouseleave: () => { this.fitPreview = null; this._updatePlot(); },
+                onclick: () => {
+                  const poly = this._placeFromDoor(id);
+                  this.fitPreview = null;
+                  if (poly) this._addZone(poly, 'exit', this._exitNameFor(id), {}, { door_entity_id: id });
+                },
+              }, '+ Exit')));
+      }));
+  }
+
   _renderLiveBadges() {
     if (!this.side) return;
     for (const b of this.side.querySelectorAll('[data-live]')) {
       const id = b.dataset.live;
       const z = this.zones.find(q => q.id === id);
       if (z?.kind === 'exclude') continue;
+      if (z?.kind === 'exit') {
+        const st = z.door_entity_id ? this.hass.states[z.door_entity_id]?.state : null;
+        b.textContent = st === 'on' ? 'open' : st === 'off' ? 'closed' : 'exit';
+        b.classList.toggle('on', st === 'on');
+        continue;
+      }
       const on = this.liveStates[id];
       if (on === undefined) { b.textContent = id === 'presence' ? '—' : 'not saved'; b.classList.remove('on'); continue; }
       b.textContent = on ? 'occupied' : 'clear';

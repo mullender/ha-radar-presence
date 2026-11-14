@@ -63,3 +63,10 @@ test('imported ids that are free are kept, so re-importing the same file replace
   assert.equal(twice.zones.length, 1);
   assert.equal(twice.replaced, 1);
 });
+
+test('exits round-trip with their door sensor', () => {
+  const doc = exportZones({ title: 'Entry' }, [{ id: 'zx', name: 'Garage door', kind: 'exit', polygon: square, filters: {}, area_id: null, door_entity_id: 'binary_sensor.garage_door' }]);
+  const { zones } = parseImport(JSON.stringify(doc));
+  assert.equal(zones[0].kind, 'exit');
+  assert.equal(zones[0].door_entity_id, 'binary_sensor.garage_door');
+});

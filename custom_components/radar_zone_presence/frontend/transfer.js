@@ -22,6 +22,7 @@ export function exportZones(radar, zones, settings = {}) {
       polygon: z.polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters: { ...FILTER_DEFAULTS, ...(z.filters || {}) },
       area_id: z.area_id ?? null,
+      ...(z.door_entity_id ? { door_entity_id: z.door_entity_id } : {}),
     })),
   };
 }
@@ -54,7 +55,7 @@ export function parseImport(text) {
   const zones = doc.zones.map((z, i) => {
     const label = `zone ${i + 1}${z?.name ? ` (${z.name})` : ''}`;
     if (!z || typeof z.name !== 'string' || !z.name.trim()) throw new Error(`${label}: missing name`);
-    if (z.kind !== 'include' && z.kind !== 'exclude') throw new Error(`${label}: kind must be include or exclude`);
+    if (!['include', 'exclude', 'exit'].includes(z.kind)) throw new Error(`${label}: kind must be include, exclude or exit`);
     if (!Array.isArray(z.polygon) || !z.polygon.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite))) {
       throw new Error(`${label}: polygon must be a list of [x, y] points`);
     }
@@ -67,6 +68,7 @@ export function parseImport(text) {
       name: z.name.trim().slice(0, 100), kind: z.kind,
       polygon: z.polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters, area_id: typeof z.area_id === 'string' ? z.area_id : null,
+      door_entity_id: typeof z.door_entity_id === 'string' && z.door_entity_id ? z.door_entity_id : null,
     };
   });
   const grace = Number(doc.settings?.reconnect_grace_s);

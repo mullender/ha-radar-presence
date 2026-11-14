@@ -17,6 +17,7 @@ from .geometry import point_in_polygon, signed_distance
 
 KIND_INCLUDE = "include"
 KIND_EXCLUDE = "exclude"
+KIND_EXIT = "exit"  # an entry/exit point (doorway, stairs); optionally tied to a door sensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,7 @@ class Zone:
     polygon: tuple[tuple[float, float], ...]
     filters: ZoneFilters = ZoneFilters()
     area_id: str | None = None
+    door_entity_id: str | None = None  # exits: the door contact for this opening
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Zone:
@@ -71,6 +73,7 @@ class Zone:
             polygon=tuple((float(p[0]), float(p[1])) for p in d["polygon"]),
             filters=ZoneFilters.from_dict(d.get("filters")),
             area_id=d.get("area_id"),
+            door_entity_id=d.get("door_entity_id") or None,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -81,6 +84,7 @@ class Zone:
             "polygon": [list(p) for p in self.polygon],
             "filters": self.filters.as_dict(),
             "area_id": self.area_id,
+            **({"door_entity_id": self.door_entity_id} if self.door_entity_id else {}),
         }
 
 

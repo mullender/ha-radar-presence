@@ -129,3 +129,34 @@ test('edge through a sitting spot is reported as flapping', async () => {
   // An edge margin (hysteresis) larger than the jitter removes the flapping.
   assert.equal(flappingEdges(trailStats(hist, box, { hysteresis: 150 }), box).length, 0);
 });
+
+test('door events locate the door: positions at open/close, stray targets dropped', async () => {
+  const { doorEvents, doorIntervals, doorPositions, placeExit } = await import('../../custom_components/radar_zone_presence/frontend/analysis.js');
+  // Door at (-1200, 1700). Someone stands there for each open and close; a second
+  // person sits at (1500, 3000) the whole time; one event has nobody at the door.
+  const frames = [];
+  const rows = [[0, 'off']];
+  for (let k = 0; k < 10; k++) {
+    const t = 100 + k * 60;
+    for (let s = -3; s <= 3; s += 0.5) {
+      const targets = [[2, 1500 + rnd() * 100, 3000 + rnd() * 100]];
+      if (k < 9) targets.push([1, -1200 + rnd() * 300, 1700 + rnd() * 300]);
+      frames.push([t + s, targets]);
+      frames.push([t + 10 + s, k < 9 ? [[1, -1200 + rnd() * 300, 1700 + rnd() * 300]] : [[2, 1500, 3000]]]);
+    }
+    rows.push([t, 'on'], [t + 10, 'off']);
+  }
+  frames.sort((a, b) => a[0] - b[0]);
+  const hist = pack(frames);
+  const evs = doorEvents(rows);
+  assert.equal(evs.length, 20);
+  assert.deepEqual(doorIntervals([[0, 'off'], [5, 'on'], [9, 'off'], [12, 'on']], 20), [[5, 9], [12, 20]]);
+  const pos = doorPositions(hist, evs);
+  assert.equal(pos.events, 20);
+  assert.equal(pos.hits, 20, 'every event has someone in view (the sitter counts too)');
+  const poly = placeExit(pos.points);
+  assert.ok(pointInPolygon(-1200, 1700, poly), 'exit covers the door');
+  assert.ok(!pointInPolygon(1500, 3000, poly), 'the sitter elsewhere is not part of the exit');
+  assert.ok(poly.length <= 8);
+  assert.ok(Math.abs(polygonArea(poly)) < 2.5e6, 'a small area, not the room');
+});

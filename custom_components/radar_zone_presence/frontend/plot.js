@@ -7,7 +7,7 @@
 
 import { PointLayer } from './points.js';
 import {
-  EXCLUDE_COLOR, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime,
+  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime,
 } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
@@ -684,7 +684,7 @@ export class RzpPlot extends HTMLElement {
   }
 
   _zoneColor(z, i) {
-    return z.kind === 'exclude' ? EXCLUDE_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
+    return z.kind === 'exclude' ? EXCLUDE_COLOR : z.kind === 'exit' ? EXIT_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
   }
 
   _zoneLayer() {
@@ -699,14 +699,14 @@ export class RzpPlot extends HTMLElement {
         stroke: color, 'stroke-width': isSel ? 2.5 : 1.5,
         fill: z.kind === 'exclude' ? 'url(#hatch)' : color,
         'fill-opacity': z.kind === 'exclude' ? 1 : on ? 0.35 : 0.1,
-        'stroke-dasharray': z.kind === 'exclude' ? '6 3' : null,
+        'stroke-dasharray': z.kind === 'exclude' ? '6 3' : z.kind === 'exit' ? '2 3' : null,
       };
       g.append(svg('path', attrs));
       // Label at the centroid of the vertices.
       const c = z.polygon.reduce((a, p) => [a[0] + p[0] / z.polygon.length, a[1] + p[1] / z.polygon.length], [0, 0]);
       const s = this._s(c);
       g.append(svg('text', { class: 'zone-label', x: s[0], y: s[1], 'text-anchor': 'middle', fill: color },
-        document.createTextNode(`${z.name}${z.kind === 'include' && on ? ' ●' : ''}`)));
+        document.createTextNode(z.kind === 'exit' ? `🚪 ${z.name}${on ? ' · open' : ''}` : `${z.name}${z.kind === 'include' && on ? ' ●' : ''}`)));
       if (isSel) selected.push([z, color]);
     });
     for (const [z, color] of selected) g.append(this._handles(z, color));
