@@ -31,8 +31,10 @@ import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.components.recorder import get_instance
 from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
+from homeassistant.helpers.start import async_at_started
 
 DOMAIN = "radar_sim"
 _LOGGER = logging.getLogger(__name__)
@@ -89,15 +91,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     state_file = Path(hass.config.path(".radar_sim.json"))
     saved = json.loads(state_file.read_text()) if state_file.exists() else {}
-    if entry.data.get("backfill", True) and not saved.get("backfilled"):
-        now = time.time()
-        for sim in sims:
-            await sim.backfill(now)
-        saved = {"backfilled": True, "anchor": now}
-        await hass.async_add_executor_job(state_file.write_text, json.dumps(saved))
-    anchor = saved.get("anchor", time.time())
+    tasks: list[asyncio.Task] = []
 
-    tasks = [entry.async_create_background_task(hass, sim.run(anchor), f"radar_sim {sim.slug}") for sim in sims]
+    async def start(_hass: HomeAssistant | None = None) -> None:
+        nonlocal saved
+        if entry.data.get("backfill", True) and not saved.get("backfilled"):
+            # Wait for the recorder, then feed it in chunks: a startup burst of
+            # ~300k states stalls the recorder's startup event processing.
+            recorder = get_instance(hass)
+            await recorder.async_db_ready
+            now = time.time()
+            for sim in sims:
+                await sim.backfill(now, recorder, _dump_recorder_stack)
+            saved = {"backfilled": True, "anchor": now}
+            await hass.async_add_executor_job(state_file.write_text, json.dumps(saved))
+        anchor = saved.get("anchor", time.time())
+        for sim in sims:
+            tasks.append(entry.async_create_background_task(hass, sim.run(anchor), f"radar_sim {sim.slug}"))
+
+    @callback
+    def _on_started(_hass: HomeAssistant) -> None:
+        entry.async_create_background_task(hass, start(), "radar_sim start")
+
+    entry.async_on_unload(async_at_started(hass, _on_started))
 
     def _stop(_event=None) -> None:
         for t in tasks:
@@ -106,6 +122,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(_stop)
     entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop))
     return True
+
+
+def _dump_recorder_stack() -> None:
+    import sys
+    import threading
+    import traceback
+
+    for th in threading.enumerate():
+        if "Recorder" in th.name or th.name.startswith("Recorder"):
+            frame = sys._current_frames().get(th.ident)
+            if frame:
+                _LOGGER.warning("radar_sim: recorder thread %s stack:\n%s", th.name, "".join(traceback.format_stack(frame)[-14:]))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -133,13 +161,22 @@ class DeviceSim:
             del attrs["unit_of_measurement"]
         self.hass.states.async_set(eid, state, attrs, timestamp=timestamp)
 
-    async def backfill(self, now: float) -> None:
+    async def backfill(self, now: float, recorder, on_stall=None) -> None:
         """Write the whole export into the recorder, shifted to end at ``now``."""
         shift = now - self.end
+        # Paced: each recorded state links to the entity's previous state, and
+        # SQLAlchemy's flush sorts those chains quadratically. Long chains in
+        # one commit stall the recorder, so keep each commit small.
         for i, (t, eid, s) in enumerate(self.events):
             self._set(eid, s, timestamp=t + shift)
-            if i % 2000 == 0:
-                await asyncio.sleep(0)
+            if i % 200 == 0:
+                await asyncio.sleep(0.25)
+                waited = 0.0
+                while recorder.backlog > 5000:
+                    await asyncio.sleep(0.2)
+                    waited += 0.2
+                    if on_stall and abs(waited - 20) < 0.1:
+                        on_stall()
         _LOGGER.info("radar_sim: backfilled %s (%d states)", self.slug, len(self.events))
 
     async def run(self, anchor: float) -> None:

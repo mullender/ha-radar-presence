@@ -19,4 +19,15 @@ JSON
 fi
 ln -sfn "$ROOT/custom_components/radar_zone_presence" "$CFG/custom_components/radar_zone_presence"
 ln -sfn "$ROOT/dev/radar_sim" "$CFG/custom_components/radar_sim"
+# HA 2026.10+ keeps a YAML http port change "pending" until confirmed, and
+# reverts after 5 minutes. Confirm it once the server answers.
+(
+  for _ in $(seq 1 180); do
+    if curl -sf -o /dev/null http://localhost:8124/; then
+      node "$ROOT/tools/dev_ws.mjs" '{"type":"http/config/promote"}' >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+  done
+) &
 exec "$HASS" -c "$CFG" "$@"

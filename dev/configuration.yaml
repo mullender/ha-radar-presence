@@ -16,7 +16,7 @@ history:
 logbook:
 recorder:
   purge_keep_days: 10
-  commit_interval: 5
+  commit_interval: 1
 input_text:
 system_health:
 energy:
