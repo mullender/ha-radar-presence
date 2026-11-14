@@ -2,7 +2,7 @@
 .claude/
 
 # Home Assistant dev config (per-dev, contains secrets)
-/ha_config/
+/ha_config*/
 
 # Python
 __pycache__/

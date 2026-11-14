@@ -107,10 +107,21 @@ section. DESIGN.md is the spec; this file is the lab notebook.
   the polygon import), run side by side with the YAML package for a day, then
   remove `packages/presence_polygons.yaml` and the `input_text` helpers.
 - HACS action will want brand images (`custom_components/.../brand/`), repo
-  topics and a release tag; hassfest not run locally (needs Docker).
+  topics and a release tag.
 - 7-day history of a busy radar is a ~15 MB JSON payload; switch
   `frames/history` to a binary/base64 typed-array encoding if that is slow.
 - Floor-plan underlay image, multi-sensor rooms, per-zone notes.
 - The toolbar's colour dropdown doesn't reflect programmatic changes (cosmetic).
 - Dev HA is left running on :8124 (dev/dev) with a window open on the panel;
   stop with `pkill -f "bin/hass -c"`.
+
+## 2026-11-13 late: Docker available (user started Colima)
+
+- Docker works from the session with `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock`
+  and `DOCKER_CONFIG=/tmp/dockercfg` (~/.docker/config.json is unreadable here).
+- `dev/hassfest.sh`: hassfest passes (1 integration, 0 invalid).
+- Compatibility: a throwaway `home-assistant:2026.11.1` container (production's
+  version) loaded all 7 simulated radars, imported legacy polygons, served the
+  panel and answered config/history/live websocket calls without errors.
+  (Tests run against 2026.10.4, the latest pytest-homeassistant-custom-component.)
+- ha-tides' `ha_dev` container auto-starts on :8123 with Colima; left alone.

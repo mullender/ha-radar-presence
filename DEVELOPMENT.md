@@ -101,7 +101,8 @@ scripts.
 
 - `hacs.json` at the repo root, `content_in_root: false`.
 - GitHub Actions run the HACS action and hassfest on push, PR and nightly.
-  Both fail until the integration code lands in M1.
+  Run hassfest locally with `dev/hassfest.sh` (Docker). The HACS action
+  needs the pushed GitHub repo (brand images, topics, releases).
 
 Publish: tag `vX.Y.Z`, push tags; users add the repo as a HACS custom
 repository (category *Integration*).
