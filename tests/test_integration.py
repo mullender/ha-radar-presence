@@ -183,3 +183,26 @@ async def test_ws_live_frames(hass: HomeAssistant, radar_device: str, hass_ws_cl
     ev = msg["event"]
     assert ev["targets"] == [[1, 508, 3048]]
     assert ev["zones"]["chair"] == [True, 1]
+
+
+async def test_unavailable_radar_makes_zones_unavailable(hass: HomeAssistant, radar_device: str) -> None:
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    chair = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
+    for n in (1, 2, 3):
+        for axis in "xy":
+            hass.states.async_set(f"sensor.{SLUG}_target_{n}_{axis}", "unavailable")
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=0.06))
+    await hass.async_block_till_done()
+    assert hass.states.get(chair).state == "unavailable"
+    await move(hass, 1, 20, 120)
+    assert hass.states.get(chair).state == "on"
+
+
+async def test_diagnostics(hass: HomeAssistant, radar_device: str) -> None:
+    from custom_components.radar_zone_presence.diagnostics import async_get_config_entry_diagnostics
+
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    await move(hass, 1, 20, 120)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["snapshot"]["zones"]["chair"]["occupied"] is True
+    assert diag["last_frame"]["targets"][0]["slot"] == 1

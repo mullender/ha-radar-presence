@@ -23,11 +23,19 @@ class RadarEntity(Entity):
         # zone entities show on the radar's device page and inherit its area.
         self.device_entry = dr.async_get(runtime.hass).async_get(entry.data[CONF_DEVICE_ID])
 
+    @property
+    def available(self) -> bool:
+        """Unavailable while every coordinate entity of the radar is unavailable."""
+        frame = self.runtime.last_frame
+        return frame is None or frame.available
+
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(self.runtime.async_add_entity_listener(self._handle_update))
 
     def _handle_update(self) -> None:
-        if self._update_from_snapshot():
+        available = self.available
+        if self._update_from_snapshot() or available != getattr(self, "_last_available", None):
+            self._last_available = available
             self.async_write_ha_state()
 
     def _update_from_snapshot(self) -> bool:
