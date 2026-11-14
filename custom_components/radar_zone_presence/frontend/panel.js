@@ -764,7 +764,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'group' },
         replay
           ? el('span', { style: { fontVariantNumeric: 'tabular-nums' } }, `Replay ${fmtDateTime(this.cursor)}.${String(Math.floor((this.cursor % 1) * 1000)).padStart(3, '0')}`)
-          : el('span', { class: 'help' }, this.hist ? 'Point cloud of the selected range. Click the timeline to replay.' : ''),
+          : el('span', { class: 'help' }, this.hist ? 'Timeline: coloured bars = draft preview ▼ · dark line = recorded by HA ▲ · click to replay, wheel to zoom, drag the activity strip to window the cloud' : ''),
         replay ? this._tb('Exit replay', false, () => this._exitReplay(), 'Back to point cloud + live view') : ''),
     );
   }
@@ -775,9 +775,9 @@ class RadarZonePresencePanel extends HTMLElement {
     const sum = this.preview?.summary || {};
     this.zones.forEach((z, i) => {
       if (z.kind === 'exclude') return;
-      rows.push({ id: z.id, name: z.name, color: ZONE_COLORS[i % ZONE_COLORS.length], predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [] });
+      rows.push({ id: z.id, name: z.name, color: ZONE_COLORS[i % ZONE_COLORS.length], predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
     });
-    rows.push({ id: 'presence', name: 'Any (not excluded)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [] });
+    rows.push({ id: 'presence', name: 'Any (not excluded)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
     this.timeline.set({
       range: this.hist ? { start: this.hist.start, end: this.hist.end } : null,
       frames: this.hist ? { start: this.hist.start, t: this.hist.frame_t, n: this.hist.frame_n } : null,
@@ -976,7 +976,12 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'stat' }, el('span', {}, 'Would have turned on'), el('b', {}, `${s.triggers.length}×`)),
       filtered ? el('div', { class: 'stat' }, el('span', { class: 'help' }, 'without filters'), el('b', { class: 'help' }, `${raw.triggers.length}×`)) : '',
       el('div', { class: 'stat' }, el('span', {}, 'Occupied'), el('b', {}, fmtDuration(s.occupied))),
-      actual ? el('div', { class: 'stat' }, el('span', { class: 'help' }, 'Recorded (saved zone)'), el('b', { class: 'help' }, `${actual.length}× on`)) : '',
+      actual ? el('div', { class: 'stat' }, el('span', { class: 'help' }, 'Recorded by HA (saved zone)'), el('b', { class: 'help' }, `${actual.length}× on`)) : '',
+      actual?.length ? el('details', {},
+        el('summary', { class: 'help', style: { cursor: 'pointer' } }, 'Recent recorded triggers — what actually happened'),
+        el('div', { class: 'triggers' }, actual.slice(-50).reverse().map(([a, b]) => el('div', { onclick: () => this._jumpTo(a, z.id), title: 'Replay this recorded trigger' },
+          el('span', {}, fmtDateTime(a)), el('span', { class: 'help' }, fmtDuration(b - a)))))) : '',
+      el('div', { class: 'help', style: { marginTop: '6px' } }, 'Preview triggers (draft zone):'),
       el('div', { class: 'triggers' }, s.triggers.slice(-200).reverse().map((t, i) => {
         const iv = s.intervals.find(v => v[0] === t);
         return el('div', { onclick: () => this._jumpTo(t, z.id), title: 'Replay this trigger' },

@@ -82,7 +82,8 @@ export class RzpTimeline extends HTMLElement {
     let rowY = AXIS_H + DENSITY_H;
     for (const row of this.rows) {
       if (y >= rowY && y < rowY + ROW_H) {
-        for (const t of row.triggers || []) if (Math.abs(this._x(t) - x) <= 4) return { row, t };
+        for (const t of row.triggers || []) if (Math.abs(this._x(t) - x) <= 4 && y < rowY + ROW_H / 2) return { row, t };
+        for (const t of row.actualTriggers || []) if (Math.abs(this._x(t) - x) <= 4) return { row, t };
       }
       rowY += ROW_H;
     }
@@ -261,6 +262,12 @@ export class RzpTimeline extends HTMLElement {
         if (t < this.view.v0 || t > this.view.v1) continue;
         const x = xa(t);
         ctx.beginPath(); ctx.moveTo(x, ry + 1); ctx.lineTo(x - 3.5, ry - 4); ctx.lineTo(x + 3.5, ry - 4); ctx.closePath(); ctx.fill();
+      }
+      ctx.fillStyle = text;
+      for (const t of row.actualTriggers || []) {
+        if (t < this.view.v0 || t > this.view.v1) continue;
+        const x = xa(t);
+        ctx.beginPath(); ctx.moveTo(x, ry + ROW_H - 5); ctx.lineTo(x - 3, ry + ROW_H); ctx.lineTo(x + 3, ry + ROW_H); ctx.closePath(); ctx.fill();
       }
       ry += ROW_H;
     }

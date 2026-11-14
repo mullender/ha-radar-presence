@@ -672,6 +672,18 @@ export class RzpPlot extends HTMLElement {
         if (pts[i].t - pts[i - 1].t > 3) continue; // gap in detection
         g.append(svg('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: color, 'stroke-width': 1 + 2 * k, 'stroke-opacity': k, 'stroke-linecap': 'round' }));
       }
+      // Arrowhead on the newest segment shows the direction of travel.
+      {
+        const a = pts[pts.length - 2], b = pts[pts.length - 1];
+        const sa = this._s([a.x, a.y]), sb = this._s([b.x, b.y]);
+        const len = Math.hypot(sb[0] - sa[0], sb[1] - sa[1]);
+        if (len > 2 && b.t - a.t < 3) {
+          const ux = (sb[0] - sa[0]) / len, uy = (sb[1] - sa[1]) / len;
+          const tip = [sb[0] + ux * 14, sb[1] + uy * 14];
+          const l = [tip[0] - ux * 8 - uy * 5, tip[1] - uy * 8 + ux * 5], r = [tip[0] - ux * 8 + uy * 5, tip[1] - uy * 8 - ux * 5];
+          g.append(svg('polygon', { points: `${tip.join(',')} ${l.join(',')} ${r.join(',')}`, fill: color }));
+        }
+      }
       if (this.trailLabels) {
         let last = null;
         for (let k = pts.length - 1; k >= 0; k--) {
