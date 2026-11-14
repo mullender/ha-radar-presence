@@ -163,6 +163,26 @@ across renames and edits.
 The panel's preview (§8.3) shows how many triggers each filter would have
 removed over the loaded history, so values are chosen from data, not guessed.
 
+### 6.5 Stay occupied until seen leaving (per zone, default off)
+
+LD2450-style radars drop a person who sits still (desk, sofa). Instead of a
+long off delay (which delays every real exit), the zone tracks occupants:
+
+- A target that **vanishes inside** the zone becomes a *held* occupant.
+- A target that **appears inside** with someone held is that person
+  re-detected (absorbs one hold).
+- A target that **appears outside** with someone held means they left unseen
+  (releases one hold).
+- A target **walking out across the edge** ends occupancy as usual.
+- Safety net `hold_max_s` (0 = never): a held occupant expires after that
+  long. The editor pre-fills 1.5× the longest still period seen in the zone.
+
+Measured on 48 h at the living-room desk: 145 of 161 vanishes were re-detected
+inside (median still period 44 s, max ~25 min); no target ever walked out
+without first entering. Turn-ons: no filters 309; off delay 5 min 28 (every
+exit 5 min late); hold 149; hold + 150 mm edge margin 80, no exit lag.
+The remaining short gaps are edge jitter, hence the margin.
+
 ## 7. Entities
 
 Per configured radar:
@@ -228,6 +248,29 @@ recorder keeps (default 10 days).
   timeline of on intervals, list of trigger times; exclude zones show how
   many points they remove. Filter settings update the preview live.
 
+### 8.3.1 Guided zones (history analysis, `frontend/analysis.js`)
+
+- **Dwell spots**: a 100 mm grid accumulates seconds of presence per cell
+  (time to the next frame, capped at 5 s); cells above a threshold (scaled
+  with the range, 3–30 s) form 8-connected spots; each gets a convex hull,
+  simplified to ≤ 8 vertices by extending edges (still contains the cloud).
+- **Signed margin**: hulls grow outward (e.g. +12 in) or shrink inward so only
+  the core of a spot counts; inward shrinking drops edges that vanish and
+  refuses when the polygon collapses.
+- **Ghost vs spot**: per polygon, follow each slot frame to frame (100 mm
+  hysteresis) and group activity into visits with the same vanish/reappear
+  linking as §6.5. A person walks into a spot before sitting still in it; a
+  ghost (plant, fan, reflection) appears and vanishes in place. ≥ 50 % of
+  visits beginning with a walk-in → *dwell spot*; ≤ 15 % → *likely ghost*.
+  On production data every dense cluster is a dwell spot — including the
+  one first guessed to be a ghost (the desk: 502/515 visits walked in).
+- Panel: "Suggested zones" lists spots with dwell time, walk-in share and
+  class; one click creates a zone (with hold + edge margin when people go
+  still there) or an exclusion. The zone editor offers "Fit to points"
+  (hull of where targets dwelt inside the drawn polygon, ± margin, hover to
+  preview) and a trail breakdown with warnings (an exclusion hiding a real
+  spot, an include zone that looks like a ghost, hold suggestion).
+
 ### 8.4 Scrubber / replay
 
 - Timeline under the plot with the loaded window, zone on/off bands per zone,
@@ -238,6 +281,16 @@ recorder keeps (default 10 days).
   "kitchen ghost" analysis, generated on demand.
 - Click a trigger marker or pick from the zone's history → jump there with
   the window zoomed to ±30 s.
+
+### 8.5 Future UI direction (user, 2026-11-13; not started)
+
+Two modes to simplify the panel:
+
+- **Playback / debug** (default): bigger plot and timeline, easier time
+  selection — a date/time picker besides the presets, default the last
+  15 minutes rather than 24 h.
+- **Edit**: polygon/rectangle/measure tools, include/exclude, snapping,
+  angles and the vertex table live in an edit menu that only appears here.
 
 ## 9. Migration
 

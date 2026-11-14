@@ -149,3 +149,36 @@ section. DESIGN.md is the spec; this file is the lab notebook.
   windows the point cloud and bounds playback; "Zoom to trim" / "Clear trim".
 - Dev panel times are shifted +2043 s vs production (simulator backfill
   anchors the export end to "now"); offered to switch to real timestamps.
+
+## 2026-11-13 night: guided zones + hold until exit
+
+User asked to experiment with: ghost vs real spots from trails, auto hulls
+with margins, and zones that only end on a positive exit. All three built
+(DESIGN §6.5, §8.3.1). Evidence and decisions:
+
+- Desk (living room 252dd0, 48 h): 0 walk-outs without a preceding entry;
+  161 vanishes inside → 145 reappeared inside, 16 outside; still periods p50
+  44 s, p90 ~4 min, max ~25 min. Confirms the user's hypothesis.
+- No real ghost exists in the current exports, so the ghost class is only
+  covered by a synthetic test (tests/js/analysis.test.mjs). Revisit with a
+  plant/fan case if one shows up.
+- Hold alone flaps on edge jitter (68 off-gaps < 2 s in 48 h) → spot zones
+  get a 150 mm edge margin with the hold. Consider making the edge margin a
+  default whenever hold is turned on.
+- "Appear outside releases a hold" is fragile if the radar spawns phantom
+  secondary targets; on the desk it caused 15 releases in 48 h (vs 132 walk
+  outs). Option later: only release on appearances > 1 m outside, or
+  require the appearing target to persist.
+- Fit to points / spot hulls are convex: an L-shaped cloud gets a convex
+  hull. Fine for desks and chairs; concave hulls (alpha shape) later.
+- The dev config has a "Ghost corner" exclusion I made earlier; the panel now
+  flags it as a real spot (it is the desk).
+- Design discussion deferred (two modes, edit menu, time picker, default
+  15 min): DESIGN §8.5.
+
+Ideas not built yet:
+- Doorway detection: where trails start/end (appear/vanish points away from
+  dwell spots) → suggest doorways; could also tell "left the room" from
+  "lost while sitting".
+- Suggest on-delay from blip durations of likely-ghost visits.
+- Multi-sensor fusion in one room (two radars agree → ghost unlikely).
