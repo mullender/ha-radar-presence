@@ -75,8 +75,9 @@ export class ZoneEngine {
   constructor(zones, reconnectGraceS = 0) {
     this.include = zones.filter(z => (z.kind || 'include') === 'include'); // exits only mark doorways
     this.exclude = zones.filter(z => z.kind === 'exclude');
+    this.exits = zones.filter(z => z.kind === 'exit');
     this.grace = reconnectGraceS;
-    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), heldSince: [] }]));
+    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), prevExit: new Set(), heldSince: [] }]));
     this.presence = { raw: false, state: false, since: 0 };
     this.available = true;
     this.graceUntil = -Infinity;
@@ -97,6 +98,7 @@ export class ZoneEngine {
     this.available = available;
     const live = t < this.graceUntil ? [] : targets;
     const kept = live.filter(tg => !this.excluded(tg[1], tg[2]));
+    const exitSlots = new Set(kept.filter(tg => this.exits.some(e => pointInPolygon(tg[1], tg[2], e.polygon))).map(tg => tg[0]));
     this.targetCount = kept.length;
     this.excludedCount = t >= this.graceUntil ? targets.length - kept.length : 0;
     for (const z of this.include) {
@@ -111,7 +113,7 @@ export class ZoneEngine {
       }
       rt.slots = inside.map(tg => tg[0]);
       const hold = !!z.filters?.hold_until_exit;
-      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), t);
+      if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), exitSlots, t);
       else if (!hold) rt.heldSince.length = 0;
       rt.count = inside.length + rt.heldSince.length;
       this._setRaw(rt, inside.length > 0 || rt.heldSince.length > 0, t, z.filters);
@@ -120,11 +122,12 @@ export class ZoneEngine {
     this.lastT = t;
   }
 
-  _updateHold(rt, kept, insideSlots, t) {
+  _updateHold(rt, kept, insideSlots, exitSlots, t) {
     const cur = new Map(kept.map(tg => [tg[0], insideSlots.has(tg[0])]));
-    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot)) rt.heldSince.push(t);
-    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.heldSince.length) rt.heldSince.shift();
+    for (const [slot, wasInside] of rt.prevInside) if (wasInside && !cur.has(slot) && !rt.prevExit.has(slot)) rt.heldSince.push(t);
+    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.heldSince.length && !exitSlots.has(slot)) rt.heldSince.shift();
     rt.prevInside = cur;
+    rt.prevExit = exitSlots;
   }
 
   _expireHolds(rt, t, f) {

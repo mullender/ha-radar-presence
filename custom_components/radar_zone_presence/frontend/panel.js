@@ -1201,7 +1201,10 @@ class RadarZonePresencePanel extends HTMLElement {
           el('label', { class: 'check full' },
             el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked, hold_max_s: e.target.checked && !f.hold_max_s ? this._suggestedMaxHold(z) : f.hold_max_s || 0 } }, { renderSide: true }) }),
             el('span', {}, 'Stay occupied until seen leaving',
-              el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, a target that disappears inside the zone keeps it occupied until someone walks out across the edge or shows up elsewhere in the room.'))),
+              el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, a target that disappears inside the zone keeps it occupied until someone walks out across the edge or shows up elsewhere in the room.',
+                this.zones.some(q => q.kind === 'exit')
+                  ? ` Entry/exit points count: disappearing in one (${this.zones.filter(q => q.kind === 'exit').map(q => q.name).join(', ')}) means they left, and someone appearing in one is a new arrival.`
+                  : ' Draw entry/exit points (doorways, stairs) to make this work for a whole room.'))),
           f.hold_until_exit ? [
             el('label', {}, 'Max hold (min)'),
             num(Math.round((f.hold_max_s || 0) / 6) / 10, e => this._patchZone(z.id, { filters: { ...f, hold_max_s: Math.max(0, Math.round((+e.target.value || 0) * 60)) } }), { title: '0 = hold until seen leaving, however long' }),

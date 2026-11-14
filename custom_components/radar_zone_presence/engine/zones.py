@@ -96,6 +96,7 @@ class _ZoneRuntime:
     count: int = 0
     slots: tuple[int, ...] = ()
     prev_inside: dict[int, bool] = field(default_factory=dict)  # slot -> inside, previous frame
+    prev_exit: set[int] = field(default_factory=set)  # slots standing in an exit, previous frame
     held_since: list[float] = field(default_factory=list)  # vanish times of held occupants, oldest first
 
     @property
@@ -137,6 +138,7 @@ class ZoneEngine:
     def __post_init__(self) -> None:
         self.include = [z for z in self.zones if z.kind == KIND_INCLUDE]
         self.exclude = [z for z in self.zones if z.kind == KIND_EXCLUDE]
+        self.exits = [z for z in self.zones if z.kind == KIND_EXIT]
         self._rt = {z.id: _ZoneRuntime() for z in self.include}
 
     # ------------------------------------------------------------------ input
@@ -155,6 +157,7 @@ class ZoneEngine:
         if t < self._grace_until:
             targets = ()
         kept = [tg for tg in targets if not self.excluded(tg)]
+        exit_slots = {tg.slot for tg in kept if any(point_in_polygon(tg.x, tg.y, e.polygon) for e in self.exits)}
         self._target_count = len(kept)
         self._excluded_count = len(frame.targets) - len(kept) if t >= self._grace_until else 0
 
@@ -170,7 +173,7 @@ class ZoneEngine:
                 inside = [tg for tg in kept if point_in_polygon(tg.x, tg.y, zone.polygon)]
             rt.slots = tuple(tg.slot for tg in inside)
             if zone.filters.hold_until_exit and t >= self._grace_until:
-                self._update_hold(rt, kept, set(rt.slots), t)
+                self._update_hold(rt, kept, set(rt.slots), exit_slots, t)
             elif not zone.filters.hold_until_exit:
                 rt.held_since.clear()
             rt.count = len(inside) + rt.held
@@ -182,17 +185,19 @@ class ZoneEngine:
         return self.snapshot()
 
     @staticmethod
-    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int], t: float) -> None:
+    def _update_hold(rt: _ZoneRuntime, kept: list[Target], inside_slots: set[int], exit_slots: set[int], t: float) -> None:
         cur = {tg.slot: tg.slot in inside_slots for tg in kept}
         for slot, was_inside in rt.prev_inside.items():
-            if was_inside and slot not in cur:
-                rt.held_since.append(t)  # vanished inside: still there, just not detected
+            if was_inside and slot not in cur and slot not in rt.prev_exit:
+                rt.held_since.append(t)  # vanished inside (not in an exit): still there, just not detected
         for slot in cur:
-            if slot not in rt.prev_inside and rt.held_since:
+            if slot not in rt.prev_inside and rt.held_since and slot not in exit_slots:
                 # A target (re)appeared: inside = the held person re-detected;
                 # outside = they left without being seen crossing the edge.
+                # Appearing in an exit is someone new coming in.
                 rt.held_since.pop(0)
         rt.prev_inside = cur
+        rt.prev_exit = exit_slots
 
     @staticmethod
     def _expire_holds(rt: _ZoneRuntime, t: float, f: ZoneFilters) -> None:

@@ -254,6 +254,39 @@ def test_hold_released_when_target_reappears_outside():
     assert not snap.zones["z1"].occupied and snap.zones["z1"].held == 0
 
 
+# A doorway inside the room zone (SQUARE spans 0..1000 x 1000..2000).
+DOORWAY = [(800, 1800), (1000, 1800), (1000, 2000), (800, 2000)]
+
+
+def test_hold_vanishing_in_an_exit_means_left():
+    eng = ZoneEngine([zone(hold_until_exit=True), zone("door", "exit", DOORWAY)])
+    eng.process(frame(0, (500, 1500)))
+    eng.process(frame(1, (900, 1900)))  # walks into the doorway
+    snap = eng.process(frame(2))  # and is gone: through the door, not gone still
+    assert not snap.zones["z1"].occupied and snap.zones["z1"].held == 0
+    assert "door" not in snap.zones  # exits have no state of their own
+
+
+def test_hold_vanishing_elsewhere_still_held_with_exits():
+    eng = ZoneEngine([zone(hold_until_exit=True), zone("door", "exit", DOORWAY)])
+    eng.process(frame(0, (500, 1500)))
+    snap = eng.process(frame(1))
+    assert snap.zones["z1"].occupied and snap.zones["z1"].held == 1
+
+
+def test_hold_someone_coming_in_through_an_exit_is_not_the_held_person():
+    eng = ZoneEngine([zone(hold_until_exit=True), zone("door", "exit", DOORWAY)])
+    eng.process(frame(0, (500, 1500)))
+    eng.process(frame(1))  # A goes still at the desk: held
+    snap = eng.process(frame(30, (900, 1900)))  # B comes in through the door
+    assert snap.zones["z1"].held == 1 and snap.zones["z1"].count == 2
+    eng.process(frame(31, (950, 1950)))
+    snap = eng.process(frame(32))  # B leaves again through the door
+    assert snap.zones["z1"].occupied and snap.zones["z1"].held == 1  # A is still there
+    snap = eng.process(frame(40, (520, 1480)))  # A moves: re-detected, not someone new
+    assert snap.zones["z1"].held == 0 and snap.zones["z1"].count == 1
+
+
 def test_hold_expires_after_max_hold():
     eng = ZoneEngine([zone(hold_until_exit=True, hold_max_s=600)])
     frames = [frame(0, (500, 1500)), frame(1), frame(300), frame(1000)]  # goes still at t=1

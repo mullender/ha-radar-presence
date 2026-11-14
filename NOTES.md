@@ -288,3 +288,28 @@ Ideas not built yet:
   and backfills entities added after the first backfill. The dev recorder had
   to be rebuilt: it still held radar data from an older export than the
   current files, so door events and radar frames were seconds to minutes apart.
+
+## 2026-11-14: entry/exit points in the hold logic (step 2)
+
+- Floor plans from the user: living radar on the west wall facing east
+  (upside down: +X = north), stairs down to the entry just north of it, the
+  kitchen opening between the stair wall and the island; no other exits.
+  Entry radar on the north wall facing south, upright (Screek raw +X = sensor's
+  right; matches the door clusters, so Screeks need no flip).
+- Engine (Python + JS, shared vector "hold_exits"): with hold on, a target
+  that vanishes while standing in an exit has left (no hold), and a target
+  that appears in an exit is a new arrival (does not release a hold).
+  Exits are radar-wide, like exclusions; no exits = unchanged behaviour.
+- Living room, 48 h, one "Living room" zone up to the island line, hold +
+  15 min max + 150 mm edge margin, exits Stairs + Kitchen opening:
+  turn-ons 283 -> 97, occupied 14.9 h -> 21.8 h; on real timestamps the room
+  is empty 22:00-06:00 and covered through the working day where the raw
+  sensor had big holes (08:00: 4 min vs 65 of 120). Of 74 departures through
+  an exit, 55 switch off within 5 s (45 without exits); rooms left on > 5 min
+  6 (12 without).
+- Lessons: the living radar sees past the opening into the kitchen, so the
+  kitchen exit must include the strip on the room side of the opening (an
+  overnight 9.5 h stuck hold came from someone lost right at the island line);
+  without identities, counts drift when two people hold and one leaves unseen,
+  so Max hold stays the safety net; holds are not started by ghosts here
+  (2 of 204 at night, half tracked > 1.5 min).
