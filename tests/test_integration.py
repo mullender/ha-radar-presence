@@ -10,7 +10,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.radar_zone_presence.const import DOMAIN
@@ -118,19 +118,22 @@ async def test_zone_presence_and_exclusion(hass: HomeAssistant, radar_device: st
     )
     ent_reg = er.async_get(hass)
     chair = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
-    presence = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_presence")
-    assert chair and presence
-    # Entities live on the radar's own device.
-    assert ent_reg.async_get(chair).device_id == radar_device
+    assert chair
+    assert ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_presence") is None  # no radar-level entity
+    # The zone is its own presence device, connected via the radar, named "<zone> Presence".
+    device = dr.async_get(hass).async_get(ent_reg.async_get(chair).device_id)
+    assert device.id != radar_device and device.via_device_id == radar_device
+    assert device.name == "Reading chair Presence" and device.manufacturer == "Radar Zone Presence"
+    assert device.configuration_url == f"homeassistant://radar-zones#entry={entry.entry_id}&zone=chair"
+    assert hass.states.get(chair).attributes["friendly_name"] == "Reading chair Presence"
 
     await move(hass, 1, 20, 120)
     assert hass.states.get(chair).state == "on"
     assert hass.states.get(chair).attributes["target_count"] == 1
-    assert hass.states.get(presence).state == "on"
 
     await move(hass, 1, 35, 130)  # inside the plant exclusion
     assert hass.states.get(chair).state == "off"
-    assert hass.states.get(presence).state == "off"
+    assert entry.runtime_data.snapshot.excluded_count == 1  # dropped before any zone
 
     await move(hass, 1, 0, 0)
     assert hass.states.get(chair).state == "off"
@@ -241,8 +244,7 @@ async def test_exit_zone_keeps_door_and_creates_no_entity(hass: HomeAssistant, r
     await hass.async_block_till_done()
     ent_reg = er.async_get(hass)
     assert ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_zdoor") is None
-    await move(hass, 1, -40, 70)  # standing in the exit: only the sensor-wide presence reacts
-    assert hass.states.get(f"binary_sensor.{SLUG}_zone_presence_any").state == "on"
+    assert not [d for d in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)]  # no device for an exit
     await client.send_json_auto_id({"type": f"{DOMAIN}/config", "entry_id": entry.entry_id})
     cfg = (await client.receive_json())["result"]
     assert cfg["zones"][0]["door_entity_id"] == "binary_sensor.front_door"
@@ -288,10 +290,15 @@ async def test_zone_area_override_and_inherit(hass: HomeAssistant, radar_device:
     from homeassistant.helpers import area_registry as ar
 
     kitchen = ar.async_get(hass).async_create("Kitchen")
+    living = ar.async_get(hass).async_create("Living room")
+    dr.async_get(hass).async_update_device(radar_device, area_id=living.id)
     entry = await setup_entry(hass, radar_device, [{**zone("chair", "Reading chair", CHAIR_IN), "area_id": kitchen.id}])
     ent_reg = er.async_get(hass)
     chair = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
-    assert ent_reg.async_get(chair).area_id == kitchen.id
+    dev_reg = dr.async_get(hass)
+    device_id = ent_reg.async_get(chair).device_id
+    assert dev_reg.async_get(device_id).area_id == kitchen.id  # the presence device is in the zone's area
+    assert ent_reg.async_get(chair).area_id is None  # the entity follows its device
 
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
@@ -300,7 +307,7 @@ async def test_zone_area_override_and_inherit(hass: HomeAssistant, radar_device:
     )
     assert (await client.receive_json())["success"]
     await hass.async_block_till_done()
-    assert ent_reg.async_get(chair).area_id is None  # back to inheriting the device area
+    assert dev_reg.async_get(device_id).area_id == living.id  # back to the radar's area
 
 
 async def test_live_units_fall_back_to_siblings(hass: HomeAssistant, radar_device: str) -> None:

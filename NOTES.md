@@ -348,3 +348,16 @@ Ideas not built yet:
   are drawn in the current view: field of view, zones (outlines), live
   targets (diamonds). Toolbar *Others*. Basis for shared zones and following
   people between radars; neither built yet.
+
+## 2026-11-14: zones as presence devices (phase A of the home model)
+
+- Every include zone is a device ("Desk Presence", model "Presence zone",
+  connected via its radar, *Visit* opens the panel on that zone) in the zone's
+  area or by default the radar's. Entities keep their unique ids, so existing
+  entity ids survive; new zones get `binary_sensor.<zone>_presence`.
+  Device class occupancy (presence showed Home / Away on the device page).
+- Radar-level "any (not excluded)" and "excluded targets" entities removed.
+- HA minimum raised to 2026.10 (DeviceInfo `via_device_id`).
+- Panel deep links (#entry=..&zone=..) follow HA navigation: the panel element
+  is recreated/reattached, so the hash is applied on location-changed.
+- Testing note: zsh does not word-split `$VAR`; use separate variables.

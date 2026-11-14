@@ -12,11 +12,12 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from . import websocket_api
-from .const import CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN, PANEL_COMPONENT, PANEL_URL, PRESENCE_KEY, STATIC_URL
+from .const import CONF_DEVICE_ID, CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN, PANEL_COMPONENT, PANEL_URL, STATIC_URL
+from .devices import zone_device_identifier
 from .discovery import async_resolve_units, common_unit
 from .engine import KIND_INCLUDE
 from .runtime import RadarRuntime
@@ -94,7 +95,7 @@ def _remember_unit(hass: HomeAssistant, entry: ConfigEntry) -> None:
 @callback
 def _expected_unique_ids(entry: ConfigEntry) -> set[str]:
     p = entry.entry_id
-    ids = {f"{p}_{PRESENCE_KEY}", f"{p}_excluded_targets"}
+    ids: set[str] = set()
     for z in entry.options.get(CONF_ZONES, []):
         if z.get("kind", KIND_INCLUDE) == KIND_INCLUDE:
             ids |= {f"{p}_{z['id']}", f"{p}_{z['id']}_targets"}
@@ -103,24 +104,44 @@ def _expected_unique_ids(entry: ConfigEntry) -> set[str]:
 
 @callback
 def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Drop entities of zones that were deleted or turned into exclusions."""
+    """Drop entities of zones that were deleted or turned into exclusions/exits, and their devices."""
     ent_reg = er.async_get(hass)
     expected = _expected_unique_ids(entry)
     for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
         if e.unique_id not in expected:
             _LOGGER.debug("Removing stale entity %s", e.entity_id)
             ent_reg.async_remove(e.entity_id)
+    dev_reg = dr.async_get(hass)
+    keep = {zone_device_identifier(z["id"]) for z in entry.options.get(CONF_ZONES, []) if z.get("kind", KIND_INCLUDE) == KIND_INCLUDE}
+    for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+        ours = {i for i in device.identifiers if i[0] == DOMAIN}
+        if ours and not ours & keep:
+            dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
 
 
 @callback
 def _sync_zone_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Apply explicit per-zone area overrides (zones without one keep whatever the registry has)."""
+    """Zone presence devices live in an area: the zone's own, or by default the radar's.
+
+    An area chosen in the panel is applied to the device; without one, a new
+    device starts in the radar's area and is then left alone (it can be moved
+    in HA like any device). Entity-level overrides from older versions are
+    cleared so entities follow their device.
+    """
     ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    radar = dev_reg.async_get(entry.data[CONF_DEVICE_ID])
     p = entry.entry_id
     for z in entry.options.get(CONF_ZONES, []):
-        if not z.get("area_id"):
+        if z.get("kind", KIND_INCLUDE) != KIND_INCLUDE:
             continue
-        for uid in (f"{p}_{z['id']}", f"{p}_{z['id']}_targets"):
-            eid = ent_reg.async_get_entity_id("binary_sensor" if not uid.endswith("_targets") else "sensor", DOMAIN, uid)
-            if eid and (reg := ent_reg.async_get(eid)) and reg.area_id != z["area_id"]:
-                ent_reg.async_update_entity(eid, area_id=z["area_id"])
+        device = dev_reg.async_get_device(identifiers={zone_device_identifier(z["id"])})
+        if device is None:
+            continue
+        want = z.get("area_id") or (device.area_id or (radar.area_id if radar else None))
+        if want != device.area_id:
+            dev_reg.async_update_device(device.id, area_id=want)
+        for domain, uid in (("binary_sensor", f"{p}_{z['id']}"), ("sensor", f"{p}_{z['id']}_targets")):
+            eid = ent_reg.async_get_entity_id(domain, DOMAIN, uid)
+            if eid and (reg := ent_reg.async_get(eid)) and reg.area_id and reg.area_id == want:
+                ent_reg.async_update_entity(eid, area_id=None)  # follow the device

@@ -370,11 +370,16 @@ Convert it into the home entry with one radar subentry and three zone
 subentries, keeping entity ids (unique-id migration), so automations keep
 working.
 
-### 9.5 Open decisions
+### 9.5 Decisions (2026-11-14)
 
-1. Zones as their own devices (proposed) vs entities on the radar device.
-2. One home entry with radar subentries (proposed) vs one entry per radar
-   plus a separate entry for shared zones.
-3. Device naming: "Kitchen" vs "Kitchen presence" (entity becomes
-   `binary_sensor.kitchen_occupancy` either way with has_entity_name).
-4. Keep the radar-level "anyone in view" sensor (proposed: diagnostic).
+1. Zones are their own devices, in the right HA area, with full device info
+   (model, version, *Visit* into the panel, connected via the radar).
+   **Done (phase A)**: device `zone_<id>` (entry-independent), named
+   "<zone> Presence", main entity takes the device name, device class
+   occupancy (Detected / Clear; presence would read Home / Away). Existing
+   entity ids are kept. Area: the zone's own, else the radar's.
+2. Follow HA's own model: home (one entry) -> floors (one map per floor,
+   radars on a floor aligned to each other) -> areas (zone devices). Phase B.
+3. Device names get "Presence".
+4. No radar-level entities: the firmware already has occupancy and target
+   counts. Removed (phase A); the panel still shows "any target" live.

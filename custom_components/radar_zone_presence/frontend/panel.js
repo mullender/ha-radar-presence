@@ -14,6 +14,7 @@ import {
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
 const DOMAIN = 'radar_zone_presence';
+const PANEL_PATH = 'radar-zones';
 const RANGES = [
   ['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400], ['48h', 172800], ['7d', 604800],
 ];
@@ -182,11 +183,19 @@ class RadarZonePresencePanel extends HTMLElement {
     this._stopNowTimer();
     this.playing = false;
     window.removeEventListener('keydown', this._keyHandler);
+    window.removeEventListener('location-changed', this._hashHandler);
+    window.removeEventListener('hashchange', this._hashHandler);
   }
 
   connectedCallback() {
     this._keyHandler = this._keyHandler || (e => this._onKey(e));
     window.addEventListener('keydown', this._keyHandler);
+    // "Visit" on a zone device links to #entry=...&zone=...; HA keeps this element
+    // alive between visits, so follow the hash whenever HA navigates here.
+    this._hashHandler = this._hashHandler || (() => { if (location.pathname.endsWith(`/${PANEL_PATH}`)) this._applyHash(); });
+    window.addEventListener('location-changed', this._hashHandler);
+    window.addEventListener('hashchange', this._hashHandler);
+    if (this.radars) this._applyHash();
     if (this.hist) this._startNowTimer();
   }
 
@@ -198,8 +207,20 @@ class RadarZonePresencePanel extends HTMLElement {
     const fromHash = new URLSearchParams(location.hash.slice(1)).get('entry');
     const stored = localStorage.getItem('rzp.entry');
     const pick = [fromHash, stored].find(id => this.radars.some(r => r.entry_id === id)) || this.radars[0]?.entry_id;
-    if (pick) await this._selectRadar(pick);
+    if (pick) {
+      const zoneId = new URLSearchParams(location.hash.slice(1)).get('zone'); // before the hash is rewritten
+      await this._selectRadar(pick);
+      if (zoneId && this.zones.some(z => z.id === zoneId)) this._select(zoneId, null);
+    }
     else this._renderEmpty();
+  }
+
+  async _applyHash() {
+    const q = new URLSearchParams(location.hash.slice(1));
+    const entry = q.get('entry'), zone = q.get('zone');
+    if (!entry || !this.radars?.some(r => r.entry_id === entry)) return;
+    if (entry !== this.entryId) await this._selectRadar(entry);
+    if (zone && this.zones.some(z => z.id === zone)) this._select(zone, null);
   }
 
   async _loadRadars() {
@@ -1212,8 +1233,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const sensor = el('div', { class: 'section' },
       el('h3', {}, el('span', { class: 'grow' }, cfg.title)),
       el('div', { class: 'help' }, `${cfg.targets.length} targets · ${cfg.profile.replace(/_/g, ' ')} · range ${this.units.fmtLong(cfg.fov.max_distance_mm)}`),
-      cfg.presence_entity_id ? el('div', { class: 'stat' }, el('span', {}, 'Any target (not excluded)'), el('span', { class: 'badge', 'data-live': 'presence' }, '—')) : '',
-      el('div', { class: 'stat' }, el('span', { class: 'help' }, cfg.presence_entity_id || ''), ''),
+      el('div', { class: 'stat' }, el('span', {}, 'Any target (not excluded)'), el('span', { class: 'badge', 'data-live': 'presence' }, '—')),
     );
     const zonesSec = el('div', { class: 'section' },
       el('h3', {}, el('span', { class: 'grow' }, `Zones (${this.zones.length})`)),
@@ -1251,9 +1271,17 @@ class RadarZonePresencePanel extends HTMLElement {
           el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Exclude (ignored everywhere)'),
           el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Entry / exit (doorway, stairs)')),
         z.kind === 'include' ? [
+          el('label', {}, 'Device'),
+          (() => {
+            const saved = this.config.zones.find(q => q.id === z.id);
+            const name = /presence$/i.test(z.name.trim()) ? z.name.trim() : `${z.name.trim()} Presence`;
+            return saved?.device_id
+              ? el('a', { href: `/config/devices/device/${saved.device_id}`, title: 'Open the presence device in Home Assistant' }, `${name} ↗`)
+              : el('span', { class: 'help' }, `${name} (created when you save)`);
+          })(),
           el('label', {}, 'Area'),
           el('select', { onchange: e => this._patchZone(z.id, { area_id: e.target.value || null }) },
-            el('option', { value: '', selected: !z.area_id }, `Inherit from device${deviceArea ? ` (${deviceArea})` : ''}`),
+            el('option', { value: '', selected: !z.area_id }, `Same as the radar${deviceArea ? ` (${deviceArea})` : ''}`),
             areas.map(a => el('option', { value: a.area_id, selected: a.area_id === z.area_id }, a.name))),
           el('label', {}, 'On delay (s)'),
           num(f.on_delay_s, e => this._patchZone(z.id, { filters: { ...f, on_delay_s: Math.max(0, +e.target.value || 0) } })),

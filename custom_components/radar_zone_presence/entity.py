@@ -7,21 +7,25 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import Entity
 
 from .const import CONF_DEVICE_ID
+from .devices import zone_device_info
+from .engine import Zone
 from .runtime import RadarRuntime
 
 
 class RadarEntity(Entity):
-    """Entity attached to the radar's own device, updated by the runtime."""
+    """Entity of a zone's presence device (or the radar's own device), updated by the runtime."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, runtime: RadarRuntime, entry: ConfigEntry, key: str) -> None:
+    def __init__(self, runtime: RadarRuntime, entry: ConfigEntry, key: str, zone: Zone | None = None) -> None:
         self.runtime = runtime
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        # Link to the radar's existing device (helper-integration pattern):
-        # zone entities show on the radar's device page and inherit its area.
-        self.device_entry = dr.async_get(runtime.hass).async_get(entry.data[CONF_DEVICE_ID])
+        radar = dr.async_get(runtime.hass).async_get(entry.data[CONF_DEVICE_ID])
+        if zone is None:
+            self.device_entry = radar  # helper pattern: attach to the radar's existing device
+        else:
+            self._attr_device_info = zone_device_info(entry, zone, radar.id if radar else None)
 
     @property
     def available(self) -> bool:

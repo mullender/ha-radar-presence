@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 DOMAIN = "radar_zone_presence"
+VERSION: str = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
+
+MANUFACTURER = "Radar Zone Presence"
+ZONE_MODEL = "Presence zone"
 
 CONF_DEVICE_ID = "device_id"
 CONF_PROFILE = "profile"

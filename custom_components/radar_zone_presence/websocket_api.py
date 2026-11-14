@@ -25,6 +25,7 @@ from .const import (
     FOV_HALF_ANGLE_DEG,
     PRESENCE_KEY,
 )
+from .devices import zone_device_identifier
 from .discovery import async_device_geometry, async_find_radars, async_resolve_units, common_unit
 from .engine import KIND_EXCLUDE, KIND_EXIT, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
 from .history import async_history_frames, async_zone_events
@@ -115,12 +116,12 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
     geometry = async_device_geometry(hass, device_id)
     unit = _target_unit(hass, runtime)
     entity_ids = _zone_entity_ids(hass, entry)
-    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
     zones = []
     for z in entry.options.get(CONF_ZONES, []):
-        eid = entity_ids.get(z["id"])
-        reg = ent_reg.async_get(eid) if eid else None
-        zones.append({**z, "entity_id": eid, "registry_area_id": reg.area_id if reg else None})
+        zdev = dev_reg.async_get_device(identifiers={zone_device_identifier(z["id"])})
+        zones.append({**z, "entity_id": entity_ids.get(z["id"]), "device_id": zdev.id if zdev else None,
+                      "registry_area_id": zdev.area_id if zdev else None})
     connection.send_result(
         msg["id"],
         {
@@ -132,7 +133,6 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
             "targets": [{"slot": t.slot, "x": t.x, "y": t.y} for t in runtime.targets],
             "target_unit": unit,
             "zones": zones,
-            "presence_entity_id": entity_ids.get(PRESENCE_KEY),
             "settings": {
                 CONF_RECONNECT_GRACE: entry.options.get(CONF_RECONNECT_GRACE, 0),
                 CONF_DISPLAY: entry.options.get(CONF_DISPLAY, {}),
@@ -205,15 +205,14 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
         z.setdefault("area_id", None)
         zones.append(z)
 
-    # A zone switched back to "inherit": clear the override on its entities now.
+    # A zone switched back to "same as the radar": move its presence device back now.
     old = {z["id"]: z for z in entry.options.get(CONF_ZONES, [])}
-    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    radar = dev_reg.async_get(entry.data[CONF_DEVICE_ID])
     for z in zones:
         if z["area_id"] is None and old.get(z["id"], {}).get("area_id"):
-            for domain, suffix in (("binary_sensor", ""), ("sensor", "_targets")):
-                eid = ent_reg.async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{z['id']}{suffix}")
-                if eid:
-                    ent_reg.async_update_entity(eid, area_id=None)
+            if zdev := dev_reg.async_get_device(identifiers={zone_device_identifier(z["id"])}):
+                dev_reg.async_update_device(zdev.id, area_id=radar.area_id if radar else None)
 
     options = {**entry.options, CONF_ZONES: zones}
     for key, value in msg.get("settings", {}).items():

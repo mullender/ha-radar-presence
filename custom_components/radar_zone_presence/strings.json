@@ -30,12 +30,8 @@
     }
   },
   "entity": {
-    "binary_sensor": {
-      "radar_presence": { "name": "Zone presence (any)" }
-    },
     "sensor": {
-      "excluded_targets": { "name": "Excluded targets" },
-      "zone_targets": { "name": "{zone} targets" }
+      "zone_targets": { "name": "Targets" }
     }
   }
 }
