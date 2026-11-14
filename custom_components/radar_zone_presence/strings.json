@@ -1,5 +1,11 @@
 {
   "config": {
+    "step": {
+      "user": {
+        "title": "Radar Zone Presence",
+        "description": "Sets up your home. Radars and zones are then added as parts of it: the first radar right away, more with Add radar on the integration page."
+      }
+    },
     "abort": {
       "single_instance_allowed": "Radar Zone Presence is already set up. Add radars and zones from its integration page."
     }
