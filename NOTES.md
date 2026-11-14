@@ -331,3 +331,20 @@ Ideas not built yet:
   applies it to the coordinates is unknown).
 - The fitted offset would also allow drawing two radars on one map, or
   handing a person over between radars; not built.
+
+## 2026-11-14: door objects, three radars on one map
+
+- b3b6c4 (Screek, west end of the island, facing north) aligns with both EP
+  Lites (71-73% agree, rms ~190-200 mm), mirrored as expected (upright Screek
+  vs upside-down EPLs). Chaining b3b6c4 -> kitchen EPL -> living agrees with
+  b3b6c4 -> living within 2.6 deg and 10 mm.
+- Door objects: an exit can carry `door: {swing: none|in|out, hinge_end}`;
+  the threshold rectangle stays the polygon ("Make rectangle" squares up a
+  hull). The map draws the leaf and its swing arc; "in" = towards the radar.
+  With a door-sensor exit selected, the door-event positions show as dots.
+  Entry garage door (swings into the entry): people stand 1.2-1.8 m back from
+  the threshold, just outside the arc, as the user expected for pulling.
+- Other radars: radars linked by saved alignments (either direction, chained)
+  are drawn in the current view: field of view, zones (outlines), live
+  targets (diamonds). Toolbar *Others*. Basis for shared zones and following
+  people between radars; neither built yet.

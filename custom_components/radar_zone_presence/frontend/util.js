@@ -175,3 +175,84 @@ export function svg(tag, attrs = {}, ...children) {
   for (const c of children.flat(Infinity)) if (c) e.append(c);
   return e;
 }
+
+/**
+ * A door in an exit's threshold rectangle. The width runs along the polygon's
+ * longest edge; "in" swings towards `origin` (the radar's side of the
+ * threshold), "out" away from it; the hinge sits at end 0 or 1 of the face on
+ * the swing side. Returns the bounding rectangle, leaf and swing arc (world
+ * mm), or {rect} only for no swing.
+ */
+export function doorGeometry(poly, door, origin = [0, 0]) {
+  let best = 0, u = [1, 0];
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l > best) { best = l; u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l]; }
+  }
+  const v = [-u[1], u[0]];
+  const dot = (p, d) => p[0] * d[0] + p[1] * d[1];
+  const us = poly.map(p => dot(p, u)), vs = poly.map(p => dot(p, v));
+  const u0 = Math.min(...us), u1 = Math.max(...us), v0 = Math.min(...vs), v1 = Math.max(...vs);
+  const P = (a, b) => [u[0] * a + v[0] * b, u[1] * a + v[1] * b];
+  const rect = [P(u0, v0), P(u1, v0), P(u1, v1), P(u0, v1)];
+  const width = u1 - u0;
+  const inSign = dot(origin, v) >= (v0 + v1) / 2 ? 1 : -1;
+  if (!door || door.swing === 'none' || !(width > 0)) return { rect, width, inSign };
+  const side = door.swing === 'in' ? inSign : -inSign;
+  const face = side > 0 ? v1 : v0;
+  const hu = door.hinge_end ? u1 : u0, ou = door.hinge_end ? u0 : u1;
+  const hinge = P(hu, face), closed = P(ou, face), open = P(hu, face + side * width);
+  const arc = [];
+  for (let k = 0; k <= 16; k++) {
+    const t = (k / 16) * (Math.PI / 2);
+    arc.push([hinge[0] + Math.cos(t) * (closed[0] - hinge[0]) + Math.sin(t) * (open[0] - hinge[0]),
+      hinge[1] + Math.cos(t) * (closed[1] - hinge[1]) + Math.sin(t) * (open[1] - hinge[1])]);
+  }
+  return { rect, width, inSign, side, hinge, closed, open, arc };
+}
+
+// 2-D affine transforms [[a, b, tx], [c, d, ty]] between radar frames.
+export const affineApply = (A, [x, y]) => [A[0][0] * x + A[0][1] * y + A[0][2], A[1][0] * x + A[1][1] * y + A[1][2]];
+export const affineMul = (A, B) => [ // A after B
+  [A[0][0] * B[0][0] + A[0][1] * B[1][0], A[0][0] * B[0][1] + A[0][1] * B[1][1], A[0][0] * B[0][2] + A[0][1] * B[1][2] + A[0][2]],
+  [A[1][0] * B[0][0] + A[1][1] * B[1][0], A[1][0] * B[0][1] + A[1][1] * B[1][1], A[1][0] * B[0][2] + A[1][1] * B[1][2] + A[1][2]],
+];
+export function affineInvert(A) {
+  const det = A[0][0] * A[1][1] - A[0][1] * A[1][0];
+  const a = A[1][1] / det, b = -A[0][1] / det, c = -A[1][0] / det, d = A[0][0] / det;
+  return [[a, b, -(a * A[0][2] + b * A[1][2])], [c, d, -(c * A[0][2] + d * A[1][2])]];
+}
+/** A radar's saved alignment (display.aligned_to) as the transform from its frame to the reference radar's. */
+export function alignmentAffine(al) {
+  const r = (al.angle_deg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r), f = al.reflect ? -1 : 1;
+  return [[c * f, -s, al.offset_mm[0]], [s * f, c, al.offset_mm[1]]];
+}
+/**
+ * Transforms from every radar connected to `fromId` through saved alignments
+ * into `fromId`'s frame. `radars`: [{entry_id, aligned_to}]. Returns Map id -> affine.
+ */
+export function radarTransforms(fromId, radars) {
+  const edges = new Map(radars.map(r => [r.entry_id, []]));
+  for (const r of radars) {
+    const al = r.aligned_to;
+    if (!al || !edges.has(al.entry_id) || !al.offset_mm) continue;
+    const A = alignmentAffine(al); // r -> ref
+    edges.get(r.entry_id).push([al.entry_id, A]);
+    edges.get(al.entry_id).push([r.entry_id, affineInvert(A)]); // ref -> r
+  }
+  // BFS: T[id] maps id's frame into fromId's frame.
+  const T = new Map([[fromId, [[1, 0, 0], [0, 1, 0]]]]);
+  const queue = [fromId];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const [next, A] of edges.get(cur) || []) {
+      // A maps cur -> next; we need next -> fromId = T[cur] · inverse(A)
+      if (T.has(next)) continue;
+      T.set(next, affineMul(T.get(cur), affineInvert(A)));
+      queue.push(next);
+    }
+  }
+  T.delete(fromId);
+  return T;
+}

@@ -162,6 +162,8 @@ ZONE_SCHEMA = vol.Schema(
         vol.Optional("filters", default={}): FILTERS_SCHEMA,
         vol.Optional("area_id"): vol.Any(None, str),
         vol.Optional("door_entity_id"): vol.Any(None, vol.All(str, vol.Match(r"^binary_sensor\.\w+$"))),
+        # Exits: a door in the threshold rectangle (drawing / analysis only).
+        vol.Optional("door"): vol.Any(None, {vol.Required("swing"): vol.In(["none", "in", "out"]), vol.Optional("hinge_end", default=0): vol.In([0, 1])}),
     },
     extra=vol.REMOVE_EXTRA,
 )

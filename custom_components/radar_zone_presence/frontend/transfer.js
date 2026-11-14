@@ -23,6 +23,7 @@ export function exportZones(radar, zones, settings = {}) {
       filters: { ...FILTER_DEFAULTS, ...(z.filters || {}) },
       area_id: z.area_id ?? null,
       ...(z.door_entity_id ? { door_entity_id: z.door_entity_id } : {}),
+      ...(z.door ? { door: z.door } : {}),
     })),
   };
 }
@@ -69,6 +70,7 @@ export function parseImport(text) {
       polygon: z.polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters, area_id: typeof z.area_id === 'string' ? z.area_id : null,
       door_entity_id: typeof z.door_entity_id === 'string' && z.door_entity_id ? z.door_entity_id : null,
+      door: z.door && ['none', 'in', 'out'].includes(z.door.swing) ? { swing: z.door.swing, hinge_end: z.door.hinge_end ? 1 : 0 } : null,
     };
   });
   const grace = Number(doc.settings?.reconnect_grace_s);

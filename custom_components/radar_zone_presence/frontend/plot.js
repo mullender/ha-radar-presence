@@ -7,7 +7,7 @@
 
 import { PointLayer } from './points.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime,
+  EXCLUDE_COLOR, EXIT_COLOR, doorGeometry, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime,
 } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
@@ -97,6 +97,8 @@ export class RzpPlot extends HTMLElement {
     this.showContext = true; // faded full cloud behind the replay trail
     this.suggestions = []; // [{polygon, kind: 'spot'|'ghost'|..., label, active}] dashed overlays
     this.edgeWarnings = []; // [{a, b, label}] zone edges that targets flap across
+    this.markers = []; // [{x, y, color}] small dots, e.g. where people stood at door events
+    this.peers = []; // other aligned radars in this frame: [{title, color, origin, fov, zones, targets}]
 
     // View
     this.scale = 0.08; // px per mm
@@ -535,11 +537,40 @@ export class RzpPlot extends HTMLElement {
     root.append(this._grid(w, h));
     root.append(this._fovLayer());
     root.append(this._deviceZoneLayer());
+    root.append(this._peerLayer());
     root.append(this._suggestionLayer());
+    root.append(this._markerLayer());
     root.append(this._zoneLayer());
     root.append(this._trailLayer());
     root.append(this._sensor());
     root.append(this._toolLayer());
+  }
+
+  _peerLayer() {
+    const g = svg('g', { 'pointer-events': 'none' });
+    for (const p of this.peers || []) {
+      g.append(svg('path', { d: this._path(p.fov), fill: p.color, 'fill-opacity': 0.04, stroke: p.color, 'stroke-opacity': 0.6, 'stroke-dasharray': '3 4', 'stroke-width': 1 }));
+      for (const z of p.zones) {
+        g.append(svg('path', { d: this._path(z.polygon), fill: 'none', stroke: p.color, 'stroke-opacity': 0.7, 'stroke-width': 1, 'stroke-dasharray': z.kind === 'exit' ? '2 3' : '6 3' }));
+      }
+      const o = this._s(p.origin);
+      g.append(svg('path', { d: `M${o[0]},${o[1] - 6}L${o[0] + 5},${o[1] + 4}L${o[0] - 5},${o[1] + 4}Z`, fill: p.color }));
+      g.append(svg('text', { class: 'zone-label', x: o[0] + 8, y: o[1] - 6, fill: p.color }, document.createTextNode(p.title)));
+      for (const t of p.targets) {
+        const s = this._s(t);
+        g.append(svg('rect', { x: s[0] - 5, y: s[1] - 5, width: 10, height: 10, transform: `rotate(45 ${s[0]} ${s[1]})`, fill: 'none', stroke: p.color, 'stroke-width': 2 }));
+      }
+    }
+    return g;
+  }
+
+  _markerLayer() {
+    const g = svg('g', { 'pointer-events': 'none' });
+    for (const m of this.markers || []) {
+      const s = this._s([m.x, m.y]);
+      g.append(svg('circle', { cx: s[0], cy: s[1], r: 3, fill: m.color || '#8d6e63', 'fill-opacity': 0.55, stroke: '#fff', 'stroke-width': 0.8 }));
+    }
+    return g;
   }
 
   _defs() {
@@ -702,6 +733,13 @@ export class RzpPlot extends HTMLElement {
         'stroke-dasharray': z.kind === 'exclude' ? '6 3' : z.kind === 'exit' ? '2 3' : null,
       };
       g.append(svg('path', attrs));
+      if (z.kind === 'exit' && z.door && z.door.swing !== 'none') {
+        const dg = doorGeometry(z.polygon, z.door);
+        if (dg.arc) {
+          g.append(svg('path', { d: this._path([dg.hinge, dg.open], false), stroke: color, 'stroke-width': 2.5, fill: 'none', 'pointer-events': 'none' }));
+          g.append(svg('path', { d: this._path(dg.arc, false), stroke: color, 'stroke-width': 1.2, 'stroke-dasharray': '4 3', fill: 'none', 'pointer-events': 'none' }));
+        }
+      }
       // Label at the centroid of the vertices.
       const c = z.polygon.reduce((a, p) => [a[0] + p[0] / z.polygon.length, a[1] + p[1] / z.polygon.length], [0, 0]);
       const s = this._s(c);
