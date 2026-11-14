@@ -19,12 +19,13 @@ from .const import (
     CONF_DISPLAY,
     CONF_PROFILE,
     CONF_RECONNECT_GRACE,
+    CONF_UNIT,
     CONF_ZONES,
     DOMAIN,
     FOV_HALF_ANGLE_DEG,
     PRESENCE_KEY,
 )
-from .discovery import async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units
+from .discovery import async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
 from .engine import KIND_EXCLUDE, KIND_INCLUDE, EngineSnapshot, Frame, validate_polygon
 from .history import async_history_frames, async_zone_events
 from .runtime import RadarRuntime
@@ -68,8 +69,7 @@ def _zone_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str]:
 
 
 def _target_unit(hass: HomeAssistant, runtime: RadarRuntime) -> str | None:
-    units = [u for u in async_resolve_units(hass, runtime.entity_ids).values() if u]
-    return max(set(units), key=units.count) if units else None
+    return common_unit(async_resolve_units(hass, runtime.entity_ids, runtime.entry.data.get(CONF_UNIT)))
 
 
 @websocket_api.require_admin
@@ -298,7 +298,7 @@ async def ws_history_frames(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     runtime: RadarRuntime = entry.runtime_data
-    connection.send_result(msg["id"], await async_history_frames(hass, runtime.targets, start, end))
+    connection.send_result(msg["id"], await async_history_frames(hass, runtime.targets, start, end, entry.data.get(CONF_UNIT)))
 
 
 @websocket_api.require_admin

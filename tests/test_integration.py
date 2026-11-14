@@ -235,3 +235,18 @@ async def test_live_units_fall_back_to_siblings(hass: HomeAssistant, radar_devic
     chair = er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_chair")
     assert hass.states.get(chair).state == "on"  # (20 in, 120 in) is inside the chair; as mm it would not be
     assert entry.runtime_data.last_frame.targets[0].x == pytest.approx(508)
+
+
+async def test_unit_remembered_in_entry(hass: HomeAssistant, radar_device: str) -> None:
+    """With no unit anywhere (all states unit-less), the stored entry unit is used."""
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    assert entry.data["unit"] == "in"
+    await hass.config_entries.async_unload(entry.entry_id)
+    for n in (1, 2, 3):
+        for axis in "xy":
+            hass.states.async_set(f"sensor.{SLUG}_target_{n}_{axis}", "0.0", {"restored": True})
+    hass.states.async_set(f"sensor.{SLUG}_target_1_x", "20", {})
+    hass.states.async_set(f"sensor.{SLUG}_target_1_y", "120", {})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.last_frame.targets[0].x == pytest.approx(508)

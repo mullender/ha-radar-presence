@@ -11,15 +11,17 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import CONF_DEVICE_ID, CONF_PROFILE, CONF_RECONNECT_GRACE, CONF_TARGETS, CONF_ZONES, DOMAIN
-from .discovery import RadarDevice, async_find_radars, async_legacy_polygons, async_resolve_units
+from .const import CONF_DEVICE_ID, CONF_PROFILE, CONF_RECONNECT_GRACE, CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN
+from .discovery import RadarDevice, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
 from .engine import KIND_INCLUDE, validate_polygon
 
 
+def _radar_unit(hass, radar: RadarDevice) -> str | None:
+    return common_unit(async_resolve_units(hass, [e for t in radar.targets for e in (t.x, t.y)]))
+
+
 def _legacy_zones(flow_hass, radar: RadarDevice) -> list[dict[str, Any]]:
-    ids = [e for t in radar.targets for e in (t.x, t.y)]
-    units = [u for u in async_resolve_units(flow_hass, ids).values() if u]
-    unit = max(set(units), key=units.count) if units else None
+    unit = _radar_unit(flow_hass, radar)
     zones = []
     for p in async_legacy_polygons(flow_hass, radar.slug, unit):
         if validate_polygon(p["polygon"]) is None:
@@ -90,6 +92,7 @@ class RadarZonePresenceConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_ID: self._radar.device_id,
                 CONF_PROFILE: self._radar.profile,
                 CONF_TARGETS: self._radar.as_entry_data(),
+                CONF_UNIT: _radar_unit(self.hass, self._radar),
             },
             options={CONF_ZONES: zones, CONF_RECONNECT_GRACE: 0},
         )

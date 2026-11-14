@@ -10,6 +10,7 @@ CONF_TARGETS = "targets"
 CONF_ZONES = "zones"
 CONF_RECONNECT_GRACE = "reconnect_grace_s"
 CONF_DISPLAY = "display"
+CONF_UNIT = "unit"  # last known unit of the coordinate entities (fallback)
 
 PROFILE_EVERYTHING_PRESENCE = "everything_presence"
 PROFILE_SCREEK_2A = "screek_2a"

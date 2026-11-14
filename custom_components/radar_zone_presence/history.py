@@ -53,12 +53,13 @@ async def async_history_frames(
     targets: list[TargetEntities],
     start: datetime,
     end: datetime,
+    unit_fallback: str | None = None,
 ) -> dict[str, Any]:
     """Packed frames: parallel arrays t (s since start), slot, x, y (mm, rounded)."""
     entity_ids = sorted({e for t in targets for e in (t.x, t.y)})
     raw = await get_instance(hass).async_add_executor_job(_fetch, hass, start, end, entity_ids)
 
-    units = async_resolve_units(hass, entity_ids)
+    units = async_resolve_units(hass, entity_ids, unit_fallback)
 
     def build() -> dict[str, Any]:
         events: list[tuple[float, str, str]] = []

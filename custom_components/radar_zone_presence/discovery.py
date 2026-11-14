@@ -148,7 +148,9 @@ def async_legacy_polygons(hass: HomeAssistant, slug: str, unit: str | None) -> l
 
 
 @callback
-def async_resolve_units(hass: HomeAssistant, entity_ids: list[str] | set[str]) -> dict[str, str | None]:
+def async_resolve_units(
+    hass: HomeAssistant, entity_ids: list[str] | set[str], fallback: str | None = None
+) -> dict[str, str | None]:
     """Unit of each coordinate entity, robust to states that carry no unit.
 
     Restored/unavailable states (e.g. right after a restart, or while the radar
@@ -171,9 +173,14 @@ def async_resolve_units(hass: HomeAssistant, entity_ids: list[str] | set[str]) -
             )
         units[eid] = unit
     known = [u for u in units.values() if u]
-    if known:
-        common = max(set(known), key=known.count)
+    common = max(set(known), key=known.count) if known else fallback
+    if common:
         for eid, unit in units.items():
             if not unit:
                 units[eid] = common
     return units
+
+
+def common_unit(units: dict[str, str | None]) -> str | None:
+    known = [u for u in units.values() if u]
+    return max(set(known), key=known.count) if known else None

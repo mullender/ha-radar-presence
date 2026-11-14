@@ -16,7 +16,8 @@ from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from . import websocket_api
-from .const import CONF_ZONES, DOMAIN, PANEL_COMPONENT, PANEL_URL, PRESENCE_KEY, STATIC_URL
+from .const import CONF_TARGETS, CONF_UNIT, CONF_ZONES, DOMAIN, PANEL_COMPONENT, PANEL_URL, PRESENCE_KEY, STATIC_URL
+from .discovery import async_resolve_units, common_unit
 from .engine import KIND_INCLUDE
 from .runtime import RadarRuntime
 
@@ -60,6 +61,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: RadarConfigEntry) -> bool:
+    _remember_unit(hass, entry)
     runtime = RadarRuntime(hass, entry)
     entry.runtime_data = runtime
     _remove_stale_entities(hass, entry)
@@ -77,6 +79,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: RadarConfigEntry) -> bo
 
 async def _async_reload(hass: HomeAssistant, entry: RadarConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+@callback
+def _remember_unit(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Store the radar's coordinate unit so restarts with unit-less states still convert correctly."""
+    ids = [e for t in entry.data[CONF_TARGETS] for e in (t["x"], t["y"])]
+    unit = common_unit(async_resolve_units(hass, ids, entry.data.get(CONF_UNIT)))
+    if unit and unit != entry.data.get(CONF_UNIT):
+        # Runs before the update listener is registered, so this does not reload.
+        hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_UNIT: unit})
 
 
 @callback

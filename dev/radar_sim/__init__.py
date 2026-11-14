@@ -83,7 +83,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for eid in meta["entities"]:
             domain, object_id = eid.split(".", 1)
             ent_reg.async_get_or_create(
-                domain, DOMAIN, eid, suggested_object_id=object_id, device_id=device.id, config_entry=entry
+                domain, DOMAIN, eid, suggested_object_id=object_id, device_id=device.id, config_entry=entry,
+                unit_of_measurement=meta.get("units", {}).get(eid),  # like real ESPHome sensors
             )
         for eid, state in meta.get("polygons", {}).items():
             hass.states.async_set(eid, state, {"friendly_name": eid.split(".", 1)[1], "max": 255})
