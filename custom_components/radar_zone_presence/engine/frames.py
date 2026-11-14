@@ -102,6 +102,11 @@ class FrameAssembler:
     def pending_since(self) -> float | None:
         return self._pending_since
 
+    def build_at(self, t: float) -> Frame:
+        """Build a frame from the current values, stamped at ``t`` (initial state)."""
+        self._last_update = t
+        return self.build()
+
     def build(self) -> Frame:
         """Close the current window and return the frame."""
         self._pending_since = None
