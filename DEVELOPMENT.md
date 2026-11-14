@@ -18,7 +18,7 @@ Docker is optional: the venv route (2a) needs only Python 3.13+ and Node.
 python3 -m venv .venv
 .venv/bin/pip install pytest-homeassistant-custom-component
 .venv/bin/pip install "$(grep -i '^home-assistant-frontend' .venv/lib/python3.*/site-packages/homeassistant/package_constraints.txt)"
-node tools/export_history.mjs --hours 48      # needs the production CDP tab; writes dev/data/
+PROD_HA_HOST=<your-ha-host> node tools/export_history.mjs --hours 48   # production HA tab in a CDP browser on :9224; writes dev/data/
 dev/run.sh                                    # http://localhost:8124, user dev / password dev
 ```
 

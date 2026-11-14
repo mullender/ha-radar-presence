@@ -193,3 +193,20 @@ Ideas not built yet:
   (vanishing inside an exit area = left).
 - Suggest on-delay from blip durations of likely-ghost visits.
 - Multi-sensor fusion in one room (two radars agree → ghost unlikely).
+
+## 2026-11-14: zone export / import, getting ready for production
+
+- Zones are stored in the config entry options, so there was no way to move
+  zones drawn in the dev instance to production. Added *Export…* / *Import…*
+  to the panel (`frontend/transfer.js`, JSON format `radar_zone_presence/zones`
+  v1, mm). Import merges: same id, else same name + kind, is replaced in place
+  (keeps the entity); the rest is added; area overrides that do not exist on
+  the target instance fall back to inherit. Nothing is saved until Save, and a
+  file from a differently named radar asks first.
+- Production has no HACS (HA OS 2026.11.1), so the README now documents a
+  manual copy into `/config/custom_components/` next to HACS.
+- Before the first push: history was rewritten (unpushed) to drop the
+  production hostname from `tools/*.mjs` (now `PROD_HA_HOST`) and the dev
+  config's home coordinates (now a city-centre location).
+- Per-radar import files generated from the dev instance live in
+  `dev/data/prod-import/` (gitignored: real room layout).

@@ -35,6 +35,19 @@ nothing is written to the device.
   inside/state per frame — "why did the lights come on?" in a minute.
 - **Ghost filters** per zone: on delay, off delay, edge-margin hysteresis;
   reconnect grace per sensor.
+- **Stay occupied until seen leaving** (per zone): LD2450 radars lose a
+  person who sits still. With this on, a target that vanishes inside the zone
+  keeps it occupied until someone is seen walking out (or a new target appears
+  elsewhere, or *Max hold* runs out). No long off delay needed.
+- **Suggested zones:** spots where targets dwell are found in the history and
+  classified from their trails — a real spot (desk, couch) is walked into, a
+  ghost (plant, fan, reflection) appears and vanishes in place. One click turns
+  a spot into a zone or an exclusion, with a configurable outward / inward
+  margin; *Fit to points* reshapes a rough zone around where people actually
+  were. Zone edges that cut through a dwell spot are flagged.
+- **Export / import** a radar's zones as JSON (backup, or move zones from a
+  test instance to production). Import merges by name and is saved only when
+  you press Save.
 
 ## Entities
 
@@ -59,12 +72,27 @@ frames where Y did not change. This integration coalesces updates into frames
 keeps legitimate `x == 0` readings. See [DESIGN.md](DESIGN.md) §4 for the
 measurements.
 
-## Install (HACS custom repository)
+## Install
+
+**With HACS** (custom repository):
 
 1. HACS → ⋮ → Custom repositories → `https://github.com/mullender/ha-radar-presence`, category *Integration*.
 2. Download *Radar Zone Presence*, restart Home Assistant.
-3. Settings → Devices & services → Add integration → *Radar Zone Presence*, pick a radar.
-4. Open **Radar Zones** in the sidebar and draw zones.
+
+**Manually:** copy `custom_components/radar_zone_presence/` from this
+repository (Code → Download ZIP) into your Home Assistant's
+`/config/custom_components/` (e.g. with the Samba share, SSH or Studio Code
+Server add-on) and restart Home Assistant.
+
+Then:
+
+1. Settings → Devices & services → Add integration → *Radar Zone Presence*,
+   pick a radar. Repeat for each radar.
+2. Open **Radar Zones** in the sidebar. Existing
+   `input_text.<device>_zone_polygon_N` helpers show up as *Import N legacy
+   polygon(s)*; zones exported from another instance load with *Import…*.
+3. Draw or adjust zones and press **Save**; the presence entities appear on
+   the radar's device.
 
 Status: early development (v0.1). See [DESIGN.md](DESIGN.md),
 [DEVELOPMENT.md](DEVELOPMENT.md) and [NOTES.md](NOTES.md).

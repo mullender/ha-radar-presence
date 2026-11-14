@@ -8,6 +8,7 @@ import { classify, findDwellSpots, fitHull, flappingEdges, offsetConvex, percent
 import {
   EXCLUDE_COLOR, ZONE_COLORS, clone, el, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
+import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
 const DOMAIN = 'radar_zone_presence';
 const RANGES = [
@@ -603,6 +604,42 @@ class RadarZonePresencePanel extends HTMLElement {
     }
   }
 
+  _exportZones() {
+    const doc = exportZones(this.config, this.zones, this.settings);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2) + '\n'], { type: 'application/json' }));
+    const a = el('a', { href: url, download: exportFilename(this.config) });
+    this.shadowRoot.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  _importZones() {
+    const input = el('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' } });
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (file) this._applyImport(await file.text());
+    });
+    this.shadowRoot.appendChild(input);
+    input.click();
+  }
+
+  /** Merge an export into the draft (unsaved). Exposed for testing as panel._applyImport(text). */
+  _applyImport(text) {
+    let doc;
+    try { doc = parseImport(text); } catch (err) { this._toast(`Import failed: ${err.message}`, true); return; }
+    if (doc.radar.title && doc.radar.title !== this.config.title
+      && !confirm(`This file was exported from "${doc.radar.title}". Import its zones into "${this.config.title}" anyway?`)) return;
+    const { zones, replaced, added } = mergeZones(this.zones, doc.zones, { areaIds: new Set(Object.keys(this.hass.areas || {})) });
+    if (doc.settings.reconnect_grace_s !== undefined) this.settings = { ...this.settings, reconnect_grace_s: doc.settings.reconnect_grace_s };
+    this.selectedId = null;
+    this.selectedVertex = null;
+    this._setZones(zones);
+    this._renderSide();
+    this._toast(`Imported ${added} new and ${replaced} replaced zone(s). Review, then Save.`);
+  }
+
   _revert() {
     if (!confirm('Discard all unsaved changes?')) return;
     this.zones = JSON.parse(this.saved);
@@ -945,7 +982,10 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'btn', onclick: () => { this.drawKind = 'include'; this._setTool('draw'); } }, '+ Zone'),
         el('button', { class: 'btn', onclick: () => { this.drawKind = 'exclude'; this._setTool('draw'); } }, '+ Exclusion'),
         el('button', { class: 'btn', title: 'Zone covering the whole field of view', onclick: () => this._addZone(fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 12), 'include', 'Whole room') }, 'Fill detection area'),
-        legacy.length ? el('button', { class: 'btn', title: legacy.map(l => l.entity_id).join('\n'), onclick: () => legacy.forEach(lp => this._addZone(lp.polygon, 'include', `Polygon ${lp.n}`)) }, `Import ${legacy.length} legacy polygon(s)`) : ''));
+        legacy.length ? el('button', { class: 'btn', title: legacy.map(l => l.entity_id).join('\n'), onclick: () => legacy.forEach(lp => this._addZone(lp.polygon, 'include', `Polygon ${lp.n}`)) }, `Import ${legacy.length} legacy polygon(s)`) : ''),
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn', title: 'Download these zones (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
+        el('button', { class: 'btn', title: 'Load zones from an exported JSON file. Zones with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
     s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', el('div', { class: 'section spots' }), this._settingsSection());
     this._renderLiveBadges();
     this._renderSideStats();
