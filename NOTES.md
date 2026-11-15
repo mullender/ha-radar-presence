@@ -378,3 +378,21 @@ Ideas not built yet:
   the radar subentry flow aborts at once (no radars), do not chain it.
 - Dev floors created for the picker: Ground (Entry, Garage, Laundry), First
   (Living, Kitchen), Second (Bedroom) — a guess, dev only.
+
+## 2026-11-15: production on phase B (516c65b)
+
+- Old v1 entry (living-room EPL only) backed up to `dev/data/prod-backup/`,
+  deleted (nothing referenced its entities), new version installed through the
+  Marketplace, HA restarted, Home entry created, radar 252dd0 added with its
+  two legacy polygons, Desk restored with the same polygon and filters.
+  Entities: `binary_sensor.desk_presence`, `polygon_1_presence`,
+  `polygon_2_presence` (devices in Living Room, connected via the radar).
+- Marketplace WS API (built-in HACS): `marketplace/repository/info`
+  {repository_id}, `marketplace/repository/refresh` {repository} (needed
+  before `update.radar_zone_presence` sees a new commit); install with
+  `update.install`, then restart (repair `restart_required_*`).
+- Bug found on the way: browsers kept the old `util.js` (relative imports had
+  no version) and the new panel never registered. The frontend is now served
+  under `/radar_zone_presence_static/<version>/`.
+- After an HA restart, background CDP tabs don't reconnect their websocket
+  until reloaded.
