@@ -8,7 +8,8 @@ with the true exit doors.
       --configs /tmp/devcfg --doors dev/data/doors.json \
       --floors '{"bedroom": 3, "laundry_room": 3, "living_room": 2, "kitchen": 2, "entry": 1, "garage": 1}' \
       --exits '{"entry": ["binary_sensor.front_door_lock_door"], "garage": ["cover.ratgdo32disco_313e18_door"]}' \
-      --from 2026-11-14T07:30 --to 2026-11-14T10:15 --tz -8
+      --portals '{"entry": {"Front door": "outside", "Garage Entry Door": "garage", "Stairs": "living_room"}}' \
+      --truth dev/data/truth.json --from 2026-11-14T07:30 --to 2026-11-14T10:15 --tz -8
 
 --doors: {entity_id: [[epoch_s, state], ...]} (binary_sensor on/off, or cover
 open/opening/closing/closed). Times are printed in --tz (hours from UTC).
@@ -31,7 +32,7 @@ import fixtures_util as fu  # noqa: E402
 
 from custom_components.radar_zone_presence.engine import Zone, assemble, point_in_polygon  # noqa: E402
 from custom_components.radar_zone_presence.engine.align import alignment_groups, apply, invert  # noqa: E402
-from custom_components.radar_zone_presence.engine.headcount import HeadCount, Region  # noqa: E402
+from custom_components.radar_zone_presence.engine.headcount import HeadCount, Portal, Region  # noqa: E402
 from custom_components.radar_zone_presence.engine.tracker import Observation, Tracker  # noqa: E402
 
 OPEN_STATES = {"on", "open", "opening", "closing"}
@@ -51,6 +52,10 @@ def main() -> None:
     ap.add_argument("--tz", type=float, default=0.0)
     ap.add_argument("--trace", type=int, help="also print every change of this token")
     ap.add_argument("--bootstrap-h", type=float, default=2.0, help="hours at the start where new people need no door")
+    ap.add_argument("--portals", default="{}", help='JSON: area -> {exit zone name: area it leads to, or "outside"}')
+    ap.add_argument("--extra-zones", default="{}", help="JSON: radar title suffix -> [zone dicts] added to its config (try zones before drawing them)")
+    ap.add_argument("--truth", type=Path, help="ground truth JSON (exact counts, upper bounds) to score against")
+    ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
 
@@ -68,6 +73,10 @@ def main() -> None:
         x = x[0] if isinstance(x, list) else x
         x = x.get("result", x)
         cfgs[x["radar_id"]] = x
+    for suffix, zs in json.loads(a.extra_zones).items():
+        c = next(c for c in cfgs.values() if c["title"].endswith(suffix))
+        c["zones"] = [*c["zones"], *({"id": f"extra{k}", **z} for k, z in enumerate(zs))]
+    portal_map = json.loads(a.portals)
     groups = alignment_groups({rid: (c["settings"].get("display") or {}).get("aligned_to") for rid, c in cfgs.items()})
 
     frames: dict[str, list] = {}
@@ -91,7 +100,13 @@ def main() -> None:
         if area not in floors or area in unobserved:
             continue
         name = area if area not in [r.id for r in regions] else f"{area}_{g.anchor[-4:]}"
-        regions.append(Region(name, floors[area], tuple(exits.get(area, ())), cfgs[g.anchor]["title"]))
+        portals = tuple(
+            Portal(z["name"], tuple(apply(g.to_anchor[rid], *pt) for pt in z["polygon"]), () if to == "outside" else tuple(to if isinstance(to, list) else [to]))
+            for rid in g.members
+            for z in cfgs[rid]["zones"]
+            if z["kind"] == "exit" and (to := portal_map.get(area, {}).get(z["name"])) is not None
+        )
+        regions.append(Region(name, floors[area], tuple(exits.get(area, ())), cfgs[g.anchor]["title"], portals=portals))
         spots = [
             Zone(f"{rid}:{z['id']}", z["name"], z["kind"], tuple(apply(g.to_anchor[rid], *p) for p in z["polygon"]))
             for rid in g.members
@@ -111,6 +126,8 @@ def main() -> None:
     events.sort(key=lambda e: (e[0], e[1]))
     t_from, t_to = ts(a.t_from), ts(a.t_to)
     last_counts = None
+    timeline: list[tuple[float, int, bool]] = []  # (t, home count, unknown)
+    say = (lambda *_: None) if a.quiet else print
     n_changes = 0
     tick = None
     for t, kind, key, payload in events:
@@ -122,15 +139,17 @@ def main() -> None:
             tick += 5
             n_before = len(hc.changes)
             hc.advance(tick)
+            record(timeline, hc, tick)
             for c in hc.changes[n_before:]:
-                if c.kind == "left" and (t_from is None or tick >= t_from):
+                if c.kind in ("left", "back", "arrived", "not a person", "confirmed") and (t_from is None or tick >= t_from):
                     floors_s = "  ".join(f"F{fl}:{n}" for fl, n in sorted(hc.by_floor().items(), reverse=True))
-                    print(f"{fmt(tick)}  home {hc.count()}  {floors_s}   left #{c.token} {c.region} {c.detail.split()[0]}")
+                    say(f"{fmt(tick)}  home {hc.count()}  {floors_s}   {c.kind} #{c.token} {c.region} {c.detail}")
         n_changes = len(hc.changes) if tick + 5 >= t and n_changes < len(hc.changes) and hc.changes[-1].kind == "left" else n_changes
         if kind == 1:
             hc.door(key, payload in OPEN_STATES, t)
+            record(timeline, hc, t)
             if (t_from is None or t >= t_from) and key in hc._door_region:
-                print(f"{fmt(t)}  door {key.split('.')[-1]} -> {payload}")
+                say(f"{fmt(t)}  door {key.split('.')[-1]} -> {payload}")
             continue
         name = region_of[key]
         tr, kept, g = trackers[name]
@@ -142,6 +161,7 @@ def main() -> None:
         ]
         out = tr.fuse([o for obs in kept.values() for o in obs], t)
         hc.frame(name, {tg.slot: (tg.x, tg.y) for tg in out.targets}, t)
+        record(timeline, hc, t)
         counts = (hc.count(), tuple(sorted(hc.by_floor().items(), reverse=True)))
         new_changes = hc.changes[n_changes:]
         n_changes = len(hc.changes)
@@ -149,8 +169,85 @@ def main() -> None:
             if t_from is None or t >= t_from:
                 floors_s = "  ".join(f"F{fl}:{n}" for fl, n in counts[1])
                 why = "; ".join(f"{c.kind} #{c.token} {c.region} {c.detail}".strip() for c in new_changes)
-                print(f"{fmt(t)}  home {counts[0]}  {floors_s}   {why}")
+                say(f"{fmt(t)}  home {counts[0]}  {floors_s}   {why}")
             last_counts = counts
+
+    if timeline:
+        timeline.append((tick if tick is not None else timeline[-1][0], *timeline[-1][1:]))
+    if a.truth:
+        exits_all = {e for es in exits.values() for e in es}
+        door_times = [(t, s) for e, rows in doors.items() if e in exits_all for t, s in rows]
+        for line in score(timeline, json.loads(a.truth.read_text()), door_times, fmt):
+            print(line)
+
+
+def record(timeline: list, hc: HeadCount, t: float) -> None:
+    unknown = bool(getattr(hc, "unknown", lambda: False)())
+    n = hc.count()
+    if not timeline or timeline[-1][1:] != (n, unknown):
+        timeline.append((t, n, unknown))
+
+
+EXIT_SETTLE_S = 600.0  # a count may change up to this long after an exit door was used
+
+
+def score(timeline: list, truth: dict, door_times: list, fmt) -> list[str]:
+    """Hours wrong against exact intervals, hours above upper bounds, count changes without an exit door."""
+    tz = dt.timezone(dt.timedelta(hours=truth.get("tz", 0)))
+
+    def ts(s: str) -> float:
+        return dt.datetime.fromisoformat(s).replace(tzinfo=tz).timestamp()
+
+    t0, t_end = timeline[0][0], timeline[-1][0]
+    segs = [(t, nxt[0] if (nxt := timeline[k + 1] if k + 1 < len(timeline) else None) else t_end, n, u)
+            for k, (t, n, u) in enumerate(timeline)]
+    out, total = [], {"wrong_h": 0.0, "exact_h": 0.0, "over_h": 0.0, "unknown_h": 0.0}
+    for lo_s, hi_s, want, why in truth.get("exact", []):
+        lo, hi = max(ts(lo_s), t0), min(ts(hi_s), t_end)
+        if hi <= lo:
+            continue
+        wrong = unknown = 0.0
+        seen: dict[int, float] = {}
+        for a, b, n, u in segs:
+            d = max(0.0, min(b, hi) - max(a, lo))
+            if not d:
+                continue
+            if u:
+                unknown += d
+            elif n != want:
+                wrong += d
+            seen[n] = seen.get(n, 0.0) + d
+        total["wrong_h"] += wrong / 3600
+        total["unknown_h"] += unknown / 3600
+        total["exact_h"] += (hi - lo) / 3600
+        counts = ", ".join(f"{n}: {d / 3600:.1f}h" for n, d in sorted(seen.items()))
+        out.append(f"  {fmt(lo)} - {fmt(hi)}  want {want}  wrong {wrong / 3600:.2f}h  ({counts})  {why}")
+    bounds = [(ts(lo), ts(hi), n) for lo, hi, n, _ in truth.get("max", [])]
+    for a, b, n, u in segs:
+        if u:
+            continue
+        cuts = sorted({a, b, *(x for lo, hi, _ in bounds for x in (lo, hi) if a < x < b)})
+        for c0, c1 in zip(cuts, cuts[1:]):
+            mx = min((m for lo, hi, m in bounds if lo <= c0 and c1 <= hi), default=None)
+            if mx is not None and n > mx:
+                total["over_h"] += (c1 - c0) / 3600
+    door_ts = sorted(t for t, _ in door_times)
+    stray = []
+    import bisect
+    for k in range(1, len(timeline)):
+        t, n, u = timeline[k]
+        if u or timeline[k - 1][2] or n == timeline[k - 1][1]:
+            continue
+        i = bisect.bisect_right(door_ts, t)
+        if i == 0 or t - door_ts[i - 1] > EXIT_SETTLE_S:
+            stray.append((t, timeline[k - 1][1], n))
+    changes = sum(1 for k in range(1, len(timeline)) if timeline[k][1] != timeline[k - 1][1])
+    out.insert(0, (
+        f"SCORE  wrong {total['wrong_h']:.2f}h of {total['exact_h']:.1f}h exact  over-bound {total['over_h']:.2f}h  "
+        f"unknown {total['unknown_h']:.2f}h  changes {changes}  without a door {len(stray)}"
+    ))
+    out += [f"  no door: {fmt(t)} {a} -> {b}" for t, a, b in stray[:15]]
+    return out
 
 
 if __name__ == "__main__":

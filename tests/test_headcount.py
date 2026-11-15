@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.radar_zone_presence.engine.headcount import HeadCount, Region
+from custom_components.radar_zone_presence.engine.headcount import HeadCount, Portal, Region
 
 BIG_DOOR = "cover.garage_door"
 GARAGE_ENTRY = "binary_sensor.garage_entry_door"
@@ -66,8 +66,11 @@ def test_saturday_morning() -> None:
     hc.door(GARAGE_ENTRY, True, 4829)
     hc.door(GARAGE_ENTRY, False, 4831)
     see(hc, "entry", 4832, 4840, {2: (500, 1500)})  # ...who walks on into the hallway
+    assert hc.unknown()  # the doors were just used: the hallway's count is not firm yet
+    see(hc, "living", 4845, 4870, {4: (1000, 1000)})  # ...and up the stairs: in
     hc.advance(4900)
-    assert floors(hc) == (2, 1, 0, 1)
+    assert not hc.unknown()
+    assert floors(hc) == (2, 1, 1, 0)
 
 
 def test_car_in_the_garage_is_not_a_person() -> None:
@@ -101,7 +104,6 @@ def test_nobody_appears_without_a_door() -> None:
     assert hc.count() == 1
 
 
-@pytest.mark.xfail(reason="open: the arrival is matched to the unseen sleeper upstairs instead of counted", strict=True)
 def test_saturday_morning_with_an_unobserved_garage() -> None:
     """The garage radar only sees ghosts through the glass door: the garage is inferred from its two doors."""
     regions = [*REGIONS[:3], Region("garage", 1, (BIG_DOOR,), observed=False)]
@@ -122,8 +124,8 @@ def test_saturday_morning_with_an_unobserved_garage() -> None:
     hc.door(BIG_DOOR, False, 4815)
     hc.door(GARAGE_ENTRY, True, 4850)
     hc.door(GARAGE_ENTRY, False, 4853)
-    see(hc, "entry", 4852, 4860, {2: (500, 1500)})
-    hc.advance(4900)
+    see(hc, "entry", 4852, 4900, {2: (500, 1500)})  # (still in the hallway well after the doors closed)
+    hc.advance(4920)
     assert floors(hc) == (2, 1, 0, 1)
 
 
@@ -138,3 +140,60 @@ def test_fetching_something_from_the_garage_is_not_leaving() -> None:
     see(hc, "entry", 62, 80, {1: (500, 1500)})  # back in the hallway; the big door never moved
     hc.advance(400)
     assert floors(hc) == (1, 0, 0, 1)
+
+
+STAIRS_DOWN = Portal("Stairs", ((0, 0), (1000, 0), (1000, 800), (0, 800)), ("living",))
+FRONT_PORTAL = Portal("Front door", ((-2100, 2000), (-1900, 2000), (-1900, 3000), (-2100, 3000)), ())
+GARAGE_PORTAL = Portal("Garage entry door", ((-1900, 3200), (-800, 3200), (-800, 3400), (-1900, 3400)), ("garage",))
+STAIRS_UP = Portal("Stairs to entry", ((500, 0), (1500, 0), (1500, 1000), (500, 1000)), ("entry", "bedroom"))
+DOORWAY_REGIONS = [
+    Region("bedroom", 3),
+    Region("living", 2, portals=(STAIRS_UP,)),
+    Region("entry", 1, (FRONT,), portals=(STAIRS_DOWN, FRONT_PORTAL, GARAGE_PORTAL)),
+    Region("garage", 1, (BIG_DOOR,), observed=False),
+]
+
+
+def test_someone_who_sat_still_for_hours_and_then_leaves_is_gone() -> None:
+    """A track at the bottom of the stairs is someone from upstairs, however long they sat still."""
+    hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
+    see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})  # two on the couch, then still (lost)
+    see(hc, "living", 7200, 7210, {1: (-3000, 4000)})  # one gets up and walks around up there...
+    see(hc, "entry", 7230, 7240, {5: (500, 400)})  # ...the other comes down the stairs, two hours after last seen
+    see(hc, "entry", 7241, 7250, {5: (-1800, 2500)})
+    hc.door(FRONT, True, 7250)
+    hc.door(FRONT, False, 7256)
+    assert hc.unknown()
+    hc.advance(7256 + 700)
+    assert not hc.unknown()
+    assert floors(hc) == (1, 0, 1, 0)
+
+
+def test_coming_down_to_greet_someone_arriving_through_the_garage() -> None:
+    """Big door first (the remote in the car): someone coming in. Nobody inside is put in doubt."""
+    hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
+    see(hc, "living", 0, 25, {1: (-3000, 4000)})
+    hc.door(BIG_DOOR, True, 1000)
+    hc.door(GARAGE_ENTRY, True, 1030)
+    hc.door(BIG_DOOR, False, 1031)
+    see(hc, "entry", 1020, 1050, {3: (600, 400)})  # comes down the stairs to say hello
+    see(hc, "entry", 1032, 1050, {4: (-1300, 3100)})  # someone in through the garage-entry door
+    hc.door(GARAGE_ENTRY, False, 1034)
+    see(hc, "living", 1052, 1090, {6: (900, 500), 7: (-2000, 3000)})  # both up the stairs
+    hc.advance(1200)
+    assert floors(hc) == (2, 0, 2, 0)
+
+
+def test_leaving_through_the_garage_does_not_count_the_door_as_someone_new() -> None:
+    """Garage-entry door, then the big door: going out. A track at the garage-entry door is the leaver."""
+    hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
+    see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})
+    see(hc, "entry", 500, 510, {5: (500, 400)})
+    see(hc, "entry", 511, 520, {5: (-1300, 3100)})
+    hc.door(GARAGE_ENTRY, True, 521)
+    hc.door(GARAGE_ENTRY, False, 524)
+    hc.door(BIG_DOOR, True, 530)
+    see(hc, "entry", 531, 535, {8: (-1300, 3150)})  # a blip at the door as it swings
+    hc.door(BIG_DOOR, False, 560)
+    hc.advance(560 + 700)
+    assert hc.count() == 1
