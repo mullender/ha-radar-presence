@@ -49,7 +49,8 @@ be home, each with the region where they were last seen.
   opened has arrived.
 - **No door, no new person**: a track no one can explain (a split track, a
   reflection, a washer) becomes a person only after ``CONFIRM_S`` apart from
-  everyone else, and counts once it walks into another region or has been
+  everyone else (and not while someone is in view in a neighbouring region,
+  who may be the same person seen by two radars), and counts once it walks into another region or has been
   seen for ``UNEXPLAINED_SEEN_S``.
 - Counts are the tokens per region, per floor and in total, so the levels
   always add up.
@@ -111,8 +112,11 @@ class Token:
     visible: tuple[str, int] | None = None  # (region, track id) while seen
     provisional: bool = False  # unexplained, not yet confirmed as a person
     unknown: bool = False  # on an exit floor while its door was used: maybe left
+    unknown_floor: int = 0  # ... the floor of that exit
     seen_s: float = 0.0  # time seen since created
     floor_seen: dict[int, float] = field(default_factory=dict)  # floor -> last time seen there
+    seen_region: str = ""  # where last actually seen (region can be a guess: moved unseen)
+    pos: tuple[float, float] | None = None  # where last seen (in seen_region's coordinates)
 
 
 @dataclass(slots=True)
@@ -226,7 +230,7 @@ class HeadCount:
                 if w.direction == "in":
                     break
                 if self.regions[tok.region].floor == floor or t - tok.floor_seen.get(floor, float("-inf")) <= RECENT_S:
-                    self._doubt(tok, t, entity_id)
+                    self._doubt(tok, t, entity_id, floor)
         elif w is not None and entity_id in w.open_doors:
             w.open_doors.discard(entity_id)
             if not w.open_doors:
@@ -256,7 +260,9 @@ class HeadCount:
                 self._bind(tok, region, tid, t)  # continuing
             else:
                 # A track appears (new, or re-found by the tracker): whoever could be here and was seen last.
-                self._appear(region, tid, t, tracks[tid], prefer=tok if tok is not None and tok.visible is None else None)
+                # (A revived track keeps its person only if they have not been seen elsewhere since.)
+                stale = tok is None or tok.visible is not None or tok.seen_region != region
+                self._appear(region, tid, t, tracks[tid], prefer=None if stale else tok)
         for key in [k for k in self._pending if k[0] == region]:
             self._recheck(key, t)
         self._visible[region] = cur
@@ -290,9 +296,10 @@ class HeadCount:
         w = self._windows.get(self.regions[region].floor)
         return w if w is not None and self._unsettled(w.floor, t) else None
 
-    def _doubt(self, tok: Token, t: float, why: str) -> None:
+    def _doubt(self, tok: Token, t: float, why: str, floor: int | None = None) -> None:
         if not tok.unknown:
             tok.unknown = True
+            tok.unknown_floor = self.regions[tok.region].floor if floor is None else floor
             tok.since = t
             self.changes.append(Change(t, "unknown", tok.id, tok.region, why))
 
@@ -301,7 +308,7 @@ class HeadCount:
         for tok in list(self.tokens.values()):
             if not tok.unknown:
                 continue
-            w = self._windows.get(self.regions[tok.region].floor)
+            w = self._windows.get(tok.unknown_floor)
             if w is None or w.closed is None:
                 continue
             if tok.visible is not None and t - max(w.closed, tok.since) >= LAG_S:
@@ -343,12 +350,15 @@ class HeadCount:
         if tok.visible == (region, tid):
             tok.seen_s += max(0.0, t - tok.last_seen)
         if tok.region != region:
-            self.changes.append(Change(t, "moved", tok.id, region, f"from {tok.region}"))
+            at = f" ({tok.pos[0]:.0f}, {tok.pos[1]:.0f}) -> ({self._pos[region][tid][0]:.0f}, {self._pos[region][tid][1]:.0f})" if tok.pos and tid in self._pos[region] else ""
+            self.changes.append(Change(t, "moved", tok.id, region, f"from {tok.region}{at} after {t - tok.last_seen:.0f}s"))
         for key in [k for k, v in self._binding.items() if v == tok.id and k != (region, tid)]:
             del self._binding[key]
         self._binding[(region, tid)] = tok.id
         tok.region, tok.visible, tok.last_seen = region, (region, tid), t
         tok.floor_seen[self.regions[region].floor] = t
+        tok.seen_region = region
+        tok.pos = self._pos[region].get(tid, tok.pos)
         if tok.unknown and self._window_floor(region, t) is None:
             self._establish(tok, t, "walked in")  # off the exit floor (or seen again after the window): inside
         elif not tok.unknown and (w := self._window_floor(region, t)) is not None and w.direction != "in" and not tok.provisional:
@@ -386,8 +396,6 @@ class HeadCount:
         tok.region = region
         if (w := self._window_floor(region, t)) is not None and w.direction != "in":
             self._doubt(tok, t, "towards the exit")
-        elif tok.unknown:
-            self._establish(tok, t, "walked in")
 
     def _into_unobserved(self, door: str, t: float) -> None:
         """A door into an unobserved region was used: whoever was just lost next to it went in."""
@@ -454,6 +462,13 @@ class HeadCount:
                 best = (tok.last_seen, cost, tok)
         return best[2] if best else None
 
+    def _next_to_someone(self, region: str, tid: int, pos: tuple[float, float]) -> bool:
+        for k, q in self._pos[region].items():
+            tok = self.tokens.get(self._binding.get((region, k), -1))
+            if k != tid and tok is not None and tok.visible == (region, k) and math.hypot(pos[0] - q[0], pos[1] - q[1]) < SEPARATE_MM:
+                return True
+        return False
+
     def _from_unobserved(self, region: str, t: float) -> bool:
         """Coming out of an unobserved region (the garage) shortly after its exit door opened."""
         for other, door in self._links.get(region, ()):
@@ -465,9 +480,14 @@ class HeadCount:
 
     def _appear(self, region: str, tid: int, t: float, pos: tuple[float, float], prefer: Token | None = None) -> None:
         portal = None if prefer is not None else self._portal_at(region, pos)
+        if prefer is None and portal is None and self._next_to_someone(region, tid, pos):
+            # Right next to someone in view: most likely their track splitting, not someone else arriving.
+            self._pending[(region, tid)] = _Pending(region, tid, t)
+            return
         if portal is not None and all(not self.regions[r].observed for r in portal.to):
-            # At a door to outside or the garage: someone back from the garage, else someone coming in.
-            tok = self._match(region, t, only=portal.to) if portal.to else None
+            # At a door to outside or the garage: someone back from the garage, or someone here lost at the door a
+            # moment ago (seen through it, or the radar dropped them in the doorway), else someone coming in.
+            tok = (self._match(region, t, only=portal.to) if portal.to else None) or self._match(region, t, only=(region,))
         elif portal is not None:
             # At the stairs: someone from where they lead (however long they sat still), else whoever could be.
             tok = self._match(region, t, only=portal.to) or self._match(region, t, only=(region,)) or self._match(region, t)
@@ -491,8 +511,16 @@ class HeadCount:
         """An unexplained track: someone who went unseen meanwhile, or (after a while, apart from others) someone new."""
         region, tid = key
         p = self._pending[key]
+        if self._next_to_someone(region, tid, self._pos[region][tid]):
+            return  # still beside the person it probably split from
         if (tok := self._match(region, t)) is not None:
             del self._pending[key]
+            self._bind(tok, region, tid, t)
+            return
+        if (w := self._window_floor(region, t)) is not None and w.direction != "out":
+            del self._pending[key]  # seen outside before the door opened (radars see through doors): coming in
+            tok = self._new(region, t, "arrived")
+            tok.unknown = True
             self._bind(tok, region, tid, t)
             return
         wait = BOOTSTRAP_CONFIRM_S if t < self._bootstrap_until else CONFIRM_S
@@ -500,7 +528,9 @@ class HeadCount:
             return
         x, y = self._pos[region][tid]
         others = [q for k, q in self._pos[region].items() if k != tid]
-        if all(math.hypot(x - q[0], y - q[1]) >= SEPARATE_MM for q in others):
+        # Someone in view next door (no door between) may be this very person, seen by both radars.
+        neighbour_seen = any(door is None and self._visible.get(other) for other, door in self._links.get(region, ()))
+        if not neighbour_seen and all(math.hypot(x - q[0], y - q[1]) >= SEPARATE_MM for q in others):
             del self._pending[key]
             tok = self._new(region, t, "bootstrap" if t < self._bootstrap_until else "unexplained")
             tok.provisional = t >= self._bootstrap_until

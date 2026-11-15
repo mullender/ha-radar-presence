@@ -209,9 +209,11 @@ class RadarZonePresencePanel extends HTMLElement {
     const stored = localStorage.getItem('rzp.radar');
     const pick = [fromHash, stored].find(id => this.radars.some(r => r.radar_id === id)) || this.radars[0]?.radar_id;
     if (pick) {
-      const zoneId = new URLSearchParams(location.hash.slice(1)).get('zone'); // before the hash is rewritten
+      const q = new URLSearchParams(location.hash.slice(1)); // before the hash is rewritten
+      const zoneId = q.get('zone'), at = this._rangeFor(q.get('t'));
       await this._selectRadar(pick);
       if (zoneId && this.zones.some(z => z.id === zoneId)) this._select(zoneId, null);
+      if (at != null) this._showTime(at);
     }
     else this._renderEmpty();
   }
@@ -220,8 +222,28 @@ class RadarZonePresencePanel extends HTMLElement {
     const q = new URLSearchParams(location.hash.slice(1));
     const entry = q.get('radar'), zone = q.get('zone');
     if (!entry || !this.radars?.some(r => r.radar_id === entry)) return;
+    const range = this.rangeS, at = this._rangeFor(q.get('t'));
     if (entry !== this.radarId) await this._selectRadar(entry);
+    else if (at != null && this.rangeS !== range) { this._renderHeader(); await this._loadHistory(); }
     if (zone && this.zones.some(z => z.id === zone)) this._select(zone, null);
+    if (at != null) this._showTime(at);
+  }
+
+  /** Deep link `#radar=…&t=<epoch s>`: pick the shortest history range that holds t. Returns t, or null. */
+  _rangeFor(tParam) {
+    const t = Number(tParam);
+    if (!tParam || !Number.isFinite(t)) return null;
+    const ago = Date.now() / 1000 - t;
+    this.rangeS = (RANGES.find(([, s]) => s >= ago + 600) || RANGES[RANGES.length - 1])[1];
+    return t;
+  }
+
+  /** Replay from just before t, timeline zoomed to the 10 minutes around it. */
+  _showTime(t) {
+    if (!this.hist) return;
+    this.preferLive = false;
+    this.timeline.focus(t - 300, t + 300);
+    this._seek(t - 30);
   }
 
   async _loadRadars() {

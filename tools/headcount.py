@@ -55,6 +55,7 @@ def main() -> None:
     ap.add_argument("--portals", default="{}", help='JSON: area -> {exit zone name: area it leads to, or "outside"}')
     ap.add_argument("--extra-zones", default="{}", help="JSON: radar title suffix -> [zone dicts] added to its config (try zones before drawing them)")
     ap.add_argument("--truth", type=Path, help="ground truth JSON (exact counts, upper bounds) to score against")
+    ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
@@ -128,6 +129,7 @@ def main() -> None:
     last_counts = None
     timeline: list[tuple[float, int, bool]] = []  # (t, home count, unknown)
     say = (lambda *_: None) if a.quiet else print
+    dumped: dict[str, dict] = {}
     n_changes = 0
     tick = None
     for t, kind, key, payload in events:
@@ -161,6 +163,12 @@ def main() -> None:
         ]
         out = tr.fuse([o for obs in kept.values() for o in obs], t)
         hc.frame(name, {tg.slot: (tg.x, tg.y) for tg in out.targets}, t)
+        if name in a.dump and (t_from is None or t >= t_from):
+            ids = {tg.slot: (round(tg.x), round(tg.y), hc._binding.get((name, tg.slot))) for tg in out.targets}
+            key = {k: v[2] for k, v in ids.items()}
+            if key != dumped.get(name):
+                dumped[name] = key
+                say(f"{fmt(t)}    [{name}] " + "  ".join(f"t{k}@({x},{y})->#{tok}" for k, (x, y, tok) in sorted(ids.items())))
         record(timeline, hc, t)
         counts = (hc.count(), tuple(sorted(hc.by_floor().items(), reverse=True)))
         new_changes = hc.changes[n_changes:]

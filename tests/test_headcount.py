@@ -176,10 +176,11 @@ def test_coming_down_to_greet_someone_arriving_through_the_garage() -> None:
     hc.door(BIG_DOOR, True, 1000)
     hc.door(GARAGE_ENTRY, True, 1030)
     hc.door(BIG_DOOR, False, 1031)
-    see(hc, "entry", 1020, 1050, {3: (600, 400)})  # comes down the stairs to say hello
-    see(hc, "entry", 1032, 1050, {4: (-1300, 3100)})  # someone in through the garage-entry door
+    see(hc, "entry", 1020, 1031, {3: (600, 400)})  # comes down the stairs to say hello...
+    see(hc, "entry", 1032, 1045, {3: (300, 1500), 4: (-1300, 2900)})  # ...as someone comes in the garage-entry door
     hc.door(GARAGE_ENTRY, False, 1034)
-    see(hc, "living", 1052, 1090, {6: (900, 500), 7: (-2000, 3000)})  # both up the stairs
+    see(hc, "entry", 1046, 1050, {3: (700, 500), 4: (1200, 400)})  # both to the stairs
+    see(hc, "living", 1052, 1090, {6: (900, 500), 7: (1400, 300)})  # both up the stairs (appearing at the top)
     hc.advance(1200)
     assert floors(hc) == (2, 0, 2, 0)
 
