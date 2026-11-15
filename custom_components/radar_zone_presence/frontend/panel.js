@@ -6,7 +6,7 @@ import './timeline.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
-  classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
+  classify, crossCheck, crossGhost, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
@@ -1533,12 +1533,34 @@ class RadarZonePresencePanel extends HTMLElement {
     const includes = this.zones.filter(z => z.kind === 'include' && !validatePolygon(z.polygon));
     const window = this._analysisWindow();
     const margin = this._margin();
+    const peers = this._crossPeers();
     this.spots = findDwellSpots(this.hist, { exclusions, window }).map((sp, i) => {
       const polygon = offsetConvex(sp.hull, margin) || sp.hull;
       const stats = trailStats(this.hist, polygon, { exclusions, window });
       const covered = includes.find(z => pointInPolygon(sp.centroid[0], sp.centroid[1], z.polygon));
-      return { ...sp, n: i + 1, polygon, stats, cls: classify(stats), hold: suggestHold(stats), covered };
+      // Aligned radars that see into the spot: do they see what this radar sees there?
+      const cross = peers.length ? crossCheck(this.hist, polygon, peers, { exclusions, window }) : [];
+      const ghostBy = crossGhost(cross);
+      const cls = ghostBy ? { ...classify(stats), kind: 'ghost', label: 'Likely ghost' } : classify(stats);
+      return { ...sp, n: i + 1, polygon, stats, cls, hold: !ghostBy && suggestHold(stats), covered, cross, ghostBy };
     });
+  }
+
+  /** Aligned radars with loaded history, for cross-checking spots: [{name, hist, T, exclusions, maxDistance}]. */
+  _crossPeers() {
+    if (!this.peerHist?.size || !this.peers?.size) return [];
+    const T = this._peerTransforms();
+    const out = [];
+    for (const [id, hist] of this.peerHist) {
+      const peer = this.peers.get(id);
+      if (!peer || !T.has(id)) continue;
+      out.push({
+        name: peer.cfg.title.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, ''),
+        hist, T: T.get(id), maxDistance: peer.cfg.fov.max_distance_mm,
+        exclusions: peer.cfg.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon)),
+      });
+    }
+    return out;
   }
 
   _suggestionOverlays() {
@@ -1600,6 +1622,8 @@ class RadarZonePresencePanel extends HTMLElement {
           el('span', { class: 'help' }, `${fmtDuration(sp.dwell)} · ${u.fmtLong(Math.hypot(...sp.centroid))} away`),
           el('span', { class: 'badge', style: { background: badgeColor, color: '#fff' }, title: sp.cls.share === null ? '' : `${Math.round(sp.cls.share * 100)}% of visits began with a trail walking in` }, sp.cls.label)),
         el('div', { class: 'help' }, this._trailSummary(sp.stats)),
+        ...sp.cross.map(c => el('div', { class: 'help', title: 'Visits to this spot that the other radar also saw (a target within 60 cm at the same time), and how often it sees people here by itself' },
+          `${c.name} saw ${c.confirmed} of ${c.visits} visits (sees ${c.peerVisits} of its own here)${sp.ghostBy === c ? ' — this radar\'s ghost' : ''}`)),
         sp.covered ? el('div', { class: 'help' }, `inside zone “${sp.covered.name}”`) : '',
         el('div', { class: 'actions', style: { marginTop: '4px' } },
           el('button', { class: 'btn', onclick: () => create('include') }, '+ Zone'),

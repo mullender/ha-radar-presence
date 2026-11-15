@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold,
+  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold, crossCheck, crossGhost,
 } from '../../custom_components/radar_zone_presence/frontend/analysis.js';
 import { polygonArea, pointInPolygon } from '../../custom_components/radar_zone_presence/frontend/engine.js';
 
@@ -191,4 +191,33 @@ test('two radars seeing the same person: rotation, offset and handedness are rec
     const da = [pa[1][0] - pa[0][0], pa[1][1] - pa[0][1]], db = [pb[1][0] - pb[0][0], pb[1][1] - pb[0][1]];
     assert.ok(Math.hypot(da[0] - db[0], da[1] - db[1]) < 60, `views agree: ${da} vs ${db}`);
   }
+});
+
+
+test('cross-check: a spot another radar sees into but never confirms is a ghost of this radar', () => {
+  const spot = [[-500, 2500], [500, 2500], [500, 3500], [-500, 3500]];
+  // This radar: 10 short blips at the spot, every 60 s.
+  const own = [];
+  for (let v = 0; v < 10; v++) for (let k = 0; k < 4; k++) own.push([v * 60 + k * 0.5, [[1, 0, 3000]]]);
+  own.push([700, []]);
+  // Peer at the same place and orientation (identity transform): sees people walk through the
+  // spot 8 times, but in between this radar's blips.
+  const peerFrames = [];
+  for (let v = 0; v < 8; v++) for (let k = 0; k < 4; k++) peerFrames.push([v * 60 + 30 + k * 0.5, [[1, 0, 3000]]]);
+  peerFrames.push([700, []]);
+  const peer = { name: 'island', hist: pack(peerFrames), T: [[1, 0, 0], [0, 1, 0]], exclusions: [], maxDistance: 6000 };
+  const [c] = crossCheck(pack(own), spot, [peer]);
+  assert.deepEqual([c.visits, c.confirmed, c.peerVisits], [10, 0, 8]);
+  assert.equal(crossGhost([c]).name, 'island');
+  // The same peer also seeing this radar's blips: a real spot.
+  const both = pack([...peerFrames.slice(0, -1), ...own.slice(0, -1)].sort((a, b) => a[0] - b[0]).concat([[700, []]]));
+  const [d] = crossCheck(pack(own), spot, [{ ...peer, hist: both }]);
+  assert.equal(d.confirmed, 10);
+  assert.equal(crossGhost([d]), null);
+  // A peer that never sees anything there (blind spot): no verdict.
+  const [e] = crossCheck(pack(own), spot, [{ ...peer, hist: pack([[0, []], [700, []]]) }]);
+  assert.equal(e.peerVisits, 0);
+  assert.equal(crossGhost([e]), null);
+  // A peer whose view does not cover the spot is skipped.
+  assert.deepEqual(crossCheck(pack(own), spot, [{ ...peer, T: [[1, 0, 0], [0, 1, 9000]] }]), []);
 });

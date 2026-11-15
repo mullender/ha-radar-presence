@@ -6,7 +6,7 @@
 // Pure functions over the packed history payload (frames/history), no DOM.
 
 import { pointInPolygon, signedDistance, polygonArea } from './engine.js';
-import { lineIntersection } from './util.js';
+import { affineApply, affineInvert, lineIntersection } from './util.js';
 
 const MAX_GAP_S = 5; // a target's dwell is the time to the next frame, capped
 const BOUNCE_S = 3; // out and back in this fast = jitter across the edge, not a real exit
@@ -291,6 +291,81 @@ export function classify(stats) {
   if (share >= 0.5) return { kind: 'spot', label: 'Dwell spot', share };
   if (share <= 0.15) return { kind: 'ghost', label: 'Likely ghost', share };
   return { kind: 'mixed', label: 'Mixed', share };
+}
+
+const VISIT_GAP_S = 3; // detections closer than this belong to one visit
+const CONFIRM_MM = 600; // another radar's target this close to the spot confirms a visit
+const CONFIRM_SLACK_S = 1;
+
+/** Times (absolute s) of frames with a (non-excluded) target inside `test(x, y)`, mapped by `T` if given. */
+function hitTimes(hist, test, { exclusions = [], T = null, t0 = -Infinity, t1 = Infinity } = {}) {
+  const out = [];
+  let p = 0;
+  for (let i = 0; i < hist.frame_t.length; i++) {
+    const n = hist.frame_n[i], t = hist.start + hist.frame_t[i];
+    let hit = false;
+    for (let k = 0; k < n; k++, p++) {
+      if (hit || t < t0 || t > t1) continue;
+      const x = hist.x[p], y = hist.y[p];
+      if (exclusions.some(z => pointInPolygon(x, y, z.polygon))) continue;
+      const [gx, gy] = T ? affineApply(T, [x, y]) : [x, y];
+      if (test(gx, gy)) hit = true;
+    }
+    if (hit) out.push(t);
+  }
+  return out;
+}
+
+function visits(times) {
+  const out = [];
+  for (const t of times) {
+    const last = out[out.length - 1];
+    if (last && t - last[1] <= VISIT_GAP_S) last[1] = t;
+    else out.push([t, t]);
+  }
+  return out;
+}
+
+/** Inside the field of view (±halfAngle, range), at least `margin` from its edges. */
+function insideView(x, y, maxDistance, halfAngleDeg = 60, margin = 500) {
+  const r = Math.hypot(x, y), a = Math.abs(Math.atan2(x, y)), half = (halfAngleDeg * Math.PI) / 180;
+  return a < half && r * Math.sin(half - a) >= margin && r <= maxDistance - margin;
+}
+
+/**
+ * Does another aligned radar see what this radar sees in a spot? For each peer
+ * whose view covers the spot: this radar's visits to the spot, how many the
+ * peer confirmed (a target of the peer within CONFIRM_MM at the same time),
+ * and how many visits of its own the peer has there (it can see there at all).
+ * peers: [{name, hist, T (peer -> this frame), exclusions (peer's own), maxDistance}].
+ */
+export function crossCheck(hist, poly, peers, { exclusions = [], window } = {}) {
+  const t0 = window ? hist.start + window.t0 : -Infinity, t1 = window ? hist.start + window.t1 : Infinity;
+  const own = visits(hitTimes(hist, (x, y) => pointInPolygon(x, y, poly), { exclusions, t0, t1 }));
+  const c = poly.reduce((a, q) => [a[0] + q[0] / poly.length, a[1] + q[1] / poly.length], [0, 0]);
+  const out = [];
+  for (const peer of peers) {
+    const [px, py] = affineApply(affineInvert(peer.T), c);
+    if (!insideView(px, py, peer.maxDistance)) continue;
+    const near = (x, y) => pointInPolygon(x, y, poly) || signedDistance(x, y, poly) >= -CONFIRM_MM;
+    const times = hitTimes(peer.hist, near, { exclusions: peer.exclusions, T: peer.T, t0, t1 });
+    let confirmed = 0, j = 0;
+    for (const [a, b] of own) {
+      while (j < times.length && times[j] < a - CONFIRM_SLACK_S) j++;
+      if (j < times.length && times[j] <= b + CONFIRM_SLACK_S) confirmed++;
+    }
+    const peerVisits = visits(hitTimes(peer.hist, (x, y) => pointInPolygon(x, y, poly), { exclusions: peer.exclusions, T: peer.T, t0, t1 })).length;
+    out.push({ name: peer.name, visits: own.length, confirmed, peerVisits });
+  }
+  return out;
+}
+
+/**
+ * A spot another radar can see into (it has visits of its own there) but
+ * hardly ever confirms is a ghost of this radar: a reflection, a plant, paper.
+ */
+export function crossGhost(checks, { minVisits = 5, maxShare = 0.2, minPeerVisits = 5 } = {}) {
+  return checks.find(c => c.visits >= minVisits && c.peerVisits >= minPeerVisits && c.confirmed / c.visits <= maxShare) || null;
 }
 
 /** Suggest 'stay occupied until seen leaving' when people often go still inside. */

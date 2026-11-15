@@ -160,3 +160,23 @@ def test_tracked_vectors_up_to_date(fixture: str, grace: float) -> None:
     assert path.exists(), "run with UPDATE_VECTORS=1"
     assert json.loads(path.read_text()) == json.loads(json.dumps(vector)), "vectors stale: UPDATE_VECTORS=1"
     assert any(c["transitions"] for c in cases.values())
+
+
+def test_desk_stays_on_while_the_radar_renumbers_targets() -> None:
+    """Real frames (shifted in time): someone still at the desk, a second person in the kitchen.
+
+    The radar drops the still person and renumbers the kitchen person from
+    slot 2 to slot 1 (twice); later the kitchen person reappears as slot 1
+    while the desk person is not detected. Following slots, Desk went off
+    three times; tracked, it stays on until the max hold runs out.
+    """
+    vec = json.loads((VECTORS / "tracked_desk_two_people.json").read_text())
+    frames = unpack_frames(vec["frames"])
+    zones = [Zone.from_dict(z) for z in vec["zones"]]
+    by_slot = [v for _, k, v in replay(ZoneEngine(zones), frames) if k == "desk"]
+    assert by_slot.count(False) >= 3
+    tracked = replay_group(frames, zones)
+    desk = [(t - frames[0].t, v) for t, k, v in tracked if k == "desk"]
+    assert [v for _, v in desk] == [True, False]
+    assert desk[1][0] > 1500  # off only when the max hold runs out after the last sighting
+    assert vec["transitions"] == [[round(t, 6), k, v] for t, k, v in tracked]

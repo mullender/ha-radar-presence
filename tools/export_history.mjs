@@ -2,6 +2,7 @@
 // CDP browser on localhost:9224.
 //
 // Usage: node tools/export_history.mjs [--hours 48] [--end ISO] [--out dev/data]
+// (CDP_PAGE_ID=<target id> picks a specific tab, e.g. a separate one opened for this.)
 //
 // Writes one gzipped JSON file per radar device that exposes per-target X/Y
 // sensors (EP Lite `target_<n>_x`, Screek 2A `target<n>_x`). Raw state changes
@@ -20,7 +21,8 @@ const end = arg('end', new Date().toISOString());
 const outDir = arg('out', 'dev/data');
 
 const page = (await (await fetch('http://localhost:9224/json/list')).json())
-  .find(p => p.type === 'page' && (process.env.PROD_HA_HOST ? p.url.includes(process.env.PROD_HA_HOST) : !p.url.includes('localhost')));
+  .find(p => p.type === 'page' && (process.env.CDP_PAGE_ID ? p.id === process.env.CDP_PAGE_ID
+    : process.env.PROD_HA_HOST ? p.url.includes(process.env.PROD_HA_HOST) : !p.url.includes('localhost')));
 if (!page) throw new Error('No production HA tab found on localhost:9224');
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise(r => ws.addEventListener('open', r, { once: true }));

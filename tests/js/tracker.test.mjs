@@ -65,9 +65,10 @@ test('group replay matches the Python vector', () => {
 
 for (const file of readdirSync(dir).filter(f => f.startsWith('tracked_'))) {
   const vec = JSON.parse(readFileSync(new URL(file, dir), 'utf8'));
-  for (const [name, c] of Object.entries(vec.cases)) {
+  const cases = vec.cases ?? { default: { zones: vec.zones, transitions: vec.transitions } };
+  for (const [name, c] of Object.entries(cases)) {
     test(`${file} / ${name}`, () => {
-      const { transitions } = replayGroup({ hist: vec.frames, zones: norm(c.zones) }, [], vec.reconnect_grace_s);
+      const { transitions } = replayGroup({ hist: vec.frames, zones: norm(c.zones) }, [], vec.reconnect_grace_s ?? 0);
       sameTransitions(transitions, c.transitions, name);
     });
   }
