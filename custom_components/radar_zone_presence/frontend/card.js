@@ -102,7 +102,7 @@ class RadarZonePresenceCard extends HTMLElement {
 
   _renderChips(states) {
     const box = this.shadowRoot.querySelector('.chips');
-    box.replaceChildren(...this.cfg.zones.filter(z => z.kind !== 'exclude').map(z => {
+    box.replaceChildren(...this.cfg.zones.filter(z => (z.kind || 'include') === 'include').map(z => {
       const chip = document.createElement('span');
       chip.className = `chip${states[z.id] ? ' on' : ''}`;
       chip.textContent = z.name;

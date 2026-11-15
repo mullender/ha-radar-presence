@@ -53,7 +53,8 @@ from .engine import (
     point_in_polygon,
 )
 from .engine.align import AlignmentGroup, Affine, alignment_groups, apply, invert, mul, transform_polygon
-from .engine.fusion import Fuser, Observation
+from .engine.tracker import Observation, Tracker
+from .engine.zones import KIND_LINGER, KIND_TRANSIENT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,6 +92,7 @@ class RadarFeed:
         self.zones = [Zone.from_dict(z) for z in data.get(CONF_ZONES, [])]
         self.exclude = [z for z in self.zones if z.kind == KIND_EXCLUDE]
         self.exits = [z for z in self.zones if z.kind == KIND_EXIT]
+        self.spots = [z for z in self.zones if z.kind in (KIND_LINGER, KIND_TRANSIENT)]
         self.grace_s = grace_s
         self.last_frame: Frame | None = None
         self.kept: tuple[Target, ...] = ()
@@ -162,7 +164,12 @@ class GroupRuntime:
             ]
         self.engine = ZoneEngine([*engine_zones, *self.exits], 0.0)
         self._positions: dict[int, tuple[float, float]] = {}  # track id -> position, previous evaluation
-        self.fuser = Fuser()
+        spots = [
+            Zone(f"{feed.id}:{z.id}", z.name, z.kind, transform_polygon(self.to_anchor[feed.id], z.polygon))
+            for feed in self.feeds
+            for z in feed.spots
+        ]
+        self.tracker = Tracker(spots, [invert(self.to_anchor[f.id]) for f in self.feeds])
         self.snapshot: EngineSnapshot = self.engine.snapshot()
         self.track_radars: dict[int, frozenset[int]] = {}
         self.deadline_unsub: CALLBACK_TYPE | None = None
@@ -192,13 +199,16 @@ class GroupRuntime:
             for tg in feed.kept:
                 x, y = apply(a, tg.x, tg.y)
                 obs.append(Observation(k, tg.slot, x, y))
-        fused = self.fuser.fuse(obs)
+        fused = self.tracker.fuse(obs, t)
         self.track_radars = fused.radars
-        self.snapshot = self.engine.process(Frame(t, fused.targets, self.available, fused.gone))
-        return self._passages(fused.targets, fused.gone)
+        self.snapshot = self.engine.process(Frame(t, fused.targets, self.available, fused.gone, fused.dropped))
+        return self._passages(fused.targets, fused.gone, fused.born)
 
-    def _passages(self, targets: tuple[Target, ...], gone: tuple[int, ...]) -> list[tuple[str, str]]:
-        """Someone appearing in an exit came in; someone vanishing in one left (merges are neither)."""
+    def _passages(self, targets: tuple[Target, ...], gone: tuple[int, ...], born: tuple[int, ...]) -> list[tuple[str, str]]:
+        """Someone new appearing in an exit came in; someone vanishing in one left.
+
+        Merges are neither, and a person re-found where they were lost did not arrive.
+        """
         cur = {tg.slot: (tg.x, tg.y) for tg in targets}
         prev, self._positions = self._positions, cur
         if not self.exits:
@@ -207,12 +217,19 @@ class GroupRuntime:
         for tid, (x, y) in prev.items():
             if tid not in cur and tid not in gone:
                 out += [(e.id, "left") for e in self.exits if point_in_polygon(x, y, e.polygon)]
-        for tid, (x, y) in cur.items():
-            if tid not in prev:
-                out += [(e.id, "arrived") for e in self.exits if point_in_polygon(x, y, e.polygon)]
+        for tid in born:
+            x, y = cur[tid]
+            out += [(e.id, "arrived") for e in self.exits if point_in_polygon(x, y, e.polygon)]
         return out
 
+    def next_deadline(self) -> float | None:
+        ds = [d for d in (self.engine.next_deadline(), self.tracker.next_deadline()) if d is not None]
+        return min(ds) if ds else None
+
     def advance(self, t: float) -> None:
+        """Due deadlines: forget lost people (releasing their holds), apply delays."""
+        if dropped := self.tracker.expire(t):
+            self.engine.release(t, dropped)
         self.engine.advance(t)
         self.snapshot = self.engine.snapshot()
 
@@ -430,7 +447,7 @@ class HomeRuntime:
         if group.deadline_unsub:
             group.deadline_unsub()
             group.deadline_unsub = None
-        deadline = group.engine.next_deadline()
+        deadline = group.next_deadline()
         if deadline is None:
             return
         group.deadline = deadline

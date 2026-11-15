@@ -67,6 +67,13 @@ export function fovPolygon(maxDistance, halfAngleDeg = 60, segments = 24) {
 
 const EPS = 1e-6;
 
+/** [slot, since] of the oldest hold (ties: lowest slot), or null. */
+function oldestHold(rt) {
+  let best = null;
+  for (const [slot, since] of rt.holds) if (best === null || since < best[1] || (since === best[1] && slot < best[0])) best = [slot, since];
+  return best;
+}
+
 /**
  * ZoneEngine: same semantics as the Python engine.
  * zones: [{id, kind, polygon, filters: {on_delay_s, off_delay_s, edge_margin_mm}}]
@@ -77,7 +84,7 @@ export class ZoneEngine {
     this.exclude = zones.filter(z => z.kind === 'exclude');
     this.exits = zones.filter(z => z.kind === 'exit');
     this.grace = reconnectGraceS;
-    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), prevExit: new Set(), heldSince: [] }]));
+    this.rt = new Map(this.include.map(z => [z.id, { raw: false, state: false, since: 0, count: 0, slots: [], prevInside: new Map(), prevExit: new Set(), holds: new Map() }]));
     this.presence = { raw: false, state: false, since: 0 };
     this.available = true;
     this.graceUntil = -Infinity;
@@ -94,9 +101,10 @@ export class ZoneEngine {
   /**
    * targets: array of [slot, x, y]. `gone`: slots that disappeared because they
    * merged into another target (multi-radar fusion), not because they vanished.
-   * Returns nothing; read snapshot().
+   * `dropped`: lost tracks the tracker forgot (release their holds).
+   * Returns nothing; read states().
    */
-  process(t, targets, available = true, gone = null) {
+  process(t, targets, available = true, gone = null, dropped = null) {
     this.advance(t);
     if (available && !this.available) this.graceUntil = t + this.grace;
     this.available = available;
@@ -118,9 +126,10 @@ export class ZoneEngine {
       rt.slots = inside.map(tg => tg[0]);
       const hold = !!z.filters?.hold_until_exit;
       if (hold && t >= this.graceUntil) this._updateHold(rt, kept, new Set(rt.slots), exitSlots, t, gone);
-      else if (!hold) rt.heldSince.length = 0;
-      rt.count = inside.length + rt.heldSince.length;
-      this._setRaw(rt, inside.length > 0 || rt.heldSince.length > 0, t, z.filters);
+      else if (!hold) rt.holds.clear();
+      if (dropped) for (const slot of dropped) rt.holds.delete(slot);
+      rt.count = inside.length + rt.holds.size;
+      this._setRaw(rt, inside.length > 0 || rt.holds.size > 0, t, z.filters);
     }
     this._setRaw(this.presence, kept.length > 0, t, null);
     this.lastT = t;
@@ -129,20 +138,35 @@ export class ZoneEngine {
   _updateHold(rt, kept, insideSlots, exitSlots, t, gone = null) {
     const cur = new Map(kept.map(tg => [tg[0], insideSlots.has(tg[0])]));
     for (const [slot, wasInside] of rt.prevInside) {
-      if (wasInside && !cur.has(slot) && !rt.prevExit.has(slot) && !gone?.includes(slot)) rt.heldSince.push(t);
+      if (wasInside && !cur.has(slot) && !rt.prevExit.has(slot) && !gone?.includes(slot)) rt.holds.set(slot, t);
     }
-    for (const slot of cur.keys()) if (!rt.prevInside.has(slot) && rt.heldSince.length && !exitSlots.has(slot)) rt.heldSince.shift();
+    for (const slot of cur.keys()) rt.holds.delete(slot); // the held person seen again
     rt.prevInside = cur;
     rt.prevExit = exitSlots;
+  }
+
+  /** The tracker forgot these targets: drop their holds (between frames). */
+  release(t, slots) {
+    this.advance(t);
+    for (const z of this.include) {
+      const rt = this.rt.get(z.id);
+      if (!slots.some(s => rt.holds.has(s))) continue;
+      for (const s of slots) rt.holds.delete(s);
+      rt.count = rt.slots.length + rt.holds.size;
+      this._setRaw(rt, rt.slots.length > 0 || rt.holds.size > 0, t, z.filters);
+    }
+    this.lastT = Math.max(this.lastT, t);
   }
 
   _expireHolds(rt, t, f) {
     const max = f?.hold_max_s || 0;
     if (max <= 0) return;
-    while (rt.heldSince.length && rt.heldSince[0] + max <= t + EPS) {
-      const expiredAt = rt.heldSince.shift() + max;
+    let oldest;
+    while ((oldest = oldestHold(rt)) !== null && oldest[1] + max <= t + EPS) {
+      rt.holds.delete(oldest[0]);
+      const expiredAt = oldest[1] + max;
       rt.count -= 1;
-      const raw = rt.slots.length > 0 || rt.heldSince.length > 0;
+      const raw = rt.slots.length > 0 || rt.holds.size > 0;
       if (raw !== rt.raw) { rt.raw = raw; rt.since = expiredAt; }
     }
   }
@@ -165,8 +189,9 @@ export class ZoneEngine {
         best = best === null ? d : Math.min(best, d);
       }
       const max = z.filters?.hold_max_s || 0;
-      if (rt.heldSince.length && max > 0) {
-        const d = rt.heldSince[0] + max;
+      const oldest = oldestHold(rt);
+      if (oldest !== null && max > 0) {
+        const d = oldest[1] + max;
         best = best === null ? d : Math.min(best, d);
       }
     }

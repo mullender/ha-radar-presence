@@ -250,6 +250,29 @@ async def test_off_delay_timer(hass: HomeAssistant, radar_device: str) -> None:
     assert hass.states.get(chair).state == "off"
 
 
+async def test_renumbered_slots_do_not_walk_the_held_person_out(hass: HomeAssistant, radar_device: str) -> None:
+    """The radar drops a still person and moves someone else into their slot (or reuses it later)."""
+    await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN, hold_until_exit=True, hold_max_s=600)])
+    chair = eid(hass, "chair")
+    await move(hass, 1, 20, 120)  # sitting in the chair
+    await move(hass, 2, -60, 80)  # someone else across the room
+    # Chair person dropped; the other one is now reported as target 1.
+    await move(hass, 2, 0, 0)
+    await move(hass, 1, -60, 81)
+    state = hass.states.get(chair)
+    assert state.state == "on" and state.attributes["held"] == 1
+    # The other person leaves view, then appears again as target 1 near where they were.
+    await move(hass, 1, 0, 0)
+    await move(hass, 1, -58, 84)
+    assert hass.states.get(chair).state == "on"
+    # The chair person gets up: seen again next to the chair, then walks off.
+    await move(hass, 2, 25, 118)
+    assert hass.states.get(chair).attributes["held"] == 0
+    for k in range(1, 7):
+        await move(hass, 2, 25 + 10 * k, 118 - 10 * k)
+    assert hass.states.get(chair).state == "off"
+
+
 async def test_hold_until_exit_with_max_hold(hass: HomeAssistant, radar_device: str) -> None:
     entry = await setup_entry(
         hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN, hold_until_exit=True, hold_max_s=60)]
@@ -280,7 +303,7 @@ async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_w
     await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
     cfg = (await client.receive_json())["result"]
     assert cfg["target_unit"] == "in"
-    assert cfg["fov"]["max_distance_mm"] == pytest.approx(6000)
+    assert cfg["fov"]["max_distance_mm"] == pytest.approx(6000)  # the EPL max_distance number
     assert cfg["zones"][0]["entity_id"].startswith("binary_sensor.")
 
     # Self-intersecting polygon is rejected.
@@ -451,7 +474,8 @@ async def test_aligned_radars_share_zones(hass: HomeAssistant, radar_device: str
     await move(hass, 1, 0, 0, slug=SLUG2)
     assert hass.states.get(chair).attributes == {**hass.states.get(chair).attributes, "target_count": 1, "held": 0}
     # They walk out of the zone in radar 1's view: off, nothing held.
-    await move(hass, 1, 80, 60)
+    for k in range(1, 9):
+        await move(hass, 1, 21 + 59 * k / 8, 121 - 61 * k / 8)
     assert hass.states.get(chair).state == "off"
 
     client = await hass_ws_client(hass)
@@ -507,3 +531,23 @@ async def test_frontend_served_under_versioned_path(hass: HomeAssistant, radar_d
     resp = await client.get(url.replace("panel.js", "util.js"))
     assert resp.status == 200
     assert "affineApply" in await resp.text()
+
+
+async def test_linger_and_transient_spots_reach_the_tracker(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN, hold_until_exit=True)])
+    client = await hass_ws_client(hass)
+    spots = [
+        {"name": "Bed", "kind": "linger", "polygon": mm([[-60, 50], [-20, 50], [-20, 90], [-60, 90]])},
+        {"name": "Hall", "kind": "transient", "polygon": mm([[20, 20], [60, 20], [60, 40], [20, 40]])},
+    ]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/zones/save", "radar_id": RADAR, "zones": [zone("chair", "Reading chair", CHAIR_IN, hold_until_exit=True), *spots]})
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
+    cfg = (await client.receive_json())["result"]
+    assert sorted(z["kind"] for z in cfg["zones"]) == ["include", "linger", "transient"]
+    tracker = entry.runtime_data.groups[0].tracker
+    assert len(tracker._linger) == 1 and len(tracker._transient) == 1
+    # Spots have no entities of their own.
+    ours = [e.entity_id for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)]
+    assert not [e for e in ours if "bed" in e or "hall" in e]

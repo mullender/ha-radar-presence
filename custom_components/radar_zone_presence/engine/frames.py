@@ -50,6 +50,8 @@ class Frame:
     # Slots that disappeared because they merged into another target
     # (multi-radar fusion), not because the person vanished.
     gone: tuple[int, ...] = ()
+    # Lost tracks the tracker forgot: release whatever they held.
+    dropped: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)

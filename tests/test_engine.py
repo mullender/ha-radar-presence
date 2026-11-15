@@ -275,12 +275,16 @@ def test_hold_vanishing_elsewhere_still_held_with_exits():
 
 
 def test_hold_someone_coming_in_through_an_exit_is_not_the_held_person():
+    # Slots are identities here (the tracker provides them): B is target 2.
+    def b(t, x, y):
+        return Frame(t, (Target(2, x, y),))
+
     eng = ZoneEngine([zone(hold_until_exit=True), zone("door", "exit", DOORWAY)])
     eng.process(frame(0, (500, 1500)))
     eng.process(frame(1))  # A goes still at the desk: held
-    snap = eng.process(frame(30, (900, 1900)))  # B comes in through the door
+    snap = eng.process(b(30, 900, 1900))  # B comes in through the door
     assert snap.zones["z1"].held == 1 and snap.zones["z1"].count == 2
-    eng.process(frame(31, (950, 1950)))
+    eng.process(b(31, 950, 1950))
     snap = eng.process(frame(32))  # B leaves again through the door
     assert snap.zones["z1"].occupied and snap.zones["z1"].held == 1  # A is still there
     snap = eng.process(frame(40, (520, 1480)))  # A moves: re-detected, not someone new

@@ -49,14 +49,23 @@ nothing is written to the device.
   inside/state per frame — "why did the lights come on?" in a minute.
 - **Ghost filters** per zone: on delay, off delay, edge-margin hysteresis;
   reconnect grace per sensor.
+- **People tracking:** the radar's target numbers are not identities (when it
+  drops a still person, the next target is renumbered into their slot). The
+  integration follows people by position instead: a reading only continues a
+  person if they could have walked there, and someone re-detected near where
+  they vanished keeps their identity.
 - **Stay occupied until seen leaving** (per zone): LD2450 radars lose a
-  person who sits still. With this on, a target that vanishes inside the zone
-  keeps it occupied until someone is seen walking out (or a new target appears
-  elsewhere, or *Max hold* runs out). No long off delay needed.
+  person who sits still. With this on, someone who vanishes inside the zone
+  keeps it occupied until that person is seen again (walking out, or turning
+  up near where they vanished), or *Max hold* runs out. Other people moving
+  elsewhere in the room, or a plant's leaves, do not release it. Someone lost
+  at the side of the radar's view, in an exit or in a *transient spot*
+  (hallway, doorway) is let go after 20 s; a *lingering spot* (bed, couch)
+  always counts as still there. No long off delay needed.
 - **Suggested zones:** spots where targets dwell are found in the history and
   classified from their trails — a real spot (desk, couch) is walked into, a
   ghost (plant, fan, reflection) appears and vanishes in place. One click turns
-  a spot into a zone or an exclusion, with a configurable outward / inward
+  a spot into a zone, a lingering spot or an exclusion, with a configurable outward / inward
   margin; *Fit to points* reshapes a rough zone around where people actually
   were. Zone edges that cut through a dwell spot are flagged.
 - **Export / import** a radar's zones as JSON (backup, or move zones from a

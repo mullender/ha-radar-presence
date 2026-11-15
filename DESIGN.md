@@ -172,11 +172,14 @@ removed over the loaded history, so values are chosen from data, not guessed.
 LD2450-style radars drop a person who sits still (desk, sofa). Instead of a
 long off delay (which delays every real exit), the zone tracks occupants:
 
-- A target that **vanishes inside** the zone becomes a *held* occupant.
-- A target that **appears inside** with someone held is that person
-  re-detected (absorbs one hold).
-- A target that **appears outside** with someone held means they left unseen
-  (releases one hold).
+- A target that **vanishes inside** the zone becomes a *held* occupant,
+  remembered by its tracker id (§9.7).
+- The **same target seen again** releases its hold: inside it counts as
+  present again, outside it left without being seen crossing the edge.
+  Other targets appearing elsewhere do not (until 2026-11-15 any new target
+  outside released a hold, which the radar's slot renumbering defeated).
+- The tracker **forgetting** the target (lost at the side of the view, in an
+  exit or a transient spot: after 20 s) releases its hold.
 - A target **walking out across the edge** ends occupancy as usual.
 - Safety net `hold_max_s` (0 = never): a held occupant expires after that
   long. The editor pre-fills 1.5× the longest still period seen in the zone.
@@ -403,14 +406,11 @@ working.
 - **Evaluation.** Per radar: frame assembly, its exclusions, reconnect grace.
   Per group: kept targets transformed into the anchor frame, fused, one
   `ZoneEngine` with the group's include zones and every member's exits.
-- **Fusion** (`engine/fusion.py`, JS port `frontend/fusion.js`): tracks keep
-  each radar's slot continuity; a new observation joins a track within
-  600 mm that has no observation from the same radar; converging tracks of
-  different radars merge (the absorbed id is reported in `Frame.gone`, so the
-  engine does not hold a phantom); a slot 1200 mm from its track's other
-  radar splits off; a track that loses a radar and lands 800 mm away is a
-  new track. Ids are `10 * radar_index + slot` when free, so a lone radar is
-  the identity and the old behaviour and vectors are unchanged.
+- **Tracking** (`engine/tracker.py`, JS port `frontend/tracker.js`; was
+  `fusion.py` until 2026-11-15, see §9.7): every group, a lone radar too,
+  runs through the tracker. Converging tracks of different radars merge (the
+  absorbed id is reported in `Frame.gone`, so the engine does not hold a
+  phantom); a slot 1200 mm from its track's other radar splits off.
 - **Hand-over.** Overlapping views: continuous track. A gap between views:
   the vanish creates a hold that the appearance on the other radar absorbs.
 - **Entities.** Zone device: occupancy, target count, and per covering radar
@@ -425,8 +425,8 @@ working.
   that carries the radar device's connections, so HA shows it as a linked
   device of the ESPHome device.
 - **Preview.** The panel loads the aligned radars' history and replays the
-  same pipeline (`replayGroup`); `tests/vectors/group_*.json` keeps it equal
-  to `engine.fusion.replay_group`.
+  same pipeline (`replayGroup`); `tests/vectors/group_*.json` and
+  `tracked_*.json` keep it equal to `engine.tracker.replay_group`.
 - **Measured on dev data** (2.1 days, living EPL + kitchen EPL + island
   Screek): Living room 88 -> 102 turn-ons, 23.0 -> 22.8 h occupied. The
   difference is mostly phantom holds the lone radar kept while the person
@@ -435,3 +435,58 @@ working.
 - **Not done.** Per-zone choice of contributing radars; moving a zone to
   another radar of its group; a floor-wide panel view (the current radar's
   view plus *Others* stands in for it).
+
+### 9.7 People tracker (2026-11-15)
+
+Seen in production (living room, two people): someone sat still at the desk
+as target 1 while a second person walked in the kitchen as target 2. The
+LD2450 dropped the still person and **renumbered** the kitchen person into
+slot 1, a 5 m jump in 0.3 s, which the slot-following engine read as the desk
+person walking out (Desk off). Later the desk person was held, and the
+kitchen person reappearing as target 1 on the other side of the room released
+the hold (Desk off again). Desk went off three times in 12 minutes with the
+person sitting there throughout.
+
+The tracker follows people by position; slots are only a hint:
+
+- **Physics gate.** A reading continues a track only within 500 mm (jitter,
+  alignment error) plus 2.5 m/s × time since last seen (capped at 1.5 m).
+- **Matching**, nearest pairs first, over: tracks of the same radar within
+  the gate (a renumbered slot), tracks of other radars within 600 mm (one
+  person seen twice) and *lost* tracks within the same reach of where they
+  vanished (re-found: same id). The rest join another radar's track within
+  600 mm, or are new (`born`, used for exit arrivals).
+- **Lost tracks** are remembered at their last position. Where they vanished
+  decides for how long: the radar keeps seeing walking people and drops
+  still ones, so a vanish in the middle of the room is a person who sat or
+  lay down (*settled*: 12 h, holds expire by `hold_max_s`). A vanish within
+  600 mm of the **side** of every field of view that saw them, in an exit or
+  in a `transient` spot is a person who left: forgotten after 20 s, which
+  releases their holds (`Frame.dropped`, `ZoneEngine.release`). `linger`
+  spots are always settled. At most 32 lost tracks.
+- **Rejected: "moving when lost = left".** In the bedroom people walk to the
+  bed and are dropped a second after lying down; their last 3 s show 1-2 m
+  of movement. Location, not motion, separates the two.
+- **Rejected: the far end of the range as an edge.** The far end is usually
+  the far wall with a bed or desk against it (the desk is 5.3-6.0 m from the
+  living-room EPL, whose firmware cuts at 6 m). Measured: Desk 154 vs 167
+  turn-ons, living room 55 vs 68 with the range edge.
+- **Range.** All supported radars use the LD2450 module: ±60°, up to 8 m
+  (Screeks report up to 7.99 m in the exported data). Everything Presence
+  firmware cuts at its `number.*_max_distance` (6 m in production). The
+  default range is now 8 m (was 6 m), used for drawing the field of view and
+  for zone coverage.
+- **Spots** are new zone kinds stored on the radar like exits: `linger` (bed,
+  couch, desk chair) and `transient` (hallway, doorway). No entity, no
+  state; the panel's dwell-spot suggestions offer *+ Linger*, highlighted
+  where people go still.
+
+Measured on the exported 2 days (all zones' own settings, old → tracker):
+living room 101 → 71 turn-ons with 55 → 29 off-gaps under a minute; Desk
+167 → 154. With hold on every zone as a stress test: living room 98 → 55,
+bedroom 50 → 28 turn-ons (9.1 → 11.1 h occupied), kitchen 78 → 43. Desk's
+remaining short gaps (131) are the sitter crossing the zone edge by up to
+30 cm: zone shape and edge margin, not tracking. The legacy Polygon 2 (no
+edge margin) flaps more (277 → 411 under the stress test) because phantom
+holds no longer mask its edge jitter.
+

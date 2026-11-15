@@ -56,7 +56,7 @@ export function parseImport(text) {
   const zones = doc.zones.map((z, i) => {
     const label = `zone ${i + 1}${z?.name ? ` (${z.name})` : ''}`;
     if (!z || typeof z.name !== 'string' || !z.name.trim()) throw new Error(`${label}: missing name`);
-    if (!['include', 'exclude', 'exit'].includes(z.kind)) throw new Error(`${label}: kind must be include, exclude or exit`);
+    if (!['include', 'exclude', 'exit', 'linger', 'transient'].includes(z.kind)) throw new Error(`${label}: kind must be include, exclude, exit, linger or transient`);
     if (!Array.isArray(z.polygon) || !z.polygon.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite))) {
       throw new Error(`${label}: polygon must be a list of [x, y] points`);
     }

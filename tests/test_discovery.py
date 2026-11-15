@@ -59,7 +59,7 @@ async def test_find_screek(hass: HomeAssistant, screek: str) -> None:
 
 async def test_device_geometry(hass: HomeAssistant, screek: str) -> None:
     geo = async_device_geometry(hass, screek)
-    assert geo["max_distance_mm"] == 6000  # default when the device has no max_distance number
+    assert geo["max_distance_mm"] == 8000  # the LD2450's own range when the device has no max_distance number
     (zone,) = geo["device_zones"]  # the all-zero zone1 is skipped
     assert zone["key"] == "zout1" and zone["kind"] == "exclude"
     assert zone["polygon"] == [[1016, 0], [2540, 0], [2540, 5080], [1016, 5080]]

@@ -3,14 +3,14 @@
 
 import './plot.js';
 import './timeline.js';
-import { fovPolygon, replayHistory, summarize, validatePolygon, pointInPolygon } from './engine.js';
-import { replayGroup } from './fusion.js';
+import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
+import { replayGroup } from './tracker.js';
 import {
   classify, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, affineApply, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, affineApply, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
@@ -608,9 +608,8 @@ class RadarZonePresencePanel extends HTMLElement {
       if (!this.hist) { this.preview = null; this._renderTimeline(); this._renderSide(); return; }
       const zones = this.zones.filter(z => !validatePolygon(z.polygon));
       const peers = this._groupPeers();
-      const replay = (zs, grace, opts) => (peers.length
-        ? replayGroup({ hist: this.hist, zones: zs }, peers, grace, opts)
-        : replayHistory(this.hist, zs, grace, opts));
+      // Like the home: tracked (one radar or several aligned ones), then the zone engine.
+      const replay = (zs, grace, opts) => replayGroup({ hist: this.hist, zones: zs }, peers, grace, opts);
       const res = replay(zones, this.settings.reconnect_grace_s, { perFrameStates: true });
       const keys = [...zones.filter(z => z.kind === 'include').map(z => z.id), 'presence'];
       // Same zones without filters, to show what the filters remove.
@@ -823,7 +822,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const n = this.zones.filter(z => z.kind === kind).length + 1;
     const zone = {
       door_entity_id,
-      id: newZoneId(), name: name || ({ exclude: `Exclusion ${n}`, exit: `Exit ${n}` }[kind] || `Zone ${n}`), kind,
+      id: newZoneId(), name: name || ({ exclude: `Exclusion ${n}`, exit: `Exit ${n}`, linger: `Linger ${n}`, transient: `Transient ${n}` }[kind] || `Zone ${n}`), kind,
       polygon: polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...filters }, area_id: null,
     };
@@ -1092,7 +1091,9 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'group' },
         this._tb('Include', this.drawKind === 'include', () => { this.drawKind = 'include'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are include zones'),
         this._tb('Exclude', this.drawKind === 'exclude', () => { this.drawKind = 'exclude'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are exclusion zones'),
-        this._tb('Exit', this.drawKind === 'exit', () => { this.drawKind = 'exit'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are entry/exit points (a doorway, the top of the stairs)')),
+        this._tb('Exit', this.drawKind === 'exit', () => { this.drawKind = 'exit'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are entry/exit points (a doorway, the top of the stairs)'),
+        this._tb('Linger', this.drawKind === 'linger', () => { this.drawKind = 'linger'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are lingering spots (bed, couch, desk chair): someone the radar loses here is still there'),
+        this._tb('Transient', this.drawKind === 'transient', () => { this.drawKind = 'transient'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are transient spots (hallway, doorway, behind a corner): someone the radar loses here has left')),
       el('div', { class: 'group' },
         this._tb('∠ Angles', s.angle, () => { s.angle = !s.angle; this._updatePlot(); this._renderToolbar(); }, 'Snap edges to 45°/90°, relative to the previous edge (hold Shift to disable)'),
         this._tb('◦ Vertices', s.vertex, () => { s.vertex = !s.vertex; this._updatePlot(); this._renderToolbar(); }, 'Snap to existing vertices'),
@@ -1155,7 +1156,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const rows = [];
     const sum = this.preview?.summary || {};
     this.zones.forEach((z, i) => {
-      if (z.kind === 'exclude') return;
+      if (z.kind === 'exclude' || isSpot(z.kind)) return;
       if (z.kind === 'exit') {
         const d = z.door_entity_id && this.doors[z.door_entity_id];
         if (!d || !this.hist) return;
@@ -1265,7 +1266,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _zoneColor(z) {
     const i = this.zones.indexOf(z);
-    return z.kind === 'exclude' ? EXCLUDE_COLOR : z.kind === 'exit' ? EXIT_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
+    return kindColor(z.kind) || ZONE_COLORS[i % ZONE_COLORS.length];
   }
 
   _renderSide() {
@@ -1281,8 +1282,10 @@ class RadarZonePresencePanel extends HTMLElement {
           el('div', { class: 'zone-name' }, z.name),
           el('div', { class: 'zone-meta' }, z.kind === 'exclude' ? 'exclusion · ignored by all zones'
             : z.kind === 'exit' ? `exit${z.door_entity_id ? ` · ${this._doorName(z.door_entity_id)}` : ''}`
-              : (eid || 'new — save to create entity'))),
-        el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'exclude' : '—'));
+              : z.kind === 'linger' ? 'lingering spot · lost here = still here'
+                : z.kind === 'transient' ? 'transient spot · lost here = left'
+                  : (eid || 'new — save to create entity'))),
+        el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'exclude' : isSpot(z.kind) ? z.kind : '—'));
     });
     const sensor = el('div', { class: 'section' },
       el('h3', {}, el('span', { class: 'grow' }, cfg.title)),
@@ -1314,7 +1317,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const num = (value, onchange, attrs = {}) => el('input', { type: 'number', value, step: 'any', min: 0, ...attrs, onchange });
     const f = z.filters;
     const editor = el('div', { class: 'section' },
-      el('h3', {}, el('span', { class: 'grow' }, { exclude: 'Exclusion zone', exit: 'Entry / exit' }[z.kind] || 'Zone'),
+      el('h3', {}, el('span', { class: 'grow' }, { exclude: 'Exclusion zone', exit: 'Entry / exit', linger: 'Lingering spot', transient: 'Transient spot' }[z.kind] || 'Zone'),
         el('button', { class: 'btn danger', onclick: () => this._deleteZone(z.id) }, 'Delete')),
       el('div', { class: 'form' },
         el('label', {}, 'Name'),
@@ -1323,7 +1326,9 @@ class RadarZonePresencePanel extends HTMLElement {
         el('select', { onchange: e => this._patchZone(z.id, { kind: e.target.value }, { renderSide: true }) },
           el('option', { value: 'include', selected: z.kind === 'include' }, 'Include (presence entity)'),
           el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Exclude (ignored everywhere)'),
-          el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Entry / exit (doorway, stairs)')),
+          el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Entry / exit (doorway, stairs)'),
+          el('option', { value: 'linger', selected: z.kind === 'linger' }, 'Lingering spot (bed, couch, desk chair)'),
+          el('option', { value: 'transient', selected: z.kind === 'transient' }, 'Transient spot (hallway, doorway)')),
         z.kind === 'include' ? [
           el('label', {}, 'Device'),
           (() => {
@@ -1353,7 +1358,7 @@ class RadarZonePresencePanel extends HTMLElement {
           el('label', { class: 'check full' },
             el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked, hold_max_s: e.target.checked && !f.hold_max_s ? this._suggestedMaxHold(z) : f.hold_max_s || 0 } }, { renderSide: true }) }),
             el('span', {}, 'Stay occupied until seen leaving',
-              el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, a target that disappears inside the zone keeps it occupied until someone walks out across the edge or shows up elsewhere in the room.',
+              el('div', { class: 'help' }, 'Radars lose people who sit still. With this on, someone who disappears inside the zone keeps it occupied until that person is seen again: walking out across the edge, or turning up near where they disappeared. Someone else moving elsewhere in the room does not count. People lost at the side of the radar\'s view or in a transient spot are dropped after 20 s.',
                 this.zones.some(q => q.kind === 'exit')
                   ? ` Entry/exit points count: disappearing in one (${this.zones.filter(q => q.kind === 'exit').map(q => q.name).join(', ')}) means they left, and someone appearing in one is a new arrival.`
                   : ' Draw entry/exit points (doorways, stairs) to make this work for a whole room.'))),
@@ -1363,7 +1368,9 @@ class RadarZonePresencePanel extends HTMLElement {
             el('div', { class: 'help full' }, 'Safety net in case someone slips out unseen: a held occupant is dropped after this long (0 = never).'),
           ] : '',
         ] : z.kind === 'exit' ? this._exitEditor(z)
-          : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
+          : z.kind === 'linger' ? el('div', { class: 'help full' }, 'Someone the radar loses here (lying in bed, sitting still on the couch) is remembered as still being here, for zones that stay occupied until seen leaving. Use it where the edge of the radar\'s view would otherwise suggest they left.')
+            : z.kind === 'transient' ? el('div', { class: 'help full' }, 'Someone the radar loses here (a hallway, a doorway, behind a corner) has most likely moved on: they are forgotten after 20 s, releasing any zone they were holding.')
+              : el('div', { class: 'help full' }, 'Targets inside an exclusion are dropped before any include zone or the sensor-wide presence is evaluated.'),
       ),
       this.hist && z.kind !== 'exit' ? el('div', { class: 'actions' },
         el('button', {
@@ -1573,7 +1580,7 @@ class RadarZonePresencePanel extends HTMLElement {
     if (!this.hist) { box.replaceChildren(head, el('div', { class: 'help' }, 'Load history to find the spots where people spend time.')); return; }
     const u = this.units;
     const rows = (this.spots || []).map((sp, i) => {
-      const kindColor = sp.cls.kind === 'ghost' ? EXCLUDE_COLOR : sp.cls.kind === 'spot' ? '#43a047' : '#f9a825';
+      const badgeColor = sp.cls.kind === 'ghost' ? EXCLUDE_COLOR : sp.cls.kind === 'spot' ? '#43a047' : '#f9a825';
       const create = kind => {
         const poly = offsetConvex(sp.hull, this._margin());
         if (!poly) { this._toast('Margin too negative: the spot collapses. Use a smaller inward margin.', true); return; }
@@ -1581,7 +1588,8 @@ class RadarZonePresencePanel extends HTMLElement {
         this.hoverSpot = null;
         const maxHold = suggestMaxHold(sp.stats);
         // Edge margin: without it, position jitter at the edge reads as walking out and back in.
-        this._addZone(poly, kind, kind === 'exclude' ? `Ghost ${sp.n}` : `Spot ${sp.n}`, hold ? { hold_until_exit: true, hold_max_s: maxHold, edge_margin_mm: 150 } : {});
+        const name = { exclude: `Ghost ${sp.n}`, linger: `Linger ${sp.n}` }[kind] || `Spot ${sp.n}`;
+        this._addZone(poly, kind, name, hold ? { hold_until_exit: true, hold_max_s: maxHold, edge_margin_mm: 150 } : {});
         if (hold) this._toast(`People go still in this spot: "Stay occupied until seen leaving" is on (max ${Math.round(maxHold / 60)} min).`);
       };
       return el('div', {
@@ -1590,11 +1598,16 @@ class RadarZonePresencePanel extends HTMLElement {
         el('div', { class: 'spot-head' },
           el('b', {}, `Spot ${sp.n}`),
           el('span', { class: 'help' }, `${fmtDuration(sp.dwell)} · ${u.fmtLong(Math.hypot(...sp.centroid))} away`),
-          el('span', { class: 'badge', style: { background: kindColor, color: '#fff' }, title: sp.cls.share === null ? '' : `${Math.round(sp.cls.share * 100)}% of visits began with a trail walking in` }, sp.cls.label)),
+          el('span', { class: 'badge', style: { background: badgeColor, color: '#fff' }, title: sp.cls.share === null ? '' : `${Math.round(sp.cls.share * 100)}% of visits began with a trail walking in` }, sp.cls.label)),
         el('div', { class: 'help' }, this._trailSummary(sp.stats)),
         sp.covered ? el('div', { class: 'help' }, `inside zone “${sp.covered.name}”`) : '',
         el('div', { class: 'actions', style: { marginTop: '4px' } },
           el('button', { class: 'btn', onclick: () => create('include') }, '+ Zone'),
+          el('button', {
+            class: sp.hold && sp.cls.kind !== 'ghost' ? 'btn primary' : 'btn',
+            title: 'Lingering spot: someone the radar loses here is still here (held by zones that stay occupied until seen leaving)',
+            onclick: () => create('linger'),
+          }, '+ Linger'),
           el('button', { class: sp.cls.kind === 'ghost' ? 'btn primary' : 'btn', onclick: () => create('exclude') }, '+ Exclusion')));
     });
     box.replaceChildren(head,
@@ -1873,7 +1886,7 @@ class RadarZonePresencePanel extends HTMLElement {
     for (const b of this.side.querySelectorAll('[data-live]')) {
       const id = b.dataset.live;
       const z = this.zones.find(q => q.id === id);
-      if (z?.kind === 'exclude') continue;
+      if (z?.kind === 'exclude' || isSpot(z?.kind)) continue;
       if (z?.kind === 'exit') {
         const st = z.door_entity_id ? this.hass.states[z.door_entity_id]?.state : null;
         b.textContent = st === 'on' ? 'open' : st === 'off' ? 'closed' : 'exit';

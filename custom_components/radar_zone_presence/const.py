@@ -35,5 +35,7 @@ STATIC_URL = "/radar_zone_presence_static"
 
 PRESENCE_KEY = "presence"
 
-DEFAULT_MAX_DISTANCE_MM = 6000.0
+# The LD2450 module reports targets up to 8 m (±60°). Firmwares with a max distance
+# setting (Everything Presence: number.*_max_distance) cut shorter; that wins.
+DEFAULT_MAX_DISTANCE_MM = 8000.0
 FOV_HALF_ANGLE_DEG = 60.0

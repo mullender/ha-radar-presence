@@ -396,3 +396,18 @@ Ideas not built yet:
   under `/radar_zone_presence_static/<version>/`.
 - After an HA restart, background CDP tabs don't reconnect their websocket
   until reloaded.
+
+## 2026-11-15: people tracker, linger / transient spots
+
+- Production 12:05: target renumbering (desk person dropped, kitchen person
+  moved into slot 1) turned Desk off three times with the person sitting
+  there. See DESIGN §9.7 for the tracker and the numbers.
+- Writing a window of production coordinates into `tests/vectors` was
+  blocked (household data in the public repo); the regression test is a
+  synthetic reconstruction (`test_desk_stays_held_while_the_radar_renumbers_and_reuses_slots`).
+- Comparison scripts lived in /tmp (old code from `git archive HEAD`, dev
+  configs via `tools/dev_ws.mjs`, frames from `dev/data`).
+- Dev sim radars expose no `max_distance` number, so dev shows the 8 m
+  default for the EPLs too (production EPLs report 6 m).
+- Panel "Revert" opens a confirm() dialog, which blocks CDP evaluation in the
+  dev tab; close the tab through `/json/close/<id>`.

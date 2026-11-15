@@ -6,9 +6,7 @@
 // changes stored geometry.
 
 import { PointLayer } from './points.js';
-import {
-  EXCLUDE_COLOR, EXIT_COLOR, doorGeometry, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime,
-} from './util.js';
+import { EXCLUDE_COLOR, doorGeometry, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime, kindColor, kindDash } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
 const HANDLE_R = 6;
@@ -551,7 +549,7 @@ export class RzpPlot extends HTMLElement {
     for (const p of this.peers || []) {
       g.append(svg('path', { d: this._path(p.fov), fill: p.color, 'fill-opacity': 0.04, stroke: p.color, 'stroke-opacity': 0.6, 'stroke-dasharray': '3 4', 'stroke-width': 1 }));
       for (const z of p.zones) {
-        g.append(svg('path', { d: this._path(z.polygon), fill: 'none', stroke: p.color, 'stroke-opacity': 0.7, 'stroke-width': 1, 'stroke-dasharray': z.kind === 'exit' ? '2 3' : '6 3' }));
+        g.append(svg('path', { d: this._path(z.polygon), fill: 'none', stroke: p.color, 'stroke-opacity': 0.7, 'stroke-width': 1, 'stroke-dasharray': kindDash(z.kind) || '6 3' }));
       }
       const o = this._s(p.origin);
       g.append(svg('path', { d: `M${o[0]},${o[1] - 6}L${o[0] + 5},${o[1] + 4}L${o[0] - 5},${o[1] + 4}Z`, fill: p.color }));
@@ -715,7 +713,7 @@ export class RzpPlot extends HTMLElement {
   }
 
   _zoneColor(z, i) {
-    return z.kind === 'exclude' ? EXCLUDE_COLOR : z.kind === 'exit' ? EXIT_COLOR : ZONE_COLORS[i % ZONE_COLORS.length];
+    return kindColor(z.kind) || ZONE_COLORS[i % ZONE_COLORS.length];
   }
 
   _zoneLayer() {
@@ -730,7 +728,7 @@ export class RzpPlot extends HTMLElement {
         stroke: color, 'stroke-width': isSel ? 2.5 : 1.5,
         fill: z.kind === 'exclude' ? 'url(#hatch)' : color,
         'fill-opacity': z.kind === 'exclude' ? 1 : on ? 0.35 : 0.1,
-        'stroke-dasharray': z.kind === 'exclude' ? '6 3' : z.kind === 'exit' ? '2 3' : null,
+        'stroke-dasharray': kindDash(z.kind),
       };
       g.append(svg('path', attrs));
       if (z.kind === 'exit' && z.door && z.door.swing !== 'none') {
