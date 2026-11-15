@@ -495,3 +495,15 @@ async def test_exit_passages_fire_events(hass: HomeAssistant, radar_device: str,
     state = hass.states.get(door_eid)
     assert state.attributes["event_type"] == "arrived" and state.attributes["door_entity_id"] == "binary_sensor.front_door"
     assert entry.runtime_data.feeds[RADAR].exits
+
+
+async def test_frontend_served_under_versioned_path(hass: HomeAssistant, radar_device: str, hass_client) -> None:
+    """Relative module imports must resolve under the version, so updates never mix old and new modules."""
+    await setup_entry(hass, radar_device, [])
+    panel = hass.data["frontend_panels"]["radar-zones"]
+    url = panel.config["_panel_custom"]["module_url"]
+    assert "?" not in url and url.endswith("/panel.js")
+    client = await hass_client()
+    resp = await client.get(url.replace("panel.js", "util.js"))
+    assert resp.status == 200
+    assert "affineApply" in await resp.text()

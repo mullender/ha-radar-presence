@@ -56,21 +56,23 @@ def _frontend_version() -> str:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     websocket_api.async_register(hass)
     version = await hass.async_add_executor_job(_frontend_version)
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(STATIC_URL, str(FRONTEND_DIR), cache_headers=False)]
-    )
+    # The version is part of the path, not a query string: the panel's relative
+    # imports (./util.js, ...) then resolve under it too, so an update can never
+    # mix a new panel.js with cached old modules.
+    base = f"{STATIC_URL}/{version}"
+    await hass.http.async_register_static_paths([StaticPathConfig(base, str(FRONTEND_DIR), cache_headers=True)])
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL,
         webcomponent_name=PANEL_COMPONENT,
         sidebar_title="Radar Zones",
         sidebar_icon="mdi:radar",
-        module_url=f"{STATIC_URL}/panel.js?v={version}",
+        module_url=f"{base}/panel.js",
         require_admin=True,
         config={"version": version},
     )
     # Dashboard card (custom:radar-zone-presence-card), loaded on every frontend page.
-    frontend.add_extra_js_url(hass, f"{STATIC_URL}/card.js?v={version}")
+    frontend.add_extra_js_url(hass, f"{base}/card.js")
     return True
 
 
