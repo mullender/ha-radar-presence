@@ -90,6 +90,17 @@ def _float_state(hass: HomeAssistant, entity_id: str) -> tuple[float, str | None
         return None
 
 
+def _distance_mm(value: float, unit: str | None) -> float:
+    """A range setting in mm. Without a unit (a state restored without attributes), go by size: a radar's range is
+    metres, so 6 is m, 600 is cm (Everything Presence: 0-600 cm), 6000 is mm."""
+    if unit is None:
+        unit = "m" if value <= 10 else "cm" if value <= 1000 else "mm"
+    try:
+        return to_mm(value, unit)
+    except ValueError:
+        return DEFAULT_MAX_DISTANCE_MM
+
+
 @callback
 def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
     """Read-only info from the device: max distance, firmware zones (mm) and mounting settings."""
@@ -101,8 +112,8 @@ def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]
         if entry.disabled_by is not None:
             continue
         if MAX_DISTANCE_RE.match(entry.entity_id):
-            if (v := _float_state(hass, entry.entity_id)) is not None:
-                max_distance = to_mm(v[0], v[1])
+            if (v := _float_state(hass, entry.entity_id)) is not None and v[0] > 0:
+                max_distance = _distance_mm(*v)
             continue
         if INSTALL_ANGLE_RE.match(entry.entity_id):
             if (v := _float_state(hass, entry.entity_id)) is not None:

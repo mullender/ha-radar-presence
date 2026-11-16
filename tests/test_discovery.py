@@ -86,3 +86,12 @@ async def test_legacy_polygons_skip_garbage(hass: HomeAssistant) -> None:
     (p,) = async_legacy_polygons(hass, SCREEK, "in")
     assert p["n"] == "1"
     assert p["polygon"][0] == pytest.approx([-2921.0, 2794.0])
+
+
+def test_a_range_without_a_unit_is_read_by_its_size() -> None:
+    from custom_components.radar_zone_presence.discovery import _distance_mm
+
+    assert _distance_mm(600, None) == 6000  # Everything Presence: cm (a restored state without attributes)
+    assert _distance_mm(6, None) == 6000
+    assert _distance_mm(6000, None) == 6000
+    assert _distance_mm(600, "cm") == 6000

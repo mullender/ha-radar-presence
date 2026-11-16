@@ -59,6 +59,9 @@ def main() -> None:
     ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
     ap.add_argument("--set", nargs="*", default=[], help="override engine constants, e.g. VIRTUAL_EXITS=0 LAG_S=60")
     ap.add_argument("--no-cross-check", dest="cross_check", action="store_false", help="do not flag one-radar reflections")
+    ap.add_argument("--from-leads-to", action="store_true",
+                    help="build spaces, doorways, connections and exits from the exit zones' leads_to (as the integration does)")
+    ap.add_argument("--outside-doors", default="{}", help='JSON: door entity -> area, doors to outside no radar sees (with --from-leads-to)')
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
@@ -88,6 +91,9 @@ def main() -> None:
         c["zones"] = [*c["zones"], *({"id": f"extra{k}", **z} for k, z in enumerate(zs))]
     portal_map = json.loads(a.portals)
     groups = alignment_groups({rid: (c["settings"].get("display") or {}).get("aligned_to") for rid, c in cfgs.items()})
+    if a.from_leads_to:
+        a.unobserved, a.connections, a.exits, portal_map = from_leads_to(cfgs, groups, floors, json.loads(a.outside_doors))
+        exits = json.loads(a.exits)
 
     frames: dict[str, list] = {}
     for rid, c in cfgs.items():
@@ -107,7 +113,7 @@ def main() -> None:
         regions.append(Region(area, floor, tuple(exits.get(area, ())), area, observed=False))
     for g in groups:
         area = cfgs[g.anchor].get("device_area_id")
-        if area not in floors or area in unobserved:
+        if area not in floors or area in unobserved or not any(cfgs[r]["settings"].get("headcount", True) for r in g.members):
             continue
         name = area if area not in [r.id for r in regions] else f"{area}_{g.anchor[-4:]}"
         portals = tuple(
@@ -198,6 +204,45 @@ def main() -> None:
             print(line)
 
 
+def from_leads_to(cfgs: dict, groups: list, floors: dict, outside_doors: dict) -> tuple[str, str, str, dict]:
+    """--unobserved / --connections / --exits / portal map from the exit zones' leads_to, like headcount_runtime."""
+    observed = {
+        cfgs[g.anchor].get("device_area_id")
+        for g in groups
+        if any(cfgs[r]["settings"].get("headcount", True) for r in g.members)
+    }
+    unobserved: dict[str, int] = {}
+    links: dict[frozenset, str | None] = {}
+    exits: dict[str, list[str]] = {}
+    portal_map: dict[str, dict[str, object]] = {}
+    for g in groups:
+        area = cfgs[g.anchor].get("device_area_id")
+        if area not in observed:
+            continue
+        for rid in g.members:
+            if not cfgs[rid]["settings"].get("headcount", True):
+                continue
+            for z in cfgs[rid]["zones"]:
+                if z["kind"] != "exit" or not z.get("leads_to"):
+                    continue
+                dests = [d for d in z["leads_to"] if d != "outside" and d != area]
+                if "outside" in z["leads_to"] and z.get("door_entity_id"):
+                    exits.setdefault(area, []).append(z["door_entity_id"])
+                for d in dests:
+                    if d not in observed:
+                        unobserved[d] = floors.get(d, 0)
+                    key = frozenset((area, d))
+                    if links.get(key) is None:
+                        links[key] = z.get("door_entity_id")
+                portal_map.setdefault(area, {})[z["name"]] = dests if dests else "outside"
+    for door, area in outside_doors.items():
+        if area not in observed:
+            unobserved[area] = floors.get(area, 0)
+        exits.setdefault(area, []).append(door)
+    connections = [[*sorted(k), door] for k, door in links.items()]
+    return json.dumps(unobserved), json.dumps(connections), json.dumps(exits), portal_map
+
+
 def unconfirmed(tr, out, g, cfgs) -> set[int]:
     """Tracks seen by one radar only, at a spot another radar of the group covers (it would have seen them)."""
     if len(g.members) < 2:
@@ -259,6 +304,7 @@ def score(timeline: list, truth: dict, door_times: list, fmt) -> list[str]:
         counts = ", ".join(f"{n}: {d / 3600:.1f}h" for n, d in sorted(seen.items()))
         out.append(f"  {fmt(lo)} - {fmt(hi)}  want {want}  wrong {wrong / 3600:.2f}h  ({counts})  {why}")
     bounds = [(ts(lo), ts(hi), n) for lo, hi, n, _ in truth.get("max", [])]
+    over: list[tuple[float, float, int, int]] = []
     for a, b, n, u in segs:
         if u:
             continue
@@ -267,6 +313,7 @@ def score(timeline: list, truth: dict, door_times: list, fmt) -> list[str]:
             mx = min((m for lo, hi, m in bounds if lo <= c0 and c1 <= hi), default=None)
             if mx is not None and n > mx:
                 total["over_h"] += (c1 - c0) / 3600
+                over.append((c0, c1, n, mx))
     door_ts = sorted(t for t, _ in door_times)
     stray = []
     import bisect
@@ -283,6 +330,7 @@ def score(timeline: list, truth: dict, door_times: list, fmt) -> list[str]:
         f"unknown {total['unknown_h']:.2f}h  changes {changes}  without a door {len(stray)}"
     ))
     out += [f"  no door: {fmt(t)} {a} -> {b}" for t, a, b in stray[:15]]
+    out += [f"  over: {fmt(a)} - {fmt(b)} count {n} > {m}" for a, b, n, m in sorted(over, key=lambda o: o[0] - o[1])[:8]]
     return out
 
 
