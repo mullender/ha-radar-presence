@@ -27,6 +27,7 @@ from homeassistant.helpers.storage import Store
 from .const import CONF_OUTSIDE_DOORS, DOMAIN, OUTSIDE
 from .engine.align import apply, invert, transform_polygon
 from .engine.headcount import HeadCount, Portal, Region
+from .engine.rooms import RoomRadar, Rooms
 from .engine.tracker import side_margin
 
 if TYPE_CHECKING:
@@ -44,7 +45,7 @@ OPEN_STATES = {"on", "open", "opening", "closing"}
 
 @dataclass(frozen=True, slots=True)
 class SpaceInfo:
-    id: str  # region id: the area id (plus the anchor radar if an area has several groups)
+    id: str  # region id: the area id (plus the anchor radar if an area is in several groups)
     name: str
     area_id: str
     floor_id: str | None
@@ -60,7 +61,8 @@ class HeadCountRuntime:
         self.hass = hass
         self.home = home
         self.spaces: dict[str, SpaceInfo] = {}
-        self.region_of_group: dict[int, str] = {}  # id(group) -> region id
+        # id(group) -> (rooms splitter when its radars sit in several areas, area -> region id)
+        self.region_of_group: dict[int, tuple[Rooms | None, dict[str, str]]] = {}
         self.floors: dict[int, tuple[str | None, str]] = {}  # level -> (floor id, name)
         self._listeners: list[CALLBACK_TYPE] = []
         self._unsubs: list[CALLBACK_TYPE] = []
@@ -104,22 +106,52 @@ class HeadCountRuntime:
         home = self.home
         dev_reg = dr.async_get(self.hass)
         area_region: dict[str, str] = {}
-        groups: list[tuple[GroupRuntime, str]] = []
+        groups: list[tuple[GroupRuntime, dict[str, str]]] = []  # (group, radar id -> region id)
+        group_links: list[tuple[str, str]] = []
+
+        def device_area(device_id: str) -> str | None:
+            device = dev_reg.async_get(device_id)
+            return device.area_id if device else None
+
         for group in home.groups:
             used = [f for f in group.feeds if f.headcount]
             if not used:
                 continue
-            anchor = home.feeds[group.anchor]
-            device = dev_reg.async_get(anchor.device_id)
-            area_id = device.area_id if device else None
-            if not area_id or self._area(area_id) is None:
-                _LOGGER.debug("Head count: %s has no area, left out", anchor.title)
+            # Aligned radars share their tracks, not their room: each radar's area is a space.
+            anchor_area = device_area(home.feeds[group.anchor].device_id)
+            feed_area: dict[str, str] = {}
+            for feed in used:
+                area_id = device_area(feed.device_id) or anchor_area
+                if area_id and self._area(area_id) is not None:
+                    feed_area[feed.id] = area_id
+            if not feed_area:
+                _LOGGER.debug("Head count: %s has no area, left out", home.feeds[group.anchor].title)
                 continue
-            region_id = area_id if area_id not in area_region else f"{area_id}_{group.anchor[-6:]}"
-            area_region.setdefault(area_id, region_id)
-            self._add_space(region_id, area_id, True)
-            self.region_of_group[id(group)] = region_id
-            groups.append((group, region_id))
+            # Zones are in rooms too: a radar can see into the next room, and a zone there is in that room.
+            zone_rooms = [
+                (area_id, transform_polygon(group.to_anchor[zd.radar_id], zd.zone.polygon))
+                for zd in group.zone_defs.values()
+                if zd.radar_id in feed_area
+                and (area_id := zd.zone.area_id or feed_area[zd.radar_id])
+                and self._area(area_id) is not None
+            ]
+            region_of_area: dict[str, str] = {}
+            for area_id in dict.fromkeys([*feed_area.values(), *(a for a, _ in zone_rooms)]):
+                region_id = area_id if area_id not in area_region else f"{area_id}_{group.anchor[-6:]}"
+                area_region.setdefault(area_id, region_id)
+                self._add_space(region_id, area_id, True)
+                region_of_area[area_id] = region_id
+            rooms = None
+            if len(region_of_area) > 1:
+                rooms = Rooms(
+                    [RoomRadar(area_id, rid, group.to_anchor[rid]) for rid, area_id in feed_area.items()],
+                    home.max_distance,
+                    zone_rooms,
+                )
+            self.region_of_group[id(group)] = (rooms, region_of_area)
+            ids = list(region_of_area.values())
+            group_links += [(a, b) for i, a in enumerate(ids) for b in ids[i + 1 :]]  # one tracker sees both: open
+            groups.append((group, {rid: region_of_area[a] for rid, a in feed_area.items()}))
 
         def region_for(area_id: str) -> str | None:
             if area_id not in area_region:
@@ -132,9 +164,9 @@ class HeadCountRuntime:
         exits: dict[str, list[str]] = {}
         links: set[tuple[str, str, str | None]] = set()
         portals: dict[str, list[Portal]] = {}
-        for group, region_id in groups:
+        for group, region_of_feed in groups:
             for feed in group.feeds:
-                if not feed.headcount:
+                if (region_id := region_of_feed.get(feed.id)) is None:
                     continue
                 a = group.to_anchor[feed.id]
                 for z in feed.exits:
@@ -155,6 +187,7 @@ class HeadCountRuntime:
                         portals.setdefault(region_id, []).append(
                             Portal(z.name, transform_polygon(a, z.polygon), () if outside and not dests else tuple(dests))
                         )
+        links.update((a, b, None) for a, b in group_links)
         for entity_id in home.entry.options.get(CONF_OUTSIDE_DOORS, []) or []:
             area_id = self._entity_area(entity_id)
             if area_id is None or (region_id := region_for(area_id)) is None:
@@ -222,10 +255,16 @@ class HeadCountRuntime:
     @callback
     def frame(self, group: GroupRuntime, t: float) -> None:
         """After a group evaluated: its tracks (in the anchor's frame) go to the head count."""
-        if self.hc is None or (region := self.region_of_group.get(id(group))) is None:
+        if self.hc is None or (found := self.region_of_group.get(id(group))) is None:
             return
+        rooms, region_of_area = found
         tracks = {tg.slot: (tg.x, tg.y) for tg in group.last_targets}
-        self.hc.frame(region, tracks, t, self._unconfirmed(group))
+        unconfirmed = self._unconfirmed(group)
+        if rooms is None:
+            self.hc.frame(next(iter(region_of_area.values())), tracks, t, unconfirmed)
+        else:
+            parts = rooms.split(tracks)
+            self.hc.frame_group({region_of_area[a]: part for a, part in parts.items()}, t, unconfirmed)
         self._changed()
 
     def _unconfirmed(self, group: GroupRuntime) -> set[int]:

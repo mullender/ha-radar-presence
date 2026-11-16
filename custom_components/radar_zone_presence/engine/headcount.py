@@ -311,6 +311,35 @@ class HeadCount:
                     self._at_exit[(region, tid)] = (t, portal.name)
         self._visible[region] = cur
 
+    def frame_group(
+        self, parts: Mapping[str, Mapping[int, tuple[float, float]]], t: float, unconfirmed: Iterable[int] = ()
+    ) -> None:
+        """One tracker's tracks split over several regions (aligned radars in different rooms). A track that
+        changes region is the same person walking through: handed over, not matched again."""
+        for region, tracks in parts.items():
+            for tid in tracks:
+                src = next((r for r in parts if r != region and tid in self._visible[r]), None)
+                if src is not None:
+                    self._hand_over(src, region, tid)
+        flagged = set(unconfirmed)
+        for region, tracks in parts.items():
+            self.frame(region, tracks, t, flagged & tracks.keys())
+
+    def _hand_over(self, src: str, dst: str, tid: int) -> None:
+        self._visible[src].discard(tid)
+        self._visible[dst].add(tid)
+        if (pos := self._pos[src].pop(tid, None)) is not None:
+            self._pos[dst][tid] = pos
+        if (p := self._pending.pop((src, tid), None)) is not None:
+            p.region = dst
+            self._pending[(dst, tid)] = p
+        if (ex := self._at_exit.pop((src, tid), None)) is not None:
+            self._at_exit[(dst, tid)] = ex
+        if (tok_id := self._binding.pop((src, tid), None)) is not None:
+            self._binding[(dst, tid)] = tok_id
+            if (tok := self.tokens.get(tok_id)) is not None and tok.visible == (src, tid):
+                tok.visible = (dst, tid)  # frame() sees it continuing, and logs the move
+
     def advance(self, t: float) -> None:
         self._tick(t)
 

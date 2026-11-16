@@ -238,3 +238,38 @@ def test_walking_out_of_the_front_door_counts_even_if_its_sensor_misses_it() -> 
     walk(hc, "entry", 5, 500, path)  # (its contact logs nothing)
     hc.advance(527 + 700)
     assert hc.count() == 1
+
+
+# ------------------------------------------------- aligned radars in two rooms
+
+HALL_TO_ANCHOR = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+BED_TO_ANCHOR = ((1.0, 0.0, 2300.0), (0.0, 1.0, -3100.0))  # 3 m behind the hall radar's wall, facing the same way
+
+
+def test_rooms_follow_the_nearest_radar_that_sees_the_spot() -> None:
+    from custom_components.radar_zone_presence.engine.rooms import RoomRadar, Rooms
+
+    rooms = Rooms([RoomRadar("hall", "h", HALL_TO_ANCHOR), RoomRadar("bedroom", "b", BED_TO_ANCHOR)], lambda _rid: 6000.0)
+    assert rooms.room_at(1000, 2500) == "hall"  # the bedroom radar sees it too, through the door, from further away
+    assert rooms.room_at(2300, -1500) == "bedroom"  # behind the hall radar
+    # A zone is in its room, whichever radar sees it.
+    zoned = Rooms(
+        [RoomRadar("hall", "h", HALL_TO_ANCHOR), RoomRadar("bedroom", "b", BED_TO_ANCHOR)],
+        lambda _rid: 6000.0,
+        [("closet", ((0, 2000), (2000, 2000), (2000, 3000), (0, 3000)))],
+    )
+    assert zoned.room_at(1000, 2500) == "closet"
+    # Near the line, a track keeps its room.
+    split = rooms.split({1: (2300, -1500)})
+    assert 1 in split["bedroom"]
+
+
+def test_walking_out_of_the_bedroom_in_one_track_is_a_handover() -> None:
+    hc = HeadCount([Region("hall", 3), Region("bedroom", 3)], connections=[("hall", "bedroom", None)])
+    hc.seed("bedroom", 1, 0.0)
+    for t in range(1, 5):
+        hc.frame_group({"bedroom": {7: (2300.0, -1500.0 + 300 * t)}, "hall": {}}, float(t))
+    for t in range(5, 10):
+        hc.frame_group({"bedroom": {}, "hall": {7: (1500.0, 300.0 * (t - 4))}}, float(t))
+    assert hc.count() == 1 and hc.by_region() == {"hall": 1, "bedroom": 0}
+    assert [c.kind for c in hc.changes if c.kind != "restored"] == ["moved"]

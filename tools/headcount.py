@@ -34,6 +34,7 @@ import fixtures_util as fu  # noqa: E402
 from custom_components.radar_zone_presence.engine import Zone, assemble, point_in_polygon  # noqa: E402
 from custom_components.radar_zone_presence.engine.align import alignment_groups, apply, invert  # noqa: E402
 from custom_components.radar_zone_presence.engine.headcount import HeadCount, Portal, Region  # noqa: E402
+from custom_components.radar_zone_presence.engine.rooms import RoomRadar, Rooms  # noqa: E402
 from custom_components.radar_zone_presence.engine.tracker import Observation, Tracker, side_margin  # noqa: E402
 
 OPEN_STATES = {"on", "open", "opening", "closing"}
@@ -111,32 +112,48 @@ def main() -> None:
     regions, trackers, region_of, index_of, exclusions = [], {}, {}, {}, {}
     for area, floor in unobserved.items():
         regions.append(Region(area, floor, tuple(exits.get(area, ())), area, observed=False))
+    group_links = []
     for g in groups:
-        area = cfgs[g.anchor].get("device_area_id")
-        if area not in floors or area in unobserved or not any(cfgs[r]["settings"].get("headcount", True) for r in g.members):
+        parts = group_rooms(g, cfgs, floors, unobserved)
+        if parts is None:
             continue
-        name = area if area not in [r.id for r in regions] else f"{area}_{g.anchor[-4:]}"
-        portals = tuple(
-            Portal(z["name"], tuple(apply(g.to_anchor[rid], *pt) for pt in z["polygon"]), () if to == "outside" else tuple(to if isinstance(to, list) else [to]))
-            for rid in g.members
-            for z in cfgs[rid]["zones"]
-            if z["kind"] == "exit" and (to := portal_map.get(area, {}).get(z["name"])) is not None
-        )
-        regions.append(Region(name, floors[area], tuple(exits.get(area, ())), cfgs[g.anchor]["title"], portals=portals))
+        feed_area, zone_rooms = parts
+        region_of_area = {}
+        for area in dict.fromkeys([*feed_area.values(), *(r for r, _ in zone_rooms)]):
+            name = area if area not in [r.id for r in regions] else f"{area}_{g.anchor[-4:]}"
+            portals = tuple(
+                Portal(z["name"], tuple(apply(g.to_anchor[rid], *pt) for pt in z["polygon"]), () if to == "outside" else tuple(to if isinstance(to, list) else [to]))
+                for rid in feed_area
+                if feed_area[rid] == area
+                for z in cfgs[rid]["zones"]
+                if z["kind"] == "exit" and (to := portal_map.get(area, {}).get(z["name"])) is not None
+            )
+            regions.append(Region(name, floors[area], tuple(exits.get(area, ())), area, portals=portals))
+            region_of_area[area] = name
+        ids = list(region_of_area.values())
+        group_links += [[x, y, None] for i, x in enumerate(ids) for y in ids[i + 1 :]]
+        rooms = None
+        if len(region_of_area) > 1:
+            max_d = {rid: cfgs[rid]["fov"]["max_distance_mm"] for rid in g.members}
+            rooms = Rooms([RoomRadar(area, rid, g.to_anchor[rid]) for rid, area in feed_area.items()], max_d.__getitem__, zone_rooms)
         spots = [
             Zone(f"{rid}:{z['id']}", z["name"], z["kind"], tuple(apply(g.to_anchor[rid], *p) for p in z["polygon"]))
             for rid in g.members
             for z in cfgs[rid]["zones"]
             if z["kind"] in ("exit", "linger", "transient")
         ]
-        trackers[name] = (Tracker(spots, [invert(g.to_anchor[r]) for r in g.members]), {r: [] for r in g.members}, g)
+        key = g.anchor
+        trackers[key] = (Tracker(spots, [invert(g.to_anchor[r]) for r in g.members]), {r: [] for r in g.members}, g, rooms, region_of_area)
         for k, rid in enumerate(g.members):
-            region_of[rid], index_of[rid] = name, k
+            region_of[rid], index_of[rid] = key, k
             exclusions[rid] = [z["polygon"] for z in cfgs[rid]["zones"] if z["kind"] == "exclude"]
 
     doors = json.loads(a.doors.read_text())
     t0 = min(f[0].t for f in frames.values() if f)
-    hc = HeadCount(regions, bootstrap_until=t0 + a.bootstrap_h * 3600, connections=[tuple(c) for c in json.loads(a.connections)])
+    conns = json.loads(a.connections)
+    have = {frozenset(c[:2]) for c in conns}
+    conns += [c for c in group_links if frozenset(c[:2]) not in have]
+    hc = HeadCount(regions, bootstrap_until=t0 + a.bootstrap_h * 3600, connections=[tuple(c) for c in conns])
     events = [(fr.t, 0, rid, fr) for rid, fs in frames.items() if rid in region_of for fr in fs]
     events += [(t, 1, e, s) for e, rows in doors.items() for t, s in rows]
     events.sort(key=lambda e: (e[0], e[1]))
@@ -168,8 +185,7 @@ def main() -> None:
             if (t_from is None or t >= t_from) and key in hc._door_region:
                 say(f"{fmt(t)}  door {key.split('.')[-1]} -> {payload}")
             continue
-        name = region_of[key]
-        tr, kept, g = trackers[name]
+        tr, kept, g, rooms, region_of_area = trackers[region_of[key]]
         a_ = g.to_anchor[key]
         kept[key] = [
             Observation(index_of[key], tg.slot, *apply(a_, tg.x, tg.y))
@@ -177,13 +193,19 @@ def main() -> None:
             if not any(point_in_polygon(tg.x, tg.y, p) for p in exclusions[key])
         ]
         out = tr.fuse([o for obs in kept.values() for o in obs], t)
-        hc.frame(name, {tg.slot: (tg.x, tg.y) for tg in out.targets}, t, unconfirmed(tr, out, g, cfgs) if a.cross_check else ())
-        if name in a.dump and (t_from is None or t >= t_from):
-            ids = {tg.slot: (round(tg.x), round(tg.y), hc._binding.get((name, tg.slot))) for tg in out.targets}
-            key = {k: v[2] for k, v in ids.items()}
-            if key != dumped.get(name):
-                dumped[name] = key
-                say(f"{fmt(t)}    [{name}] " + "  ".join(f"t{k}@({x},{y})->#{tok}" for k, (x, y, tok) in sorted(ids.items())))
+        tracks = {tg.slot: (tg.x, tg.y) for tg in out.targets}
+        flagged = unconfirmed(tr, out, g, cfgs) if a.cross_check else set()
+        if rooms is None:
+            hc.frame(next(iter(region_of_area.values())), tracks, t, flagged)
+        else:
+            hc.frame_group({region_of_area[r]: part for r, part in rooms.split(tracks).items()}, t, flagged)
+        for name in region_of_area.values():
+            if name in a.dump and (t_from is None or t >= t_from):
+                ids = {s_: (round(x), round(y), hc._binding.get((name, s_))) for s_, (x, y) in hc._pos[name].items()}
+                dkey = {k: v[2] for k, v in ids.items()}
+                if dkey != dumped.get(name):
+                    dumped[name] = dkey
+                    say(f"{fmt(t)}    [{name}] " + "  ".join(f"t{k}@({x},{y})->#{tok}" for k, (x, y, tok) in sorted(ids.items())))
         record(timeline, hc, t)
         counts = (hc.count(), tuple(sorted(hc.by_floor().items(), reverse=True)))
         new_changes = hc.changes[n_changes:]
@@ -206,22 +228,18 @@ def main() -> None:
 
 def from_leads_to(cfgs: dict, groups: list, floors: dict, outside_doors: dict) -> tuple[str, str, str, dict]:
     """--unobserved / --connections / --exits / portal map from the exit zones' leads_to, like headcount_runtime."""
-    observed = {
-        cfgs[g.anchor].get("device_area_id")
-        for g in groups
-        if any(cfgs[r]["settings"].get("headcount", True) for r in g.members)
-    }
+    observed = set()
+    for g in groups:
+        if (parts := group_rooms(g, cfgs, floors, {})) is not None:
+            observed |= set(parts[0].values()) | {r for r, _ in parts[1]}
     unobserved: dict[str, int] = {}
     links: dict[frozenset, str | None] = {}
     exits: dict[str, list[str]] = {}
     portal_map: dict[str, dict[str, object]] = {}
     for g in groups:
-        area = cfgs[g.anchor].get("device_area_id")
-        if area not in observed:
+        if (parts := group_rooms(g, cfgs, floors, {})) is None:
             continue
-        for rid in g.members:
-            if not cfgs[rid]["settings"].get("headcount", True):
-                continue
+        for rid, area in parts[0].items():
             for z in cfgs[rid]["zones"]:
                 if z["kind"] != "exit" or not z.get("leads_to"):
                     continue
@@ -241,6 +259,25 @@ def from_leads_to(cfgs: dict, groups: list, floors: dict, outside_doors: dict) -
         exits.setdefault(area, []).append(door)
     connections = [[*sorted(k), door] for k, door in links.items()]
     return json.dumps(unobserved), json.dumps(connections), json.dumps(exits), portal_map
+
+
+def group_rooms(g, cfgs: dict, floors: dict, unobserved: dict):
+    """(radar id -> area, [(zone area, polygon in the anchor frame)]) of a group's head-count radars, like the runtime."""
+    anchor_area = cfgs[g.anchor].get("device_area_id")
+    feed_area = {}
+    for rid in g.members:
+        area = cfgs[rid].get("device_area_id") or anchor_area
+        if cfgs[rid]["settings"].get("headcount", True) and area in floors and area not in unobserved:
+            feed_area[rid] = area
+    if not feed_area:
+        return None
+    zone_rooms = [
+        (area, tuple(apply(g.to_anchor[rid], *pt) for pt in z["polygon"]))
+        for rid in feed_area
+        for z in cfgs[rid]["zones"]
+        if z["kind"] == "include" and (area := z.get("area_id") or feed_area[rid]) in floors and area not in unobserved
+    ]
+    return feed_area, zone_rooms
 
 
 def unconfirmed(tr, out, g, cfgs) -> set[int]:
