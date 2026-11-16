@@ -123,6 +123,11 @@
           }
         }
       }
+    },
+    "button": {
+      "nobody_home": {
+        "name": "Nobody home"
+      }
     }
   }
 }

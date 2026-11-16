@@ -29,6 +29,8 @@ const css = `
 .bar .when { font-weight: 500; }
 .bar .home { margin-left: auto; font-size: 15px; }
 .bar .home b { font-size: 20px; }
+.bar .home { display: flex; align-items: center; gap: 6px; }
+.bar .home .minus { width: 26px; padding: 3px 0; }
 .scroll { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
 :host([narrow]) .scroll { grid-template-columns: 1fr; }
 .house { position: relative; padding: 14px; min-width: 0; }
@@ -255,7 +257,9 @@ export class RzpHeadcount extends HTMLElement {
       el('button', { class: live ? 'on' : '', title: 'Follow now', onclick: () => { this.cursor = null; this.render(); } }, live ? '● Live' : 'Go live'),
       el('span', { class: 'when' }, live ? `Now, ${fmtTime(Date.now() / 1000)}` : fmtDateTime(this.cursor)),
       this.data.log_start && this.start < this.data.log_start ? el('span', { class: 'meta' }, `(log starts ${fmtDateTime(this.data.log_start)})`) : '',
-      el('span', { class: 'home' }, 'Home ', el('b', {}, unknownFloors.size ? `≥${total}` : String(total)), doubt ? ` (+${doubt} in doubt)` : ''),
+      el('span', { class: 'home' }, 'Home ', el('b', {}, unknownFloors.size ? `≥${total}` : String(total)), doubt ? ` (+${doubt} in doubt)` : '',
+        live && total ? el('button', { class: 'minus', title: 'Correct: one person fewer home (removes whoever has gone unseen longest)', onclick: () => this._correctHome(total - 1) }, '−') : '',
+        live ? el('button', { title: 'Everyone is out: set the home to 0', onclick: () => this._correctHome(0) }, 'Nobody home') : ''),
     );
   }
 
@@ -303,6 +307,14 @@ export class RzpHeadcount extends HTMLElement {
     this.houseEl.replaceChildren(this.svg, this.floorsEl, this._story());
     this._hot = hot;
     requestAnimationFrame(() => this._drawLinks());
+  }
+
+  async _correctHome(n) {
+    try {
+      await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, count: n });
+    } catch (err) {
+      alert(`Could not correct: ${err.message || err.code}`);
+    }
   }
 
   /** A correction from someone who knows: this space holds n people now. */

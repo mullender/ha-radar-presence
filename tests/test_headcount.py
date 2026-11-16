@@ -315,3 +315,14 @@ def test_a_correction_removes_the_phantom_first() -> None:
     assert hc.count() == 1 and list(hc.tokens) == [seen]
     hc.correct("living", 2, 30.0)
     assert hc.count() == 2 and [c.kind for c in hc.changes[-2:]] == ["corrected", "corrected"]
+
+
+def test_nobody_home_clears_everyone() -> None:
+    hc = HeadCount([Region("living", 2), Region("bedroom", 3, observed=False)], connections=[("living", "bedroom", None)])
+    hc.seed("bedroom", 1, 0.0)
+    hc.seed("living", 1, 0.0)
+    walk(hc, "living", 1, 10.0, [(1000.0, 1000.0), (1200.0, 1100.0)])  # the one in the living room is seen
+    hc.correct_home(1, 30.0)  # one fewer: the one unseen longest (the restored sleeper) goes
+    assert hc.by_region() == {"living": 1, "bedroom": 0}
+    hc.correct_home(0, 40.0)
+    assert hc.count() == 0 and not hc.tokens

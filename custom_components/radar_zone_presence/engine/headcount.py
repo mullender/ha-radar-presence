@@ -268,6 +268,28 @@ class HeadCount:
             if tok.unknown:
                 self._establish(tok, t, "corrected")
 
+    def correct_home(self, n: int, t: float) -> None:
+        """Someone who knows says n people are home (0: nobody, e.g. everyone just left): removes the
+        longest-unseen first, anywhere. It only removes: who is where is not known when adding."""
+        if n < 0:
+            return
+        self._tick(t)
+        people = sorted(
+            (tok for tok in self.tokens.values() if not tok.provisional),
+            key=lambda k: (k.visible is not None, k.last_seen),
+        )
+        drop = people[: max(0, len(people) - n)]
+        if n == 0:
+            drop += [tok for tok in self.tokens.values() if tok.provisional]
+            self._pending.clear()  # tracks waiting to be explained: nobody to explain them now
+        for tok in drop:
+            if tok.visible is not None:
+                self._binding.pop(tok.visible, None)
+            self._drop(tok, t, "corrected")
+        for tok in people[len(drop) :] if n else []:
+            if tok.unknown:
+                self._establish(tok, t, "corrected")
+
     def _in_doorway_to(self, region: str) -> bool:
         """Someone in view next door, at a doorway that leads into this region."""
         for other, r in self.regions.items():

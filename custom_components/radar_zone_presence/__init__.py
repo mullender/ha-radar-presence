@@ -37,7 +37,7 @@ from .home import HomeRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.BUTTON, Platform.EVENT, Platform.SENSOR]
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)

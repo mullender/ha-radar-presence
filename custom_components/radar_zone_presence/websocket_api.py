@@ -328,17 +328,21 @@ def ws_headcount_history(hass: HomeAssistant, connection, msg) -> None:
 
 @websocket_api.require_admin
 @websocket_api.websocket_command(
-    {vol.Required("type"): f"{DOMAIN}/headcount/correct", vol.Required("space"): str, vol.Required("count"): vol.All(int, vol.Range(min=0, max=50))}
+    {vol.Required("type"): f"{DOMAIN}/headcount/correct", vol.Optional("space"): str, vol.Required("count"): vol.All(int, vol.Range(min=0, max=50))}
 )
 @callback
 def ws_headcount_correct(hass: HomeAssistant, connection, msg) -> None:
-    """Set a space's people count (a correction from someone who knows)."""
+    """Set a space's people count, or without a space the home's (0: nobody home); a correction from someone who knows."""
     entry = _home(hass)
     if entry is None or entry.state is not ConfigEntryState.LOADED:
         connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
         return
     try:
-        entry.runtime_data.headcount.correct(msg["space"], msg["count"])
+        hc = entry.runtime_data.headcount
+        if "space" in msg:
+            hc.correct(msg["space"], msg["count"])
+        else:
+            hc.correct_home(msg["count"])
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_space", str(err))
         return

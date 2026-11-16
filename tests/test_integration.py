@@ -710,6 +710,10 @@ async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_dev
     hass.states.async_set(btn.entity_id, "2026-01-01T00:00:00+00:00")
     await hass.async_block_till_done()
     assert len(evidence()) == 2
+    # "Nobody home": the button on the Home device clears the head count.
+    button = ent_reg.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_nobody_home")
+    await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    assert hc.count() == 0
     # The decision log the panel replays: ignored signals with why, used ones, and what they did.
     log = rt.history(0, float("inf"))["log"]
     kinds = [(e["kind"], e.get("entity")) for e in log if e["kind"] in ("signal", "ignored", "evidence")]

@@ -274,6 +274,7 @@ class HeadCountRuntime:
             unsub()
         self._unsubs.clear()
         if self.hc is not None:
+            self._log_changes()  # what happened since the last update, before the log is saved
             self._store.async_delay_save(self._data, 0)
             self._log_store.async_delay_save(self._log_data, 0)
 
@@ -485,6 +486,14 @@ class HeadCountRuntime:
         self._changed()
         self._store.async_delay_save(self._data, 0)
 
+    def correct_home(self, n: int) -> None:
+        """Someone who knows sets the home count (0: nobody home). Only removes people. Logged as 'corrected'."""
+        if self.hc is None:
+            raise ValueError("no head count")
+        self.hc.correct_home(n, time.time())
+        self._changed()
+        self._store.async_delay_save(self._data, 0)
+
     def home_count(self) -> int | None:
         return None if self.hc is None or self.hc.unknown() else self.hc.count()
 
@@ -539,4 +548,9 @@ class HeadCountRuntime:
         if self.hc is None:
             return set()
         eid = self.home.entry.entry_id
-        return {f"{eid}_people", *(f"{eid}_people_floor_{lv}" for lv in self.floors), *(f"{eid}_people_{s}" for s in self.area_spaces())}
+        return {
+            f"{eid}_people",
+            f"{eid}_nobody_home",
+            *(f"{eid}_people_floor_{lv}" for lv in self.floors),
+            *(f"{eid}_people_{s}" for s in self.area_spaces()),
+        }
