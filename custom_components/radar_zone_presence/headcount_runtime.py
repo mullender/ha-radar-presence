@@ -24,7 +24,7 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr, en
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .const import CONF_OUTSIDE_DOORS, DOMAIN, OUTSIDE
+from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OUTSIDE_DOORS, DOMAIN, OUTSIDE
 from .engine.align import apply, invert, transform_polygon
 from .engine.headcount import HeadCount, Portal, Region
 from .engine.rooms import RoomRadar, Rooms
@@ -70,6 +70,7 @@ class HeadCountRuntime:
         self._last: tuple | None = None
         self.hc: HeadCount | None = None
         self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock"
+        self._evidence: dict[str, tuple[str, bool]] = {}  # entity -> (region, only switching on counts)
         self._build()
 
     # ---------------------------------------------------------------- build
@@ -200,6 +201,13 @@ class HeadCountRuntime:
                 continue
             exits.setdefault(region_id, []).append(entity_id)
             self._door_kind[entity_id] = "lock" if entity_id.startswith("lock.") else "door"
+        for key, on_only in ((CONF_EVIDENCE, False), (CONF_EVIDENCE_ON, True)):
+            for entity_id in home.entry.options.get(key, []) or []:
+                area_id = self._entity_area(entity_id)
+                if area_id is None or (region_id := area_region.get(area_id)) is None:
+                    _LOGGER.warning("Head count: %s is not in an area of the head count, ignored", entity_id)
+                    continue
+                self._evidence[entity_id] = (region_id, on_only)
         for region_id, doors in exits.items():
             for d in doors:
                 self._door_kind.setdefault(d, "lock" if d.startswith("lock.") else "door")
@@ -239,6 +247,8 @@ class HeadCountRuntime:
                 state = self.hass.states.get(entity_id)
                 if kind == "door" and state is not None and state.state in OPEN_STATES:
                     self.hc.door(entity_id, True, now)
+        if self._evidence:
+            self._unsubs.append(async_track_state_change_event(self.hass, list(self._evidence), self._on_evidence))
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=TICK_S)))
         self._changed()
 
@@ -305,6 +315,28 @@ class HeadCountRuntime:
                 self.hc.pulse(entity_id, t)
         else:
             self.hc.door(entity_id, new.state in OPEN_STATES, t)
+        self._changed()
+
+    @callback
+    def _on_evidence(self, event: Event[EventStateChangedData]) -> None:
+        """A switch or contact used by hand: someone is in its area. Changes by automations, scripts or the
+        app carry a parent or a user in their context and do not count."""
+        if self.hc is None:
+            return
+        entity_id = event.data["entity_id"]
+        new, old = event.data["new_state"], event.data["old_state"]
+        if new is None or new.state in ("unavailable", "unknown"):
+            return
+        if not entity_id.startswith("event.") and (old is None or old.state in ("unavailable", "unknown") or old.state == new.state):
+            return  # (an event entity's state is the time of the press: any new one counts)
+        if new.context.parent_id is not None or new.context.user_id is not None:
+            return
+        region, on_only = self._evidence[entity_id]
+        if on_only and new.state != "on":
+            return
+        # Switched off (a light on the way out): confirms who is there, moves nobody in. Contacts and buttons: both.
+        off = new.state == "off" and entity_id.split(".")[0] in ("light", "switch", "fan", "input_boolean")
+        self.hc.evidence(region, new.last_changed_timestamp, entity_id, move=not off)
         self._changed()
 
     @callback

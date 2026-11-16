@@ -24,6 +24,8 @@ from homeassistant.helpers import area_registry as ar, floor_registry as fr, sel
 
 from .const import (
     CONF_DEVICE_ID,
+    CONF_EVIDENCE,
+    CONF_EVIDENCE_ON,
     CONF_IMPORT_ZONES,
     CONF_PROFILE,
     CONF_RADAR,
@@ -236,6 +238,9 @@ class ZoneSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(step_id="reconfigure", data_schema=_zone_schema(self.hass, {}, dict(sub.data)))
 
 
+EVIDENCE_DOMAINS = ["binary_sensor", "switch", "light", "fan", "event", "input_boolean"]
+
+
 class RadarZonePresenceOptionsFlow(OptionsFlow):
     """Engine-wide settings. Zones are edited in the Radar Zones panel."""
 
@@ -260,6 +265,14 @@ class RadarZonePresenceOptionsFlow(OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(domain=["binary_sensor", "cover", "lock"], multiple=True)
                     ),
+                    vol.Optional(
+                        CONF_EVIDENCE,
+                        default=self.config_entry.options.get(CONF_EVIDENCE, []),
+                    ): selector.EntitySelector(selector.EntitySelectorConfig(domain=EVIDENCE_DOMAINS, multiple=True)),
+                    vol.Optional(
+                        CONF_EVIDENCE_ON,
+                        default=self.config_entry.options.get(CONF_EVIDENCE_ON, []),
+                    ): selector.EntitySelector(selector.EntitySelectorConfig(domain=EVIDENCE_DOMAINS, multiple=True)),
                 }
             ),
         )

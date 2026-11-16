@@ -221,6 +221,44 @@ class HeadCount:
         self.door(entity_id, True, t)
         self.door(entity_id, False, t)
 
+    def evidence(self, region: str, t: float, why: str = "", move: bool = True) -> None:
+        """Someone is in this region now, though no track says so: a switch pressed by hand, a closet door.
+        Whoever is believed there stays (and is back, if in doubt); else (``move``) the unseen person who could
+        have walked there is moved there. It never adds a person: a switch does not say who. (A light switched
+        off is someone on their way out: it confirms who is there, it does not move anyone in.)"""
+        if region not in self.regions:
+            return
+        self._tick(t)
+        here = [tok for tok in self.tokens.values() if tok.region == region and not tok.provisional]
+        if any(tok.visible is not None for tok in here):
+            return  # a radar sees them: nothing to add
+        if self._in_doorway_to(region):
+            return  # someone in view in its doorway reached for the switch (or stepped in): them
+        tok = max(here, key=lambda k: k.last_seen) if here else (self._match(region, t) if move else None)
+        if tok is None:
+            return
+        if tok.region != region:
+            self._move_unseen(tok, region, t)
+        tok.last_seen = t
+        tok.floor_seen[self.regions[region].floor] = t
+        self.changes.append(Change(t, "evidence", tok.id, region, why))
+        if tok.unknown and self._window_floor(region, t) is None and (
+            ESTABLISH_ON_EXIT_FLOOR or self.regions[region].floor != tok.unknown_floor
+        ):
+            self._establish(tok, t, why or "evidence")
+
+    def _in_doorway_to(self, region: str) -> bool:
+        """Someone in view next door, at a doorway that leads into this region."""
+        for other, r in self.regions.items():
+            for portal in r.portals:
+                if region not in portal.to:
+                    continue
+                for tid in self._visible[other]:
+                    pos = self._pos[other].get(tid)
+                    if pos is not None and -signed_distance(pos[0], pos[1], portal.polygon) <= PORTAL_MM:
+                        return True
+        return False
+
     def by_region(self) -> dict[str, int]:
         out = dict.fromkeys(self.regions, 0)
         for tok in self._people():

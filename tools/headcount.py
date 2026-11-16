@@ -63,6 +63,8 @@ def main() -> None:
     ap.add_argument("--from-leads-to", action="store_true",
                     help="build spaces, doorways, connections and exits from the exit zones' leads_to (as the integration does)")
     ap.add_argument("--outside-doors", default="{}", help='JSON: door entity -> area, doors to outside no radar sees (with --from-leads-to)')
+    ap.add_argument("--evidence", type=Path, help="logbook JSON: entity -> [[t, state, by hand, origin], ...] (switches, contacts)")
+    ap.add_argument("--evidence-areas", default="{}", help='JSON: entity -> [area, only switching on counts]')
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
@@ -161,6 +163,21 @@ def main() -> None:
     hc = HeadCount(regions, bootstrap_until=t0 + a.bootstrap_h * 3600, connections=[tuple(c) for c in conns])
     events = [(fr.t, 0, rid, fr) for rid, fs in frames.items() if rid in region_of for fr in fs]
     events += [(t, 1, e, s) for e, rows in doors.items() for t, s in rows]
+    if a.evidence:
+        ev_areas = json.loads(a.evidence_areas)
+        area_region = {}
+        for r in regions:
+            area_region.setdefault(r.name, r.id)
+        for e, rows in json.loads(a.evidence.read_text()).items():
+            if e not in ev_areas or (region := area_region.get(ev_areas[e][0])) is None:
+                continue
+            prev = None
+            for t, state, by_hand, _origin in sorted(rows):
+                usable = state not in ("unavailable", "unknown") and (e.startswith("event.") or (prev not in (None, "unavailable", "unknown") and prev != state))
+                prev = state
+                if usable and by_hand and (not ev_areas[e][1] or state == "on"):
+                    off = state == "off" and e.split(".")[0] in ("light", "switch", "fan", "input_boolean")
+                    events.append((t, 2, region, (e, not off)))
     events.sort(key=lambda e: (e[0], e[1]))
     t_from, t_to = ts(a.t_from), ts(a.t_to)
     last_counts = None
@@ -184,6 +201,10 @@ def main() -> None:
                     floors_s = "  ".join(f"F{fl}:{n}" for fl, n in sorted(hc.by_floor().items(), reverse=True))
                     say(f"{fmt(tick)}  home {hc.count()}  {floors_s}   {c.kind} #{c.token} {c.region} {c.detail}")
         n_changes = len(hc.changes) if tick + 5 >= t and n_changes < len(hc.changes) and hc.changes[-1].kind == "left" else n_changes
+        if kind == 2:
+            hc.evidence(key, t, payload[0], move=payload[1])
+            record(timeline, hc, t)
+            continue
         if kind == 1:
             hc.door(key, payload in OPEN_STATES, t)
             record(timeline, hc, t)

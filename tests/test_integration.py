@@ -660,3 +660,45 @@ async def test_exit_leads_to_and_head_count_switch_round_trip(hass: HomeAssistan
     assert spaces[entry_area.id]["exits"] == ["binary_sensor.front_door"]
     assert {p["name"]: p["to"] for p in spaces[entry_area.id]["portals"]} == {"Front door": [], "Garage door": [garage.id]}
     assert hc["connections"] == [sorted([entry_area.id, garage.id]) + ["binary_sensor.garage_entry"]]
+
+
+async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_device: str) -> None:
+    """A light switched by hand puts the unseen person in its room; switched by an automation it says nothing."""
+    from homeassistant.core import Context
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Upstairs", level=1)
+    hall = ar.async_get(hass).async_create("Hall", floor_id=floor.floor_id)
+    den = ar.async_get(hass).async_create("Den", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=hall.id)
+    ent_reg = er.async_get(hass)
+    for name in ("den", "den_fan"):
+        ent = ent_reg.async_get_or_create("light", "test", name, suggested_object_id=name)
+        ent_reg.async_update_entity(ent.entity_id, area_id=den.id)
+        hass.states.async_set(ent.entity_id, "off")
+    door = {**zone("door", "Den door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"), "leads_to": [den.id]}
+    entry = await setup_entry(hass, radar_device, [door])
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "evidence": ["light.den"], "evidence_on": ["light.den_fan"]})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    assert rt._evidence == {"light.den": (den.id, False), "light.den_fan": (den.id, True)}
+    hc = rt.hc
+    hc.seed(hall.id, 1, 0.0)  # someone upstairs, unseen in the hall
+
+    def evidence() -> list[str]:
+        return [c.region for c in hc.changes if c.kind == "evidence"]
+
+    hass.states.async_set("light.den", "on", context=Context(parent_id="automation-run"))
+    hass.states.async_set("light.den", "off", context=Context(user_id="someone-in-the-app"))
+    await hass.async_block_till_done()
+    assert evidence() == [] and hc.by_region()[hall.id] == 1
+    hass.states.async_set("light.den_fan", "on", context=Context(parent_id="automation-run"))
+    hass.states.async_set("light.den_fan", "off")  # its timer ran out: says nothing
+    await hass.async_block_till_done()
+    assert evidence() == []
+    hass.states.async_set("light.den", "on")  # the wall switch
+    await hass.async_block_till_done()
+    assert evidence() == [den.id] and hc.by_region() == {hall.id: 0, den.id: 1} and hc.count() == 1
+    hass.states.async_set("light.den_fan", "on")
+    await hass.async_block_till_done()
+    assert evidence() == [den.id, den.id] and hc.count() == 1  # never adds anyone

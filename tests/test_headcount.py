@@ -273,3 +273,34 @@ def test_walking_out_of_the_bedroom_in_one_track_is_a_handover() -> None:
         hc.frame_group({"bedroom": {}, "hall": {7: (1500.0, 300.0 * (t - 4))}}, float(t))
     assert hc.count() == 1 and hc.by_region() == {"hall": 1, "bedroom": 0}
     assert [c.kind for c in hc.changes if c.kind != "restored"] == ["moved"]
+
+
+# ------------------------------------------------------------------ evidence
+
+DEN_REGIONS = [Region("hall", 3, portals=(Portal("Den door", ((0, 0), (1000, 0), (1000, 500), (0, 500)), ("den",)),)), Region("den", 3, observed=False)]
+
+
+def test_a_switch_puts_the_unseen_person_in_its_room_but_never_adds_one() -> None:
+    hc = HeadCount(DEN_REGIONS, connections=[("hall", "den", None)])
+    hc.seed("hall", 1, 0.0)
+    hc.evidence("den", 10.0, "light.den")
+    assert hc.by_region() == {"hall": 0, "den": 1}
+    hc.evidence("den", 20.0, "light.den")  # again: the same person
+    hc.evidence("hall", 30.0, "light.hall", move=False)  # switched off: nobody in the hall to confirm, nobody moved
+    assert hc.by_region() == {"hall": 0, "den": 1} and hc.count() == 1
+
+
+def test_a_switch_does_not_pull_someone_out_of_a_room_without_a_radar() -> None:
+    hc = HeadCount(DEN_REGIONS, connections=[("hall", "den", None)])
+    hc.seed("den", 1, 0.0)  # asleep in the den
+    hc.evidence("hall", 10.0, "binary_sensor.hall_closet")  # someone else (not counted) at the hall closet
+    assert hc.by_region() == {"hall": 0, "den": 1}
+
+
+def test_someone_in_the_doorway_explains_the_switch() -> None:
+    hc = HeadCount(DEN_REGIONS, connections=[("hall", "den", None)])
+    hc.seed("hall", 2, 0.0)
+    walk(hc, "hall", 1, 1.0, [(3000.0, 3000.0), (2000.0, 1500.0), (500.0, 700.0)])  # one walks to the den door
+    hc.frame("hall", {1: (500.0, 700.0)}, 5.0)
+    hc.evidence("den", 5.5, "light.den")  # reaching in for the switch
+    assert hc.by_region() == {"hall": 2, "den": 0}  # the other (unseen) one is not moved in

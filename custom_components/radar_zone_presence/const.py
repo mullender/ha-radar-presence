@@ -23,6 +23,8 @@ CONF_RADAR = "radar"  # zone subentry: the radar subentry whose frame the polygo
 CONF_IMPORT_ZONES = "import_zones"  # radar subentry: legacy polygons to turn into zones on setup
 CONF_HEADCOUNT = "headcount"  # radar subentry: use this radar for the head count (default on)
 CONF_OUTSIDE_DOORS = "outside_doors"  # home options: doors / locks to outside no radar sees (e.g. a garage door)
+CONF_EVIDENCE = "evidence"  # home options: switches / door contacts that mean someone is in their area when used by hand
+CONF_EVIDENCE_ON = "evidence_on"  # ... only when switched on by hand (off can be a timer)
 OUTSIDE = "outside"  # exit zones: leads_to value for a door to outside
 
 SUBENTRY_RADAR = "radar"
