@@ -152,6 +152,11 @@ def main() -> None:
     t0 = min(f[0].t for f in frames.values() if f)
     conns = json.loads(a.connections)
     have = {frozenset(c[:2]) for c in conns}
+    same_area = {}
+    for r in regions:
+        same_area.setdefault(r.name, []).append(r.id)  # Region.name is the area
+    for ids in same_area.values():
+        group_links += [[x, y, None] for i, x in enumerate(ids) for y in ids[i + 1 :]]  # one room, two trackers
     conns += [c for c in group_links if frozenset(c[:2]) not in have]
     hc = HeadCount(regions, bootstrap_until=t0 + a.bootstrap_h * 3600, connections=[tuple(c) for c in conns])
     events = [(fr.t, 0, rid, fr) for rid, fs in frames.items() if rid in region_of for fr in fs]

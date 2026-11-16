@@ -26,7 +26,7 @@ async def async_setup_entry(
     if hc.hc is not None:
         entities: list[PeopleSensor] = [HomePeopleSensor(entry, hc)]
         entities += [FloorPeopleSensor(entry, hc, level) for level in sorted(hc.floors)]
-        entities += [SpacePeopleSensor(entry, hc, sid) for sid in hc.spaces]
+        entities += [SpacePeopleSensor(entry, hc, sid) for sid in hc.area_spaces()]
         async_add_entities(entities)
 
 

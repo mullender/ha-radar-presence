@@ -188,6 +188,11 @@ class HeadCountRuntime:
                             Portal(z.name, transform_polygon(a, z.polygon), () if outside and not dests else tuple(dests))
                         )
         links.update((a, b, None) for a, b in group_links)
+        by_area: dict[str, list[str]] = {}
+        for sid, sp in self.spaces.items():
+            by_area.setdefault(sp.area_id, []).append(sid)
+        for ids in by_area.values():  # one room seen by two radar groups: the same room
+            links.update((a, b, None) for i, a in enumerate(ids) for b in ids[i + 1 :])
         for entity_id in home.entry.options.get(CONF_OUTSIDE_DOORS, []) or []:
             area_id = self._entity_area(entity_id)
             if area_id is None or (region_id := region_for(area_id)) is None:
@@ -341,9 +346,15 @@ class HeadCountRuntime:
     def space_count(self, region_id: str) -> int | None:
         if self.hc is None or region_id not in self.spaces:
             return None
-        if self.spaces[region_id].level in self.hc.unknown_floors():
+        sp = self.spaces[region_id]
+        if sp.level in self.hc.unknown_floors():
             return None
-        return self.hc.by_region().get(region_id, 0)
+        counts = self.hc.by_region()
+        return sum(counts.get(sid, 0) for sid, other in self.spaces.items() if other.area_id == sp.area_id)
+
+    def area_spaces(self) -> list[str]:
+        """One space per area for the sensors (an area seen by several radar groups has several spaces)."""
+        return [sid for sid, sp in self.spaces.items() if sid == sp.area_id]
 
     def known(self) -> int:
         """People known to be home right now (without those on a floor whose exit is in use)."""
@@ -378,4 +389,4 @@ class HeadCountRuntime:
         if self.hc is None:
             return set()
         eid = self.home.entry.entry_id
-        return {f"{eid}_people", *(f"{eid}_people_floor_{lv}" for lv in self.floors), *(f"{eid}_people_{s}" for s in self.spaces)}
+        return {f"{eid}_people", *(f"{eid}_people_floor_{lv}" for lv in self.floors), *(f"{eid}_people_{s}" for s in self.area_spaces())}
