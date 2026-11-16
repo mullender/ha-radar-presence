@@ -47,6 +47,9 @@ be home, each with the region where they were last seen.
   in the doorway went in, and comes out through it; a track elsewhere is not
   them unless it lasts ``CONFIRM_S`` and no one else explains it (the radar
   missed them coming out).
+- **Door sensors miss events**: a track that passes through a doorway to
+  outside and vanishes within ``EXIT_PASS_S`` counts as that door opening
+  (a contact that logged nothing while the radar saw someone walk out).
 - **Unobserved regions** (no radar, or one that only sees ghosts) are inferred
   from their doors: someone lost next to the door into one while that door was
   used went in; someone new coming out of one shortly after its exit door
@@ -84,6 +87,10 @@ UNOBSERVED_ARRIVE_S = 600.0  # someone new coming out of an unobserved region th
 UNEXPLAINED_SEEN_S = 600.0  # someone appearing without a door counts once seen this long (or seen in another region)
 UNEXPLAINED_EXPIRE_S = 3600.0  # ... within this long, else it was not a person (a washer, a fan, a reflection)
 DIRECTION_S = 90.0  # the door from the house into the garage used this long before its exit opened: going out
+EXIT_NEAR_MM = 400.0  # a track that passed this close to a doorway to outside...
+EXIT_PASS_S = 10.0  # ... and vanished within this long after: as if that door opened (door sensors miss some)
+VIRTUAL_EXITS = True  # ... on/off
+ESTABLISH_ON_EXIT_FLOOR = True  # still seen on the exit floor LAG_S after the close re-establishes (else: only other floors)
 REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
 
@@ -175,6 +182,7 @@ class HeadCount:
         self._pos: dict[str, dict[int, tuple[float, float]]] = {r: {} for r in self.regions}
         self.regions_seen: dict[int, str] = {}  # token -> first region it was seen in
         self._windows: dict[int, _Window] = {}  # floor -> current/last exit window
+        self._at_exit: dict[tuple[str, int], tuple[float, str]] = {}  # track -> (last time in an outside doorway, its name)
         self._bootstrap_until = bootstrap_until
         self._next = 1
         self.changes: list[Change] = []
@@ -270,6 +278,10 @@ class HeadCount:
                 self._appear(region, tid, t, tracks[tid], prefer=None if stale else tok)
         for key in [k for k in self._pending if k[0] == region]:
             self._recheck(key, t)
+        for tid, (x, y) in tracks.items():
+            for portal in self.regions[region].portals:
+                if not portal.to and -signed_distance(x, y, portal.polygon) <= EXIT_NEAR_MM:
+                    self._at_exit[(region, tid)] = (t, portal.name)
         self._visible[region] = cur
 
     def advance(self, t: float) -> None:
@@ -281,6 +293,18 @@ class HeadCount:
         self._now = max(self._now, t)
         self._expire_unknown(t)
         self._confirm(t)
+
+    def _virtual_exit(self, region: str, name: str, t: float) -> None:
+        floor = self.regions[region].floor
+        w = self._windows.get(floor)
+        if w is not None and (w.closed is None or self._unsettled(floor, t)):
+            if w.closed is not None:
+                w.closed = max(w.closed, t)
+            return  # a door on this floor is in use already
+        self._windows[floor] = _Window(floor, t, closed=t)
+        for tok in self.tokens.values():
+            if self.regions[tok.region].floor == floor or t - tok.floor_seen.get(floor, float("-inf")) <= RECENT_S:
+                self._doubt(tok, t, f"vanished at {name}", floor)
 
     def _direction(self, region: str, t: float) -> str | None:
         """Out or in, from the order of the doors, for an exit of an unobserved region; else unknown."""
@@ -316,9 +340,9 @@ class HeadCount:
             w = self._windows.get(tok.unknown_floor)
             if w is None or w.closed is None:
                 continue
-            if tok.visible is not None and t - max(w.closed, tok.since) >= LAG_S:
+            if ESTABLISH_ON_EXIT_FLOOR and tok.visible is not None and t - max(w.closed, tok.since) >= LAG_S:
                 self._establish(tok, t, "still here")
-            elif t - w.closed >= REESTABLISH_S and (tok.visible is None or t - max(w.closed, tok.since) < LAG_S):
+            elif t - w.closed >= REESTABLISH_S and (tok.visible is None or not ESTABLISH_ON_EXIT_FLOOR or t - max(w.closed, tok.since) < LAG_S):
                 self._drop(tok, t, "left")
 
     def _establish(self, tok: Token, t: float, why: str) -> None:
@@ -364,7 +388,9 @@ class HeadCount:
         tok.floor_seen[self.regions[region].floor] = t
         tok.seen_region = region
         tok.pos = self._pos[region].get(tid, tok.pos)
-        if tok.unknown and self._window_floor(region, t) is None:
+        if tok.unknown and self._window_floor(region, t) is None and (
+            ESTABLISH_ON_EXIT_FLOOR or self.regions[region].floor != tok.unknown_floor
+        ):
             self._establish(tok, t, "walked in")  # off the exit floor (or seen again after the window): inside
         elif not tok.unknown and (w := self._window_floor(region, t)) is not None and w.direction != "in" and not tok.provisional:
             self._doubt(tok, t, "on the exit floor")  # walked down to the door while it is in use
@@ -384,6 +410,9 @@ class HeadCount:
         if tok is not None and tok.visible == (region, tid):
             tok.visible = None
             portal = self._portal_at(region, pos)
+            passed = self._at_exit.pop((region, tid), None)
+            if VIRTUAL_EXITS and passed is not None and t - passed[0] <= EXIT_PASS_S:
+                self._virtual_exit(region, passed[1], t)  # went through the front door and vanished: maybe out, sensor or not
             if portal is not None and len(portal.to) == 1 and (self.regions[portal.to[0]].observed or self._enclosed(portal.to[0])):
                 self._move_unseen(tok, portal.to[0], t)  # went through (a stairwell both ways: unknown which)
                 return

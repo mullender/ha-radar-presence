@@ -56,9 +56,16 @@ def main() -> None:
     ap.add_argument("--extra-zones", default="{}", help="JSON: radar title suffix -> [zone dicts] added to its config (try zones before drawing them)")
     ap.add_argument("--truth", type=Path, help="ground truth JSON (exact counts, upper bounds) to score against")
     ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
+    ap.add_argument("--set", nargs="*", default=[], help="override engine constants, e.g. VIRTUAL_EXITS=0 LAG_S=60")
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
+    import custom_components.radar_zone_presence.engine.headcount as hc_mod
+
+    for kv in a.set:
+        k, v = kv.split("=")
+        old = getattr(hc_mod, k)
+        setattr(hc_mod, k, type(old)(float(v)) if not isinstance(old, bool) else v.lower() in ("1", "true", "yes"))
 
     def ts(s: str | None) -> float | None:
         return dt.datetime.fromisoformat(s).replace(tzinfo=tz).timestamp() if s else None

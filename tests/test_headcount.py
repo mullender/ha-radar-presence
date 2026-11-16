@@ -219,3 +219,14 @@ def test_a_ghost_downstairs_does_not_wake_the_sleeper_in_a_room_without_a_radar(
     hc.advance(5200)
     assert hc.by_region()["kids_room"] == 1
     assert hc.count() == 2
+
+
+def test_walking_out_of_the_front_door_counts_even_if_its_sensor_misses_it() -> None:
+    hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
+    see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})
+    see(hc, "entry", 500, 510, {5: (500, 400)})  # down the stairs
+    see(hc, "entry", 511, 520, {5: (-1300, 1300)})  # shoes on
+    see(hc, "entry", 521, 524, {5: (-2050, 2600)})  # through the front door (its contact logs nothing)...
+    see(hc, "entry", 525, 527, {5: (-3200, 3100)})  # ...and outside, gone
+    hc.advance(527 + 700)
+    assert hc.count() == 1
