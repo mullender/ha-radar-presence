@@ -24,6 +24,7 @@ export function exportZones(radar, zones, settings = {}) {
       area_id: z.area_id ?? null,
       ...(z.door_entity_id ? { door_entity_id: z.door_entity_id } : {}),
       ...(z.door ? { door: z.door } : {}),
+      ...(z.leads_to && z.leads_to.length ? { leads_to: [...z.leads_to] } : {}),
     })),
   };
 }
@@ -71,6 +72,7 @@ export function parseImport(text) {
       filters, area_id: typeof z.area_id === 'string' ? z.area_id : null,
       door_entity_id: typeof z.door_entity_id === 'string' && z.door_entity_id ? z.door_entity_id : null,
       door: z.door && ['none', 'in', 'out'].includes(z.door.swing) ? { swing: z.door.swing, hinge_end: z.door.hinge_end ? 1 : 0 } : null,
+      leads_to: Array.isArray(z.leads_to) ? z.leads_to.filter(a => typeof a === 'string' && a).slice(0, 20) : [],
     };
   });
   const grace = Number(doc.settings?.reconnect_grace_s);
@@ -92,8 +94,9 @@ export function mergeZones(current, imported, { areaIds = null } = {}) {
   const used = new Set(out.map(z => z.id));
   let replaced = 0;
   let added = 0;
-  for (const z of imported) {
+  for (let z of imported) {
     const area_id = z.area_id && (!areaIds || areaIds.has(z.area_id)) ? z.area_id : null;
+    if (z.leads_to) z = { ...z, leads_to: z.leads_to.filter(a => a === 'outside' || !areaIds || areaIds.has(a)) };
     let i = z.id ? out.findIndex(q => q.id === z.id) : -1;
     if (i < 0) i = out.findIndex(q => q.name.trim().toLowerCase() === z.name.toLowerCase() && q.kind === z.kind);
     if (i >= 0) {

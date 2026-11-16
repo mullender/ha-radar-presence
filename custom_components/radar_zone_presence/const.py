@@ -21,6 +21,9 @@ CONF_DISPLAY = "display"
 CONF_UNIT = "unit"  # last known unit of the coordinate entities (fallback)
 CONF_RADAR = "radar"  # zone subentry: the radar subentry whose frame the polygon is drawn in
 CONF_IMPORT_ZONES = "import_zones"  # radar subentry: legacy polygons to turn into zones on setup
+CONF_HEADCOUNT = "headcount"  # radar subentry: use this radar for the head count (default on)
+CONF_OUTSIDE_DOORS = "outside_doors"  # home options: doors / locks to outside no radar sees (e.g. a garage door)
+OUTSIDE = "outside"  # exit zones: leads_to value for a door to outside
 
 SUBENTRY_RADAR = "radar"
 SUBENTRY_ZONE = "zone"

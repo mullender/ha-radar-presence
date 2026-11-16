@@ -70,3 +70,11 @@ test('exits round-trip with their door sensor', () => {
   assert.equal(zones[0].kind, 'exit');
   assert.equal(zones[0].door_entity_id, 'binary_sensor.garage_door');
 });
+
+test('exits keep where they lead; unknown areas are dropped on import', () => {
+  const doc = exportZones({ title: 'Entry' }, [{ id: 'zs', name: 'Stairs', kind: 'exit', polygon: square, filters: {}, area_id: null, leads_to: ['living_room', 'outside', 'attic'] }]);
+  const { zones } = parseImport(JSON.stringify(doc));
+  assert.deepEqual(zones[0].leads_to, ['living_room', 'outside', 'attic']);
+  const merged = mergeZones([], zones, { areaIds: new Set(['living_room']) });
+  assert.deepEqual(merged.zones[0].leads_to, ['living_room', 'outside']);
+});

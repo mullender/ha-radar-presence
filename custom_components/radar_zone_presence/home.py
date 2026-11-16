@@ -27,6 +27,7 @@ from homeassistant.helpers.event import async_call_later, async_track_state_chan
 from .const import (
     CONF_DEVICE_ID,
     CONF_DISPLAY,
+    CONF_HEADCOUNT,
     CONF_RADAR,
     CONF_RECONNECT_GRACE,
     CONF_TARGETS,
@@ -86,6 +87,7 @@ class RadarFeed:
         self.device_id: str = data[CONF_DEVICE_ID]
         self.unit_fallback: str | None = data.get(CONF_UNIT)
         self.display: dict[str, Any] = dict(data.get(CONF_DISPLAY) or {})
+        self.headcount: bool = bool(data.get(CONF_HEADCOUNT, True))
         self.targets = [TargetEntities(t["slot"], t["x"], t["y"]) for t in data[CONF_TARGETS]]
         self.units: dict[str, str | None] = {}
         self.assembler = FrameAssembler(self.targets, units=self.units)
@@ -172,6 +174,7 @@ class GroupRuntime:
         self.tracker = Tracker(spots, [invert(self.to_anchor[f.id]) for f in self.feeds])
         self.snapshot: EngineSnapshot = self.engine.snapshot()
         self.track_radars: dict[int, frozenset[int]] = {}
+        self.last_targets: tuple[Target, ...] = ()  # fused tracks, anchor's frame
         self.deadline_unsub: CALLBACK_TYPE | None = None
         self.deadline = 0.0
 
@@ -201,6 +204,7 @@ class GroupRuntime:
                 obs.append(Observation(k, tg.slot, x, y))
         fused = self.tracker.fuse(obs, t)
         self.track_radars = fused.radars
+        self.last_targets = fused.targets
         self.snapshot = self.engine.process(Frame(t, fused.targets, self.available, fused.gone, fused.dropped))
         return self._passages(fused.targets, fused.gone, fused.born)
 
@@ -272,6 +276,9 @@ class HomeRuntime:
                 self.group_of[rid] = group
         self._feed_of_entity = {eid: f for f in self.feeds.values() for eid in f.entity_ids}
         self._max_distance: dict[str, float] = {}
+        from .headcount_runtime import HeadCountRuntime  # (imports home for typing only)
+
+        self.headcount = HeadCountRuntime(hass, self)
 
         self._entity_listeners: dict[int, list[CALLBACK_TYPE]] = {}  # id(group) -> callbacks
         self._frame_listeners: dict[str, list[FrameListener]] = {}  # radar id -> callbacks
@@ -289,6 +296,9 @@ class HomeRuntime:
 
     def set_max_distance(self, radar_id: str, mm: float) -> None:
         self._max_distance[radar_id] = mm
+
+    def max_distance(self, radar_id: str) -> float:
+        return self._max_distance.get(radar_id, DEFAULT_MAX_DISTANCE_MM)
 
     def coverage(self, zone_id: str) -> list[str]:
         return self.zone_group(zone_id).coverage(zone_id, lambda rid: self._max_distance.get(rid, DEFAULT_MAX_DISTANCE_MM))
@@ -320,6 +330,7 @@ class HomeRuntime:
 
     @callback
     def async_stop(self) -> None:
+        self.headcount.async_stop()
         for unsub in (*self._unsubs, *self._door_unsubs.values()):
             unsub()
         self._unsubs.clear()
@@ -439,6 +450,7 @@ class HomeRuntime:
         group = self.group_of[feed.id]
         for exit_id, kind in group.evaluate(frame.t):
             self._passage(group, exit_id, kind, frame.t)
+        self.headcount.frame(group, frame.t)
         self._publish(group, feed)
         self._schedule_deadline(group)
 

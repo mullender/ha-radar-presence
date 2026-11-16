@@ -77,10 +77,12 @@
         "title": "Settings",
         "description": "Zones, exclusions, exits and per-zone filters are edited in the Radar Zones panel in the sidebar.",
         "data": {
-          "reconnect_grace_s": "Ignore targets after reconnect"
+          "reconnect_grace_s": "Ignore targets after reconnect",
+          "outside_doors": "Doors to outside no radar sees"
         },
         "data_description": {
-          "reconnect_grace_s": "Seconds to ignore a radar's detections after it comes back from unavailable. Ghost targets often appear right after a reconnect."
+          "reconnect_grace_s": "Seconds to ignore a radar's detections after it comes back from unavailable. Ghost targets often appear right after a reconnect.",
+          "outside_doors": "Doors, garage doors and locks to outside that no radar watches (a garage door: its area becomes a space without a radar). Used by the head count; doors on exit zones are picked up from the zones."
         }
       }
     }
@@ -94,6 +96,15 @@
     "sensor": {
       "zone_targets": {
         "name": "Targets"
+      },
+      "people_home": {
+        "name": "People home"
+      },
+      "people_floor": {
+        "name": "People on {floor}"
+      },
+      "people_space": {
+        "name": "People in {space}"
       }
     },
     "event": {

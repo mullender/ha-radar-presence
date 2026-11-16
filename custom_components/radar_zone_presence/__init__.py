@@ -87,6 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeConfigEntry) -> bool
     _remove_stale_entities(hass, entry, runtime)
     runtime.async_start()
     entry.async_on_unload(runtime.async_stop)
+    await runtime.headcount.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _sync_zone_areas(hass, runtime)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
@@ -150,6 +151,7 @@ def _remove_stale_entities(hass: HomeAssistant, entry: ConfigEntry, runtime: Hom
             expected |= {f"{zid}_seen_{rid}" for rid in coverage}
     for rid, feed in runtime.feeds.items():
         expected |= {passage_unique_id(rid, z.id) for z in feed.exits}
+    expected |= runtime.headcount.unique_ids()
     ent_reg = er.async_get(hass)
     for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
         if e.unique_id not in expected:

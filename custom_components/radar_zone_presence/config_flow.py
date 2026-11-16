@@ -27,6 +27,7 @@ from .const import (
     CONF_IMPORT_ZONES,
     CONF_PROFILE,
     CONF_RADAR,
+    CONF_OUTSIDE_DOORS,
     CONF_RECONNECT_GRACE,
     CONF_TARGETS,
     CONF_UNIT,
@@ -252,7 +253,13 @@ class RadarZonePresenceOptionsFlow(OptionsFlow):
                         selector.NumberSelectorConfig(
                             min=0, max=600, step=1, unit_of_measurement="s", mode=selector.NumberSelectorMode.BOX
                         )
-                    )
+                    ),
+                    vol.Optional(
+                        CONF_OUTSIDE_DOORS,
+                        default=self.config_entry.options.get(CONF_OUTSIDE_DOORS, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain=["binary_sensor", "cover", "lock"], multiple=True)
+                    ),
                 }
             ),
         )

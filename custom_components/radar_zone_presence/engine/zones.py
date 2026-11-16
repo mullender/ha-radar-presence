@@ -67,6 +67,7 @@ class Zone:
     filters: ZoneFilters = ZoneFilters()
     area_id: str | None = None
     door_entity_id: str | None = None  # exits: the door contact for this opening
+    leads_to: tuple[str, ...] = ()  # exits: HA area ids this opening leads to, or "outside" (head count)
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Zone:
@@ -78,6 +79,7 @@ class Zone:
             filters=ZoneFilters.from_dict(d.get("filters")),
             area_id=d.get("area_id"),
             door_entity_id=d.get("door_entity_id") or None,
+            leads_to=tuple(str(a) for a in d.get("leads_to") or ()),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -89,6 +91,7 @@ class Zone:
             "filters": self.filters.as_dict(),
             "area_id": self.area_id,
             **({"door_entity_id": self.door_entity_id} if self.door_entity_id else {}),
+            **({"leads_to": list(self.leads_to)} if self.leads_to else {}),
         }
 
 

@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DEVICE_ID,
     CONF_DISPLAY,
+    CONF_HEADCOUNT,
     CONF_PROFILE,
     CONF_RADAR,
     CONF_RECONNECT_GRACE,
@@ -45,6 +46,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_subscribe_frames,
         ws_history_frames,
         ws_zone_events,
+        ws_headcount,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -179,6 +181,7 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
             "settings": {
                 CONF_RECONNECT_GRACE: entry.options.get(CONF_RECONNECT_GRACE, 0),
                 CONF_DISPLAY: sub.data.get(CONF_DISPLAY, {}),
+                CONF_HEADCOUNT: sub.data.get(CONF_HEADCOUNT, True),
             },
             "group": {"anchor": group.anchor, "members": [f.id for f in group.feeds]},
             "fov": {"half_angle_deg": FOV_HALF_ANGLE_DEG, "max_distance_mm": geometry["max_distance_mm"]},
@@ -206,6 +209,8 @@ ZONE_SCHEMA = vol.Schema(
         vol.Optional("filters", default={}): FILTERS_SCHEMA,
         vol.Optional("area_id"): vol.Any(None, str),
         vol.Optional("door_entity_id"): vol.Any(None, vol.All(str, vol.Match(r"^binary_sensor\.\w+$"))),
+        # Exits: the areas this opening leads to, or "outside" (head count).
+        vol.Optional("leads_to"): vol.Any(None, [vol.All(str, vol.Length(min=1, max=100))]),
         # Exits: a door in the threshold rectangle (drawing / analysis only).
         vol.Optional("door"): vol.Any(None, {vol.Required("swing"): vol.In(["none", "in", "out"]), vol.Optional("hinge_end", default=0): vol.In([0, 1])}),
     },
@@ -222,6 +227,7 @@ ZONE_SCHEMA = vol.Schema(
         vol.Optional("settings"): {
             vol.Optional(CONF_RECONNECT_GRACE): vol.All(vol.Coerce(float), vol.Range(min=0, max=600)),
             vol.Optional(CONF_DISPLAY): dict,
+            vol.Optional(CONF_HEADCOUNT): bool,
         },
     }
 )
@@ -262,7 +268,7 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
         if z["kind"] != KIND_INCLUDE:
             radar_zones.append(z)
             continue
-        data = {k: v for k, v in z.items() if k not in ("kind", "door", "door_entity_id")} | {CONF_RADAR: rid}
+        data = {k: v for k, v in z.items() if k not in ("kind", "door", "door_entity_id", "leads_to")} | {CONF_RADAR: rid}
         if (zsub := current.pop(z["id"], None)) is None:
             hass.config_entries.async_add_subentry(
                 entry,
@@ -281,6 +287,8 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
     settings = msg.get("settings", {})
     if CONF_DISPLAY in settings:
         radar_data[CONF_DISPLAY] = settings[CONF_DISPLAY]
+    if CONF_HEADCOUNT in settings:
+        radar_data[CONF_HEADCOUNT] = settings[CONF_HEADCOUNT]
     hass.config_entries.async_update_subentry(entry, sub, data=radar_data)
     if CONF_RECONNECT_GRACE in settings:
         hass.config_entries.async_update_entry(
@@ -288,6 +296,18 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
         )
     # The update listener reloads the home once for all of these changes.
     connection.send_result(msg["id"], {"zones": zones})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/headcount"})
+@callback
+def ws_headcount(hass: HomeAssistant, connection, msg) -> None:
+    """The head count's spaces, connections, people (tokens) and recent changes."""
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    connection.send_result(msg["id"], entry.runtime_data.headcount.debug())
 
 
 def _frame_message(view: RadarView) -> dict[str, Any]:

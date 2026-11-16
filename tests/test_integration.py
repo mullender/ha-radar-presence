@@ -551,3 +551,112 @@ async def test_linger_and_transient_spots_reach_the_tracker(hass: HomeAssistant,
     # Spots have no entities of their own.
     ours = [e.entity_id for e in er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)]
     assert not [e for e in ours if "bed" in e or "hall" in e]
+
+
+async def _tick(hass: HomeAssistant, freezer, seconds: float) -> None:
+    freezer.tick(seconds)
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+
+
+async def test_head_count_sensors_follow_the_front_door(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """People home / per floor / per space: someone seen inside counts; leaving through the front door does not."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    hass.states.async_set("binary_sensor.front_door", "off")
+    freezer.tick(120)
+    door = {
+        **zone("door", "Front door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"),
+        "door_entity_id": "binary_sensor.front_door",
+        "leads_to": ["outside"],
+    }
+    entry = await setup_entry(hass, radar_device, [door])
+    ent_reg = er.async_get(hass)
+    home_eid = ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people")
+    floor_eid = ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people_floor_0")
+    space_eid = ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people_{area.id}")
+    assert hass.states.get(home_eid).state == "0"
+    assert hass.states.get(home_eid).attributes["friendly_name"] == "Home People home"
+    assert hass.states.get(floor_eid).attributes["friendly_name"] == "Home People on Ground floor"
+    assert hass.states.get(space_eid).attributes["friendly_name"] == "Home People in Entry"
+
+    for k in range(8):  # someone in the room for a while (no door: counted while the home starts up)
+        await move(hass, 1, -40 + k, 120)
+        await _tick(hass, freezer, 4)
+    assert hass.states.get(home_eid).state == "1"
+    assert hass.states.get(floor_eid).state == "1" and hass.states.get(space_eid).state == "1"
+
+    hass.states.async_set("binary_sensor.front_door", "on")
+    await hass.async_block_till_done()
+    state = hass.states.get(home_eid)
+    assert state.state == "unknown" and state.attributes["at_least"] == 0  # the door is in use
+    await move(hass, 1, 40, 30)  # to the door...
+    await _tick(hass, freezer, 2)
+    await move(hass, 1, 0, 0)  # ...and gone
+    await _tick(hass, freezer, 2)
+    hass.states.async_set("binary_sensor.front_door", "off")
+    await hass.async_block_till_done()
+    await _tick(hass, freezer, 30)
+    assert hass.states.get(home_eid).state == "unknown"  # just closed
+    for _ in range(14):
+        await _tick(hass, freezer, 60)
+    assert hass.states.get(home_eid).state == "0"
+    assert hass.states.get(floor_eid).state == "0"
+
+
+async def test_head_count_leaves_out_radars_switched_off(hass: HomeAssistant, radar_device: str) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    area = ar.async_get(hass).async_create("Garage")
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Home", version=2, data={}, options={"reconnect_grace_s": 0},
+        subentries_data=[{**radar_subentry(radar_device), "data": {**radar_subentry(radar_device)["data"], "headcount": False}}],
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.headcount.hc is None  # no space left: no head count sensors
+    assert er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people") is None
+
+
+async def test_exit_leads_to_and_head_count_switch_round_trip(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    from homeassistant.helpers import area_registry as ar
+
+    areas = ar.async_get(hass)
+    entry_area = areas.async_create("Entry")
+    garage = areas.async_create("Garage")
+    dr.async_get(hass).async_update_device(radar_device, area_id=entry_area.id)
+    await setup_entry(hass, radar_device)
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": f"{DOMAIN}/zones/save",
+            "radar_id": RADAR,
+            "zones": [
+                {"id": "zfront", "name": "Front door", "kind": "exit", "door_entity_id": "binary_sensor.front_door",
+                 "leads_to": ["outside"], "polygon": mm([[-60, 50], [-20, 50], [-20, 90], [-60, 90]])},
+                {"id": "zgarage", "name": "Garage door", "kind": "exit", "door_entity_id": "binary_sensor.garage_entry",
+                 "leads_to": [garage.id], "polygon": mm([[20, 50], [60, 50], [60, 90], [20, 90]])},
+            ],
+            "settings": {"headcount": True},
+        }
+    )
+    saved = (await client.receive_json())["result"]["zones"]
+    assert [z["leads_to"] for z in saved] == [["outside"], [garage.id]]
+    await hass.async_block_till_done()
+    await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
+    cfg = (await client.receive_json())["result"]
+    assert cfg["settings"]["headcount"] is True
+    assert [z.get("leads_to") for z in cfg["zones"]] == [["outside"], [garage.id]]
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount"})
+    hc = (await client.receive_json())["result"]
+    spaces = {s["id"]: s for s in hc["spaces"]}
+    assert spaces[entry_area.id]["observed"] and not spaces[garage.id]["observed"]  # the garage has no radar
+    assert spaces[entry_area.id]["exits"] == ["binary_sensor.front_door"]
+    assert {p["name"]: p["to"] for p in spaces[entry_area.id]["portals"]} == {"Front door": [], "Garage door": [garage.id]}
+    assert hc["connections"] == [sorted([entry_area.id, garage.id]) + ["binary_sensor.garage_entry"]]

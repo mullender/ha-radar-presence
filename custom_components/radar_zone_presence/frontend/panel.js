@@ -300,6 +300,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.settings = {
       reconnect_grace_s: cfg.settings.reconnect_grace_s || 0,
       display: normalizeDisplay(cfg.settings.display || {}, { upsideDown: cfg.device_mounting?.upside_down }),
+      headcount: cfg.settings.headcount !== false,
     };
     this.savedSettings = JSON.stringify(this.settings);
     this._renderAll();
@@ -313,6 +314,7 @@ class RadarZonePresencePanel extends HTMLElement {
       area_id: z.area_id ?? z.registry_area_id ?? null,
       door_entity_id: z.door_entity_id ?? null,
       door: z.door ?? null,
+      leads_to: Array.isArray(z.leads_to) ? [...z.leads_to] : [],
     };
   }
 
@@ -903,7 +905,7 @@ class RadarZonePresencePanel extends HTMLElement {
     try {
       const res = await this.hass.callWS({
         type: `${DOMAIN}/zones/save`, radar_id: this.radarId, zones: this.zones,
-        settings: { reconnect_grace_s: Number(this.settings.reconnect_grace_s) || 0, display: this.settings.display },
+        settings: { reconnect_grace_s: Number(this.settings.reconnect_grace_s) || 0, display: this.settings.display, headcount: this.settings.headcount !== false },
       });
       this.zones = res.zones.map(z => this._editable(z));
       this.saved = JSON.stringify(this.zones);
@@ -1688,6 +1690,10 @@ class RadarZonePresencePanel extends HTMLElement {
         el('label', {}, 'Reconnect grace (s)'),
         el('input', { type: 'number', min: 0, step: 1, value: this.settings.reconnect_grace_s, onchange: e => { this.settings = { ...this.settings, reconnect_grace_s: Math.max(0, +e.target.value || 0) }; this._renderHeader(); this._recomputePreview(); } }),
         el('div', { class: 'help full' }, 'Ignore detections for this long after the radar comes back from unavailable (ghosts often appear right after a reconnect).'),
+        el('label', { class: 'check full' },
+          el('input', { type: 'checkbox', checked: this.settings.headcount !== false, onchange: e => { this.settings = { ...this.settings, headcount: e.target.checked }; this._renderHeader(); } }),
+          el('span', {}, 'Use for the head count',
+            el('div', { class: 'help' }, 'Count people in this radar\'s area (people home, per floor, per area). Turn off for a radar that mostly sees ghosts (through a glass door, say): its area is then inferred from its doors, like a room without a radar.'))),
       ),
       this._orientationSection());
   }
@@ -1873,6 +1879,38 @@ class RadarZonePresencePanel extends HTMLElement {
     return pts ? pts.map(([x, y]) => ({ x, y, color: EXIT_COLOR })) : [];
   }
 
+  /** HA areas for "Leads to", by floor (highest first), plus outside. */
+  _areaOptions() {
+    const floors = this.hass.floors || {};
+    const areas = Object.values(this.hass.areas || {});
+    const level = a => floors[a.floor_id]?.level ?? -999;
+    return areas
+      .sort((a, b) => level(b) - level(a) || a.name.localeCompare(b.name))
+      .map(a => ({ id: a.area_id, name: a.name, floor: floors[a.floor_id]?.name || '' }));
+  }
+
+  _leadsToEditor(z) {
+    const sel = new Set(z.leads_to || []);
+    const toggle = (id, on) => {
+      const next = new Set(sel);
+      if (on) next.add(id); else next.delete(id);
+      this._patchZone(z.id, { leads_to: [...next] }, { renderSide: true });
+    };
+    const myArea = this.config?.device_area_id;
+    const box = (id, label, sub) => el('label', { class: 'check', style: { display: 'flex', gap: '6px', alignItems: 'baseline' } },
+      el('input', { type: 'checkbox', checked: sel.has(id), onchange: e => toggle(id, e.target.checked) }),
+      el('span', {}, label, sub ? el('span', { class: 'help' }, ` · ${sub}`) : ''));
+    return [
+      el('label', {}, 'Leads to'),
+      el('div', { style: { maxHeight: '140px', overflowY: 'auto', border: '1px solid var(--divider-color, #ddd)', borderRadius: '4px', padding: '4px 6px' } },
+        box('outside', 'Outside', 'a door out of the home'),
+        this._areaOptions().filter(a => a.id !== myArea).map(a => box(a.id, a.name, a.floor))),
+      el('div', { class: 'help full' },
+        'Where people go through this opening: another area (the stairs to the floor above, a bedroom without a radar) or outside. The head count uses it to tell who a person appearing here is, and that nobody appears without a door. ',
+        sel.size ? '' : 'Not set: this exit is ignored by the head count.'),
+    ];
+  }
+
   _exitEditor(z) {
     const cands = Object.keys(this.doors).length ? Object.keys(this.doors) : this._doorCandidates();
     const ranked = cands
@@ -1880,6 +1918,7 @@ class RadarZonePresencePanel extends HTMLElement {
       .sort((a, b) => (b.st?.share || 0) - (a.st?.share || 0) || this._doorName(a.id).localeCompare(this._doorName(b.id)));
     const st = z.door_entity_id ? this._doorStats(z.door_entity_id) : null;
     return [
+      ...this._leadsToEditor(z),
       el('label', {}, 'Door sensor'),
       el('select', { onchange: e => this._patchZone(z.id, { door_entity_id: e.target.value || null }, { renderSide: true }) },
         el('option', { value: '', selected: !z.door_entity_id }, 'None (an open doorway or stairs)'),

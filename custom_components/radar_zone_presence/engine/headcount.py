@@ -204,7 +204,22 @@ class HeadCount:
 
     def unknown(self) -> bool:
         """An exit door is in use (or just was): the count is not firm."""
-        return any(self._unsettled(w.floor, self._now) for w in self._windows.values())
+        return bool(self.unknown_floors())
+
+    def unknown_floors(self) -> set[int]:
+        """Floors whose exit doors are in use (or just were): their counts (and the home's) are not firm."""
+        return {w.floor for w in self._windows.values() if self._unsettled(w.floor, self._now)}
+
+    def seed(self, region: str, n: int, t: float) -> None:
+        """Restore people believed to be in a region (after a restart): unseen, as if seen long ago."""
+        for _ in range(n):
+            tok = self._new(region, t, "restored")
+            tok.last_seen = tok.since = t - 86400.0
+
+    def pulse(self, entity_id: str, t: float) -> None:
+        """A door activity without open/closed (a lock locked or unlocked): opened and closed at once."""
+        self.door(entity_id, True, t)
+        self.door(entity_id, False, t)
 
     def by_region(self) -> dict[str, int]:
         out = dict.fromkeys(self.regions, 0)
@@ -363,6 +378,7 @@ class HeadCount:
 
     def _drop(self, tok: Token, t: float, kind: str) -> None:
         del self.tokens[tok.id]
+        self.regions_seen.pop(tok.id, None)
         for key in [k for k, v in self._binding.items() if v == tok.id]:
             del self._binding[key]
         self.changes.append(Change(t, kind, tok.id, tok.region))
