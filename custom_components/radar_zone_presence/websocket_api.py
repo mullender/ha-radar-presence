@@ -47,6 +47,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_history_frames,
         ws_zone_events,
         ws_headcount,
+        ws_headcount_history,
+        ws_headcount_subscribe,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -308,6 +310,48 @@ def ws_headcount(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
         return
     connection.send_result(msg["id"], entry.runtime_data.headcount.debug())
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/headcount/history", vol.Required("start"): vol.Coerce(float), vol.Optional("end"): vol.Coerce(float)}
+)
+@callback
+def ws_headcount_history(hass: HomeAssistant, connection, msg) -> None:
+    """The head count's decision log in [start, end] (epoch s), the state before it, and the home's layout."""
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    connection.send_result(msg["id"], entry.runtime_data.headcount.history(msg["start"], msg.get("end", float("inf"))))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/headcount/subscribe"})
+@callback
+def ws_headcount_subscribe(hass: HomeAssistant, connection, msg) -> None:
+    """New decision log entries as they happen; {"closed": true} when the home reloads (resubscribe)."""
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    runtime = entry.runtime_data
+
+    @callback
+    def forward(entries: list[dict[str, Any]]) -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"log": entries}))
+
+    @callback
+    def closed() -> None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"closed": True}))
+
+    unsubs = [runtime.headcount.async_add_log_listener(forward), runtime.async_add_close_listener(closed)]
+
+    @callback
+    def unsubscribe() -> None:
+        for u in unsubs:
+            u()
+
+    connection.subscriptions[msg["id"]] = unsubscribe
+    connection.send_result(msg["id"])
 
 
 def _frame_message(view: RadarView) -> dict[str, Any]:

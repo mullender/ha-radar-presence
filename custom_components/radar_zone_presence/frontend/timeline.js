@@ -322,6 +322,16 @@ export class RzpTimeline extends HTMLElement {
     for (const row of this.rows) {
       ctx.fillStyle = text;
       ctx.fillText(row.name.length > 18 ? row.name.slice(0, 17) + '…' : row.name, 4, ry + 12);
+      for (const [a, b, n, label] of row.steps || []) { // a level per interval (a people count): shade + number
+        if (b < this.view.v0 || a > this.view.v1 || !n) continue;
+        const x0 = Math.max(LABEL_W, xa(a)), x1 = Math.min(w, xa(b));
+        ctx.fillStyle = row.color;
+        ctx.globalAlpha = Math.min(0.85, 0.3 + 0.18 * n);
+        ctx.fillRect(x0, ry + 2, Math.max(1.5, x1 - x0), ROW_H - 4);
+        ctx.globalAlpha = 1;
+        const txt = label ?? String(n);
+        if (x1 - x0 > ctx.measureText(txt).width + 6) { ctx.fillStyle = '#fff'; ctx.fillText(txt, x0 + 3, ry + 12); }
+      }
       ctx.fillStyle = row.color;
       for (const [a, b] of row.predicted || []) {
         if (b < this.view.v0 || a > this.view.v1) continue;

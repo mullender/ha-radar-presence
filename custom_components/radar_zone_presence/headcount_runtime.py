@@ -17,6 +17,7 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import timedelta
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
@@ -38,6 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 SAVE_DELAY_S = 10
 TICK_S = 5
+LOG_KEEP_S = 3 * 86400.0  # the decision log the panel's head count view replays
+LOG_SAVE_DELAY_S = 120
+SEEN_EVERY_S = 15.0  # who a radar sees, logged at most this often
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
 OPEN_STATES = {"on", "open", "opening", "closing"}
@@ -68,6 +72,13 @@ class HeadCountRuntime:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.headcount.{home.entry.entry_id}")
         self._last: tuple | None = None
+        # Decision log: every head count change, door and evidence signal, each with who is where after it.
+        self.log: list[dict[str, Any]] = []
+        self._log_store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, f"{DOMAIN}.headcount_log.{home.entry.entry_id}")
+        self._log_listeners: list[Callable[[list[dict[str, Any]]], None]] = []
+        self._logged = 0  # hc.changes already in the log
+        self._seen_logged: tuple = ()
+        self._seen_at = 0.0
         self.hc: HeadCount | None = None
         self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock"
         self._evidence: dict[str, tuple[str, bool]] = {}  # entity -> (region, only switching on counts)
@@ -233,6 +244,9 @@ class HeadCountRuntime:
     async def async_start(self) -> None:
         if self.hc is None:
             return
+        if (saved_log := await self._log_store.async_load()) and isinstance(saved_log.get("log"), list):
+            cutoff = time.time() - LOG_KEEP_S
+            self.log = [e for e in saved_log["log"] if isinstance(e, dict) and e.get("t", 0) >= cutoff]
         saved = await self._store.async_load()
         if saved and isinstance(saved.get("regions"), dict):
             now = time.time()
@@ -259,6 +273,7 @@ class HeadCountRuntime:
         self._unsubs.clear()
         if self.hc is not None:
             self._store.async_delay_save(self._data, 0)
+            self._log_store.async_delay_save(self._log_data, 0)
 
     @callback
     def async_add_listener(self, cb: CALLBACK_TYPE) -> CALLBACK_TYPE:
@@ -310,6 +325,7 @@ class HeadCountRuntime:
         if new is None or new.state in ("unavailable", "unknown"):
             return
         t = new.last_changed_timestamp
+        self._log_signal(t, "door", entity_id, new.state)
         if self._door_kind.get(entity_id) == "lock":
             if old is not None and old.state != new.state and old.state not in ("unavailable", "unknown"):
                 self.hc.pulse(entity_id, t)
@@ -329,11 +345,15 @@ class HeadCountRuntime:
             return
         if not entity_id.startswith("event.") and (old is None or old.state in ("unavailable", "unknown") or old.state == new.state):
             return  # (an event entity's state is the time of the press: any new one counts)
+        t = new.last_changed_timestamp
         if new.context.parent_id is not None or new.context.user_id is not None:
+            self._log_signal(t, "ignored", entity_id, f"{new.state}: by an automation or script" if new.context.parent_id else f"{new.state}: from the app")
             return
         region, on_only = self._evidence[entity_id]
         if on_only and new.state != "on":
+            self._log_signal(t, "ignored", entity_id, f"{new.state}: only switching on counts (a timer may turn it off)")
             return
+        self._log_signal(t, "signal", entity_id, new.state, region)
         # Switched off (a light on the way out): confirms who is there, moves nobody in. Contacts and buttons: both.
         off = new.state == "off" and entity_id.split(".")[0] in ("light", "switch", "fan", "input_boolean")
         self.hc.evidence(region, new.last_changed_timestamp, entity_id, move=not off)
@@ -343,8 +363,13 @@ class HeadCountRuntime:
     def _tick(self, _now: Any) -> None:
         if self.hc is None:
             return
-        self.hc.advance(time.time())
+        now = time.time()
+        self.hc.advance(now)
         self._changed()
+        seen = tuple(sorted(tok.id for tok in self.hc.tokens.values() if tok.visible is not None))
+        if seen != self._seen_logged and now - self._seen_at >= SEEN_EVERY_S:
+            self._seen_logged, self._seen_at = seen, now
+            self._append([{"t": now, "kind": "seen", **self._snapshot()}])
 
     # --------------------------------------------------------------- output
 
@@ -356,8 +381,11 @@ class HeadCountRuntime:
     def _changed(self) -> None:
         if self.hc is None:
             return
-        if len(self.hc.changes) > 500:  # a log for the panel, not a history
-            del self.hc.changes[:-200]
+        self._log_changes()
+        if len(self.hc.changes) > 500:  # the panel's log keeps the history
+            trimmed = len(self.hc.changes) - 200
+            del self.hc.changes[:trimmed]
+            self._logged = max(0, self._logged - trimmed)
         state = (self.hc.count(), tuple(sorted(self.hc.by_region().items())), tuple(sorted(self.hc.unknown_floors())))
         if state == self._last:
             return
@@ -366,6 +394,77 @@ class HeadCountRuntime:
             self._store.async_delay_save(self._data, SAVE_DELAY_S)
         for cb in list(self._listeners):
             cb()
+
+    # ------------------------------------------------------------------ log
+
+    def _snapshot(self) -> dict[str, Any]:
+        assert self.hc is not None
+        tokens = [
+            [tok.id, tok.region, ("v" if tok.visible is not None else "") + ("u" if tok.unknown else "") + ("p" if tok.provisional else "")]
+            for tok in self.hc.tokens.values()
+        ]
+        return {"tokens": tokens, "unknown_floors": sorted(self.hc.unknown_floors())}
+
+    def _log_changes(self) -> None:
+        assert self.hc is not None
+        new = self.hc.changes[self._logged :]
+        if not new:
+            return
+        self._logged = len(self.hc.changes)
+        snap = self._snapshot()
+        self._append([{"t": c.t, "kind": c.kind, "token": c.token, "region": c.region, "detail": c.detail, **snap} for c in new])
+
+    def _log_signal(self, t: float, kind: str, entity_id: str, detail: str, region: str | None = None) -> None:
+        if self.hc is None:
+            return
+        self._log_changes()  # what happened before it, first
+        self._append([{"t": t, "kind": kind, "entity": entity_id, "region": region, "detail": detail, **self._snapshot()}])
+
+    def _append(self, entries: list[dict[str, Any]]) -> None:
+        self.log += entries
+        cutoff = time.time() - LOG_KEEP_S
+        if self.log and self.log[0]["t"] < cutoff - 3600:
+            self.log = [e for e in self.log if e["t"] >= cutoff]
+        self._log_store.async_delay_save(self._log_data, LOG_SAVE_DELAY_S)
+        for cb in list(self._log_listeners):
+            cb(entries)
+
+    def _log_data(self) -> dict[str, Any]:
+        return {"log": self.log}
+
+    @callback
+    def async_add_log_listener(self, cb: Callable[[list[dict[str, Any]]], None]) -> CALLBACK_TYPE:
+        self._log_listeners.append(cb)
+        return lambda: self._log_listeners.remove(cb)
+
+    def history(self, start: float, end: float) -> dict[str, Any]:
+        """The decision log in [start, end], the state just before it, and the home's layout (for the panel)."""
+        layout = self.debug()
+        before = next((e for e in reversed(self.log) if e["t"] < start), None)
+        return {
+            "spaces": layout["spaces"],
+            "connections": layout["connections"],
+            "floors": [{"level": lv, "floor_id": fid, "name": name} for lv, (fid, name) in sorted(self.floors.items())],
+            "doors": self._door_spaces(),
+            "evidence": {e: [r, on_only] for e, (r, on_only) in self._evidence.items()},
+            "before": before,
+            "log": [e for e in self.log if start <= e["t"] <= end],
+            "now": {"t": time.time(), **self._snapshot()} if self.hc else None,
+            "log_start": self.log[0]["t"] if self.log else None,
+        }
+
+    def _door_spaces(self) -> dict[str, list[str]]:
+        """Door entity -> the spaces it is in (an exit: one; between two spaces: both)."""
+        out: dict[str, list[str]] = {}
+        if self.hc is None:
+            return out
+        for e, r in self.hc._door_region.items():
+            out.setdefault(e, []).append(r)
+        for a, links in self.hc._links.items():
+            for b, d in links:
+                if d and a < b:
+                    out.setdefault(d, []).extend([a, b])
+        return out
 
     def home_count(self) -> int | None:
         return None if self.hc is None or self.hc.unknown() else self.hc.count()

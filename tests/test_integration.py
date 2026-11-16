@@ -702,3 +702,10 @@ async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_dev
     hass.states.async_set("light.den_fan", "on")
     await hass.async_block_till_done()
     assert evidence() == [den.id, den.id] and hc.count() == 1  # never adds anyone
+    # The decision log the panel replays: ignored signals with why, used ones, and what they did.
+    log = rt.history(0, float("inf"))["log"]
+    kinds = [(e["kind"], e.get("entity")) for e in log if e["kind"] in ("signal", "ignored", "evidence")]
+    assert ("ignored", "light.den") in kinds and ("signal", "light.den") in kinds and ("evidence", None) in kinds
+    assert any("only switching on counts" in e["detail"] for e in log if e["kind"] == "ignored")
+    moved = next(e for e in log if e["kind"] == "evidence")
+    assert [t[1] for t in moved["tokens"]] == [den.id]  # who is where after it

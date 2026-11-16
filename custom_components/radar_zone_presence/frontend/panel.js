@@ -3,6 +3,7 @@
 
 import './plot.js';
 import './timeline.js';
+import './headcount.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
@@ -34,6 +35,10 @@ header select, header button { font: inherit; }
 header select { background: rgba(255,255,255,.15); color: inherit; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; padding: 5px 6px; max-width: 280px; }
 header select option { color: #222; }
 header .spacer { flex: 1; }
+.tabs { display: flex; gap: 2px; background: rgba(255,255,255,.12); border-radius: 6px; padding: 2px; }
+.tabs .tab { background: none; border: 0; color: inherit; padding: 5px 12px; border-radius: 4px; cursor: pointer; opacity: .8; }
+.tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }
+.app > rzp-headcount { min-height: 0; }
 header .dirty { font-size: 12px; opacity: .9; }
 .menu { background: none; border: 0; color: inherit; font-size: 22px; cursor: pointer; padding: 4px 8px; display: none; }
 :host([narrow]) .menu { display: block; }
@@ -167,19 +172,22 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hoverSpot = null;
     this.showSpots = true;
     this.fitPreview = null; // polygon previewed by hovering 'Fit to points'
+    this.tab = 'radars'; // 'radars' | 'headcount'
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (this.hcEl) this.hcEl.hass = hass;
     if (!this._started) { this._started = true; this._start(); }
     else if (this.config) { this._refreshLiveBadges(); this._updateDoorStates(); }
   }
   get hass() { return this._hass; }
 
-  set narrow(v) { this.toggleAttribute('narrow', !!v); }
+  set narrow(v) { this.toggleAttribute('narrow', !!v); this.hcEl?.toggleAttribute('narrow', !!v); }
   set panel(p) { this._panel = p; }
 
   disconnectedCallback() {
+    this.hcEl?.deactivate();
     this._unsubscribeLive();
     this._stopNowTimer();
     this.playing = false;
@@ -205,6 +213,12 @@ class RadarZonePresencePanel extends HTMLElement {
   async _start() {
     this._buildShell();
     await this._loadRadars();
+    const q0 = new URLSearchParams(location.hash.slice(1));
+    if (q0.get('view') === 'headcount') {
+      await this._setTab('headcount');
+      if (q0.get('t')) this.hcEl.showTime(+q0.get('t'), +q0.get('span') || 600);
+      return;
+    }
     const fromHash = new URLSearchParams(location.hash.slice(1)).get('radar');
     const stored = localStorage.getItem('rzp.radar');
     const pick = [fromHash, stored].find(id => this.radars.some(r => r.radar_id === id)) || this.radars[0]?.radar_id;
@@ -220,6 +234,11 @@ class RadarZonePresencePanel extends HTMLElement {
 
   async _applyHash() {
     const q = new URLSearchParams(location.hash.slice(1));
+    if (q.get('view') === 'headcount') {
+      await this._setTab('headcount');
+      if (q.get('t')) this.hcEl.showTime(+q.get('t'), +q.get('span') || 600);
+      return;
+    }
     const entry = q.get('radar'), zone = q.get('zone');
     if (!entry || !this.radars?.some(r => r.radar_id === entry)) return;
     const range = this.rangeS, at = this._rangeFor(q.get('t'));
@@ -244,6 +263,35 @@ class RadarZonePresencePanel extends HTMLElement {
     this.preferLive = false;
     this.timeline.focus(t - span / 2, t + span / 2);
     this._seek(t);
+  }
+
+  /** Switch between the radar editor and the head count view. */
+  async _setTab(tab) {
+    if (tab === this.tab && (tab !== 'headcount' || this.hcEl._active)) return;
+    this.tab = tab;
+    const hc = tab === 'headcount';
+    this.bodyEl.style.display = hc ? 'none' : '';
+    this.hcEl.style.display = hc ? '' : 'none';
+    this._renderHeader();
+    if (hc) {
+      history.replaceState(null, '', '#view=headcount');
+      await this.hcEl.activate();
+    } else {
+      this.hcEl.deactivate();
+      if (this.radarId) history.replaceState(null, '', `#radar=${this.radarId}`);
+      else if (this.radars.length) await this._selectRadar(this.radars[0].radar_id);
+    }
+  }
+
+  async _copyHeadcountLink() {
+    const q = new URLSearchParams(this.hcEl.linkParams());
+    const url = `${location.origin}${location.pathname}#${q}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      this._toast(`Link copied: ${fmtDateTime(+q.get('t'))}`);
+    } catch {
+      window.prompt('Copy this link', url);
+    }
   }
 
   /** Copy a link to this radar, cursor and timeline zoom (`#radar=…&t=…&span=…[&zone=…]`). */
@@ -1028,7 +1076,10 @@ class RadarZonePresencePanel extends HTMLElement {
       this.framesEl,
       this.statusEl);
     this.bodyEl = el('div', { class: 'body' }, main, this.side);
-    root.append(el('div', { class: 'app' }, this.header, this.bodyEl));
+    this.hcEl = document.createElement('rzp-headcount');
+    this.hcEl.hass = this._hass;
+    this.hcEl.style.display = 'none';
+    root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl));
 
     this.plot.addEventListener('zones-change', e => {
       if (e.detail.commit) {
@@ -1101,9 +1152,20 @@ class RadarZonePresencePanel extends HTMLElement {
         : this.radars.map(option));
     const range = el('select', { onchange: e => { this.rangeS = +e.target.value; this._exitReplay(); this._loadHistory(); }, title: 'History range' },
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
+    const tabs = el('div', { class: 'tabs' },
+      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
+      el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'Head count'));
+    if (this.tab === 'headcount') {
+      h.replaceChildren(
+        el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
+        el('h1', {}, 'Radar Zones'), tabs, el('div', { class: 'spacer' }),
+        el('button', { class: 'hbtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗 Link'));
+      return;
+    }
     h.replaceChildren(
       el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
       el('h1', {}, 'Radar Zones'),
+      tabs,
       this.radars.length ? sel : '',
       this.radars.length ? range : '',
       this.radars.length ? el('button', { class: 'hbtn', title: 'Reload history', onclick: () => this._loadHistory() }, '⟳') : '',
