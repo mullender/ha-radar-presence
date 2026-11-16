@@ -411,3 +411,17 @@ Ideas not built yet:
   default for the EPLs too (production EPLs report 6 m).
 - Panel "Revert" opens a confirm() dialog, which blocks CDP evaluation in the
   dev tab; close the tab through `/json/close/<id>`.
+
+## Head count, 2026-11 (household specifics kept in dev/data/notes-private.md, gitignored)
+
+Scored with `tools/headcount.py --truth <file>` against a private ground-truth file (exact counts where the household knows them, upper bounds per day): hours wrong, hours above bounds, count changes without an exit door. Development went from 13.7 h wrong (of 54 h exact) to 0 h on the replayed days; rules were tuned on those same days, so new days are needed to validate.
+
+What made the difference, each found by tracing a wrong moment in the replay:
+- Exit windows: while an exit door is used, everyone on its floor (or seen there in the last 2 min) is unknown; the count is unknown until 60 s after the doors close; re-established by a sighting on another floor (or still seen on the exit floor after LAG_S); gone after 10 min.
+- Doorways (exit zones that say where they lead: a region, several, or outside) decide who a track is where it appears or vanishes. Without them the same engine was ~38 h wrong.
+- Direction of a garage opening from the door order (house-to-garage door first = out).
+- Door sensors miss events: a track walking out through the front-door zone and vanishing counts as the door opening.
+- Overlapping radars: a track seen by one radar only, where another radar of the group looks, is a reflection until confirmed (removed all hours above bounds).
+- Tracker track ids get reused: a re-found track keeps its person only within 2 m and (after 30 s) if they were not seen elsewhere since.
+- Rooms without a radar behind a doorway hold their sleeper; a split or two-radar double sighting does not create or move people.
+Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidence.
