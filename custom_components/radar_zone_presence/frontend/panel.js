@@ -213,7 +213,7 @@ class RadarZonePresencePanel extends HTMLElement {
       const zoneId = q.get('zone'), at = this._rangeFor(q.get('t'));
       await this._selectRadar(pick);
       if (zoneId && this.zones.some(z => z.id === zoneId)) this._select(zoneId, null);
-      if (at != null) this._showTime(at);
+      if (at != null) this._showTime(at, +q.get('span') || 600);
     }
     else this._renderEmpty();
   }
@@ -226,7 +226,7 @@ class RadarZonePresencePanel extends HTMLElement {
     if (entry !== this.radarId) await this._selectRadar(entry);
     else if (at != null && this.rangeS !== range) { this._renderHeader(); await this._loadHistory(); }
     if (zone && this.zones.some(z => z.id === zone)) this._select(zone, null);
-    if (at != null) this._showTime(at);
+    if (at != null) this._showTime(at, +q.get('span') || 600);
   }
 
   /** Deep link `#radar=…&t=<epoch s>`: pick the shortest history range that holds t. Returns t, or null. */
@@ -238,12 +238,28 @@ class RadarZonePresencePanel extends HTMLElement {
     return t;
   }
 
-  /** Replay from just before t, timeline zoomed to the 10 minutes around it. */
-  _showTime(t) {
+  /** Replay at t, the timeline zoomed to `span` seconds around it. */
+  _showTime(t, span = 600) {
     if (!this.hist) return;
     this.preferLive = false;
-    this.timeline.focus(t - 300, t + 300);
-    this._seek(t - 30);
+    this.timeline.focus(t - span / 2, t + span / 2);
+    this._seek(t);
+  }
+
+  /** Copy a link to this radar, cursor and timeline zoom (`#radar=…&t=…&span=…[&zone=…]`). */
+  async _copyLink() {
+    const v = this.timeline?.view;
+    const t = this.cursor ?? (v ? (v.v0 + v.v1) / 2 : this.hist.end);
+    const q = new URLSearchParams({ radar: this.radarId, t: t.toFixed(1) });
+    if (v) q.set('span', Math.round(v.v1 - v.v0));
+    if (this.selectedId) q.set('zone', this.selectedId);
+    const url = `${location.origin}${location.pathname}#${q}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      this._toast(`Link copied: ${fmtDateTime(t)}`);
+    } catch {
+      window.prompt('Copy this link', url); // no clipboard outside https / localhost
+    }
   }
 
   async _loadRadars() {
@@ -1169,6 +1185,7 @@ class RadarZonePresencePanel extends HTMLElement {
         !live && this.hist ? this._tb('● Live', false, () => this._goLive(), 'Follow what the radar sees right now') : '',
         replay ? this._tb('Point cloud', false, () => { this.preferLive = false; this._exitReplay(); }, 'Show the whole point cloud (for drawing zones), with live targets on top') : '',
         this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
+        this.hist ? this._tb('🔗 Link', false, () => this._copyLink(), 'Copy a link to this radar at this moment (cursor and timeline zoom), to share') : '',
         this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
     );
   }

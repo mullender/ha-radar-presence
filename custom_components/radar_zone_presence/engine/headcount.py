@@ -43,6 +43,10 @@ be home, each with the region where they were last seen.
   press the button, the big door opens), else *in* (the remote in the car opens
   the big door first). Going out, nobody new is counted; coming in, nobody
   inside is put in doubt.
+- **Rooms without a radar** behind a doorway (a bedroom): someone vanishing
+  in the doorway went in, and comes out through it; a track elsewhere is not
+  them unless it lasts ``CONFIRM_S`` and no one else explains it (the radar
+  missed them coming out).
 - **Unobserved regions** (no radar, or one that only sees ghosts) are inferred
   from their doors: someone lost next to the door into one while that door was
   used went in; someone new coming out of one shortly after its exit door
@@ -80,6 +84,7 @@ UNOBSERVED_ARRIVE_S = 600.0  # someone new coming out of an unobserved region th
 UNEXPLAINED_SEEN_S = 600.0  # someone appearing without a door counts once seen this long (or seen in another region)
 UNEXPLAINED_EXPIRE_S = 3600.0  # ... within this long, else it was not a person (a washer, a fan, a reflection)
 DIRECTION_S = 90.0  # the door from the house into the garage used this long before its exit opened: going out
+REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
 
 
@@ -379,7 +384,7 @@ class HeadCount:
         if tok is not None and tok.visible == (region, tid):
             tok.visible = None
             portal = self._portal_at(region, pos)
-            if portal is not None and len(portal.to) == 1 and self.regions[portal.to[0]].observed:
+            if portal is not None and len(portal.to) == 1 and (self.regions[portal.to[0]].observed or self._enclosed(portal.to[0])):
                 self._move_unseen(tok, portal.to[0], t)  # went through (a stairwell both ways: unknown which)
                 return
             for other, door in self._links.get(region, ()):
@@ -447,7 +452,13 @@ class HeadCount:
             frontier = nxt
         return None
 
-    def _match(self, region: str, t: float, only: Iterable[str] | None = None) -> Token | None:
+    def _enclosed(self, region: str) -> bool:
+        """An unobserved room with no way out but doorways from observed rooms (a bedroom without a radar)."""
+        r = self.regions[region]
+        links = self._links.get(region, ())
+        return not r.observed and not r.exits and bool(links) and all(d is None and self.regions[o].observed for o, d in links)
+
+    def _match(self, region: str, t: float, only: Iterable[str] | None = None, patient: bool = False) -> Token | None:
         """The unseen person most likely to be a new track here: whoever was seen most recently and could have
         walked here. (A still person who reappears is re-found by the region's tracker near where they vanished, so
         a new track is usually someone on the move.) Ties go to the nearer region."""
@@ -457,6 +468,8 @@ class HeadCount:
                 continue
             if tok.unknown and tok.region != region and self.regions[region].portals and (only is None or tok.region not in only):
                 continue  # someone at the exit comes back through the doorway from where they are, not out of thin air
+            if self._enclosed(tok.region) and (only is None or tok.region not in only) and not patient:
+                continue  # someone in a room without a radar comes out through its door (unless missed: patient)
             cost = self._reach(tok, region, t)
             if cost is not None and (best is None or (-tok.last_seen, cost) < (-best[2].last_seen, best[1])):
                 best = (tok.last_seen, cost, tok)
@@ -493,7 +506,9 @@ class HeadCount:
             tok = self._match(region, t, only=portal.to) or self._match(region, t, only=(region,)) or self._match(region, t)
         else:
             tok = self._match(region, t)
-        if prefer is not None and (tok is None or tok.last_seen <= prefer.last_seen):
+        # The tracker re-found its track: the same person if it lost them just now; after a long gap, whoever was seen
+        # last is likelier (a settled lost track can be revived by someone else).
+        if prefer is not None and (tok is None or tok.last_seen <= prefer.last_seen or t - prefer.last_seen <= REFOUND_S):
             tok = prefer
         if tok is not None:
             self._bind(tok, region, tid, t)
@@ -513,7 +528,7 @@ class HeadCount:
         p = self._pending[key]
         if self._next_to_someone(region, tid, self._pos[region][tid]):
             return  # still beside the person it probably split from
-        if (tok := self._match(region, t)) is not None:
+        if (tok := self._match(region, t, patient=t - p.first >= CONFIRM_S)) is not None:
             del self._pending[key]
             self._bind(tok, region, tid, t)
             return

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 HASS="$ROOT/.venv/bin/hass"
 CFG="$ROOT/ha_config"
-export RADAR_SIM_DATA="$ROOT/dev/data"
+export RADAR_SIM_DATA="${RADAR_SIM_DATA:-$ROOT/dev/data}"
 
 if [ ! -f "$CFG/configuration.yaml" ]; then
   mkdir -p "$CFG/custom_components" "$CFG/.storage"

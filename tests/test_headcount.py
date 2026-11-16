@@ -198,3 +198,24 @@ def test_leaving_through_the_garage_does_not_count_the_door_as_someone_new() -> 
     hc.door(BIG_DOOR, False, 560)
     hc.advance(560 + 700)
     assert hc.count() == 1
+
+
+def test_a_ghost_downstairs_does_not_wake_the_sleeper_in_a_room_without_a_radar() -> None:
+    """Someone who went into a bedroom without a radar comes out through its door, not as a blip downstairs."""
+    door = Portal("Bedroom door", ((200, 4800), (1200, 4800), (1200, 5800), (200, 5800)), ("kids_room",))
+    regions = [
+        Region("hall", 3, portals=(door,)),
+        Region("kids_room", 3, observed=False),
+        Region("living", 2),
+        Region("entry", 1, (FRONT,)),
+    ]
+    links = [("hall", "kids_room", None), ("hall", "living", None), ("living", "entry", None)]
+    hc = HeadCount(regions, bootstrap_until=100, connections=links)
+    see(hc, "hall", 0, 25, {1: (700, 4500)})  # goes to bed: vanishes in the doorway
+    see(hc, "living", 0, 25, {2: (-2000, 3000)})
+    assert hc.by_region()["kids_room"] == 1
+    see(hc, "living", 5000, 5020, {7: (4800, 3200)})  # a short ghost in the living room hours later
+    see(hc, "living", 5100, 5110, {2: (-2000, 3000)})  # the other person is seen again
+    hc.advance(5200)
+    assert hc.by_region()["kids_room"] == 1
+    assert hc.count() == 2
