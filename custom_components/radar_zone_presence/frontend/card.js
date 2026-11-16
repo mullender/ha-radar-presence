@@ -7,6 +7,7 @@
 //   trail: 10                     # optional, seconds of live trail
 
 import './plot.js';
+import './headcount-card.js';
 import { makeUnits, normalizeDisplay } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
