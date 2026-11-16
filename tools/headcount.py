@@ -22,6 +22,7 @@ import datetime as dt
 import gzip
 import heapq
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -33,7 +34,7 @@ import fixtures_util as fu  # noqa: E402
 from custom_components.radar_zone_presence.engine import Zone, assemble, point_in_polygon  # noqa: E402
 from custom_components.radar_zone_presence.engine.align import alignment_groups, apply, invert  # noqa: E402
 from custom_components.radar_zone_presence.engine.headcount import HeadCount, Portal, Region  # noqa: E402
-from custom_components.radar_zone_presence.engine.tracker import Observation, Tracker  # noqa: E402
+from custom_components.radar_zone_presence.engine.tracker import Observation, Tracker, side_margin  # noqa: E402
 
 OPEN_STATES = {"on", "open", "opening", "closing"}
 
@@ -57,6 +58,7 @@ def main() -> None:
     ap.add_argument("--truth", type=Path, help="ground truth JSON (exact counts, upper bounds) to score against")
     ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
     ap.add_argument("--set", nargs="*", default=[], help="override engine constants, e.g. VIRTUAL_EXITS=0 LAG_S=60")
+    ap.add_argument("--no-cross-check", dest="cross_check", action="store_false", help="do not flag one-radar reflections")
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
@@ -169,7 +171,7 @@ def main() -> None:
             if not any(point_in_polygon(tg.x, tg.y, p) for p in exclusions[key])
         ]
         out = tr.fuse([o for obs in kept.values() for o in obs], t)
-        hc.frame(name, {tg.slot: (tg.x, tg.y) for tg in out.targets}, t)
+        hc.frame(name, {tg.slot: (tg.x, tg.y) for tg in out.targets}, t, unconfirmed(tr, out, g, cfgs) if a.cross_check else ())
         if name in a.dump and (t_from is None or t >= t_from):
             ids = {tg.slot: (round(tg.x), round(tg.y), hc._binding.get((name, tg.slot))) for tg in out.targets}
             key = {k: v[2] for k, v in ids.items()}
@@ -194,6 +196,25 @@ def main() -> None:
         door_times = [(t, s) for e, rows in doors.items() if e in exits_all for t, s in rows]
         for line in score(timeline, json.loads(a.truth.read_text()), door_times, fmt):
             print(line)
+
+
+def unconfirmed(tr, out, g, cfgs) -> set[int]:
+    """Tracks seen by one radar only, at a spot another radar of the group covers (it would have seen them)."""
+    if len(g.members) < 2:
+        return set()
+    flagged = set()
+    for tg in out.targets:
+        radars = {m[0] for m in tr._tracks[tg.slot].members} if tg.slot in tr._tracks else set()
+        if len(radars) != 1:
+            continue
+        for k, rid in enumerate(g.members):
+            if k in radars:
+                continue
+            x, y = apply(invert(g.to_anchor[rid]), tg.x, tg.y)
+            if side_margin(x, y) >= 500 and math.hypot(x, y) <= cfgs[rid]["fov"]["max_distance_mm"] - 500:
+                flagged.add(tg.slot)
+                break
+    return flagged
 
 
 def record(timeline: list, hc: HeadCount, t: float) -> None:

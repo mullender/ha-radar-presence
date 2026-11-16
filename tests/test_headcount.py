@@ -39,6 +39,16 @@ def see(hc: HeadCount, region: str, t0: float, t1: float, tracks: dict[int, tupl
     hc.frame(region, {}, t1 + 1)
 
 
+def walk(hc: HeadCount, region: str, tid: int, t0: float, path: list[tuple[float, float]], dt: float = 1.0) -> float:
+    """One track moving continuously along ``path`` (one point per frame), then gone. Returns the time it vanished."""
+    t = t0
+    for pt in path:
+        hc.frame(region, {tid: pt}, t)
+        t += dt
+    hc.frame(region, {}, t)
+    return t
+
+
 def test_saturday_morning() -> None:
     hc = HeadCount(REGIONS, bootstrap_until=100, connections=LINKS)
     see(hc, "bedroom", 0, 25, {1: (0, 2000), 2: (2500, 3000)})  # both seen once, then asleep (lost)
@@ -159,8 +169,7 @@ def test_someone_who_sat_still_for_hours_and_then_leaves_is_gone() -> None:
     hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
     see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})  # two on the couch, then still (lost)
     see(hc, "living", 7200, 7210, {1: (-3000, 4000)})  # one gets up and walks around up there...
-    see(hc, "entry", 7230, 7240, {5: (500, 400)})  # ...the other comes down the stairs, two hours after last seen
-    see(hc, "entry", 7241, 7250, {5: (-1800, 2500)})
+    walk(hc, "entry", 5, 7230, [(500, 400)] * 3 + [(500 - 230 * k, 400 + 210 * k) for k in range(1, 11)])  # down the stairs, to the door
     hc.door(FRONT, True, 7250)
     hc.door(FRONT, False, 7256)
     assert hc.unknown()
@@ -189,8 +198,7 @@ def test_leaving_through_the_garage_does_not_count_the_door_as_someone_new() -> 
     """Garage-entry door, then the big door: going out. A track at the garage-entry door is the leaver."""
     hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
     see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})
-    see(hc, "entry", 500, 510, {5: (500, 400)})
-    see(hc, "entry", 511, 520, {5: (-1300, 3100)})
+    walk(hc, "entry", 5, 500, [(500, 400)] * 3 + [(500 - 180 * k, 400 + 270 * k) for k in range(1, 11)])  # stairs to the garage door
     hc.door(GARAGE_ENTRY, True, 521)
     hc.door(GARAGE_ENTRY, False, 524)
     hc.door(BIG_DOOR, True, 530)
@@ -224,9 +232,9 @@ def test_a_ghost_downstairs_does_not_wake_the_sleeper_in_a_room_without_a_radar(
 def test_walking_out_of_the_front_door_counts_even_if_its_sensor_misses_it() -> None:
     hc = HeadCount(DOORWAY_REGIONS, bootstrap_until=100, connections=LINKS)
     see(hc, "living", 0, 25, {1: (-3000, 4000), 2: (-1000, 3000)})
-    see(hc, "entry", 500, 510, {5: (500, 400)})  # down the stairs
-    see(hc, "entry", 511, 520, {5: (-1300, 1300)})  # shoes on
-    see(hc, "entry", 521, 524, {5: (-2050, 2600)})  # through the front door (its contact logs nothing)...
-    see(hc, "entry", 525, 527, {5: (-3200, 3100)})  # ...and outside, gone
+    path = [(500, 400)] * 3 + [(500 - 180 * k, 400 + 90 * k) for k in range(1, 11)]  # down the stairs to the bench
+    path += [(-1300, 1300)] * 10  # shoes on
+    path += [(-1500, 1700), (-1800, 2100), (-2050, 2600), (-2600, 2800), (-3200, 3100)]  # through the front door, outside
+    walk(hc, "entry", 5, 500, path)  # (its contact logs nothing)
     hc.advance(527 + 700)
     assert hc.count() == 1

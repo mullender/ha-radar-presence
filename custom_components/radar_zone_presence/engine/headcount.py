@@ -54,6 +54,9 @@ be home, each with the region where they were last seen.
   from their doors: someone lost next to the door into one while that door was
   used went in; someone new coming out of one shortly after its exit door
   opened has arrived.
+- **Reflections**: in a region with overlapping radars, a track seen by one
+  radar only, where another radar looks and sees nothing, is a reflection
+  (a kitchen radar seeing someone twice): it explains nobody until confirmed.
 - **No door, no new person**: a track no one can explain (a split track, a
   reflection, a washer) becomes a person only after ``CONFIRM_S`` apart from
   everyone else (and not while someone is in view in a neighbouring region,
@@ -91,6 +94,7 @@ EXIT_NEAR_MM = 400.0  # a track that passed this close to a doorway to outside..
 EXIT_PASS_S = 10.0  # ... and vanished within this long after: as if that door opened (door sensors miss some)
 VIRTUAL_EXITS = True  # ... on/off
 ESTABLISH_ON_EXIT_FLOOR = True  # still seen on the exit floor LAG_S after the close re-establishes (else: only other floors)
+REFOUND_MM = 2000.0  # ... and is this close to where they vanished
 REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
 
@@ -136,6 +140,7 @@ class _Pending:
     region: str
     track: int
     first: float
+    portal: Portal | None = None  # the doorway it appeared at
 
 
 @dataclass(slots=True)
@@ -182,7 +187,8 @@ class HeadCount:
         self._pos: dict[str, dict[int, tuple[float, float]]] = {r: {} for r in self.regions}
         self.regions_seen: dict[int, str] = {}  # token -> first region it was seen in
         self._windows: dict[int, _Window] = {}  # floor -> current/last exit window
-        self._at_exit: dict[tuple[str, int], tuple[float, str]] = {}  # track -> (last time in an outside doorway, its name)
+        self._at_exit: dict[tuple[str, int], tuple[float, str]] = {}
+        self._unconfirmed: dict[str, set[int]] = {}  # track -> (last time in an outside doorway, its name)
         self._bootstrap_until = bootstrap_until
         self._next = 1
         self.changes: list[Change] = []
@@ -252,9 +258,13 @@ class HeadCount:
                     if tok.unknown and tok.visible is not None:
                         tok.since = t
 
-    def frame(self, region: str, tracks: Mapping[int, tuple[float, float]], t: float) -> None:
-        """The region's current tracks (id -> position) after a tracker update."""
+    def frame(
+        self, region: str, tracks: Mapping[int, tuple[float, float]], t: float, unconfirmed: Iterable[int] = ()
+    ) -> None:
+        """The region's current tracks (id -> position) after a tracker update. ``unconfirmed``: tracks seen by one
+        radar only where another radar of the region looks and sees nothing (a reflection, until confirmed)."""
         self._tick(t)
+        self._unconfirmed[region] = set(unconfirmed)
         prev = self._visible[region]
         cur = set(tracks)
         last_pos = self._pos[region]
@@ -274,7 +284,9 @@ class HeadCount:
             else:
                 # A track appears (new, or re-found by the tracker): whoever could be here and was seen last.
                 # (A revived track keeps its person only if they have not been seen elsewhere since.)
-                stale = tok is None or tok.visible is not None or tok.seen_region != region
+                stale = tok is None or tok.visible is not None or tok.seen_region != region or (
+                    tok.pos is not None and math.hypot(tracks[tid][0] - tok.pos[0], tracks[tid][1] - tok.pos[1]) > REFOUND_MM
+                )  # (track ids get reused: a re-found track is near where its person vanished)
                 self._appear(region, tid, t, tracks[tid], prefer=None if stale else tok)
         for key in [k for k in self._pending if k[0] == region]:
             self._recheck(key, t)
@@ -522,6 +534,9 @@ class HeadCount:
 
     def _appear(self, region: str, tid: int, t: float, pos: tuple[float, float], prefer: Token | None = None) -> None:
         portal = None if prefer is not None else self._portal_at(region, pos)
+        if prefer is None and tid in self._unconfirmed.get(region, ()):
+            self._pending[(region, tid)] = _Pending(region, tid, t)  # one radar's reflection, until another sees it
+            return
         if prefer is None and portal is None and self._next_to_someone(region, tid, pos):
             # Right next to someone in view: most likely their track splitting, not someone else arriving.
             self._pending[(region, tid)] = _Pending(region, tid, t)
@@ -549,15 +564,19 @@ class HeadCount:
             tok = self._new(region, t, "arrived")
             self._bind(tok, region, tid, t)
         else:
-            self._pending[(region, tid)] = _Pending(region, tid, t)
+            self._pending[(region, tid)] = _Pending(region, tid, t, portal)
 
     def _recheck(self, key: tuple[str, int], t: float) -> None:
         """An unexplained track: someone who went unseen meanwhile, or (after a while, apart from others) someone new."""
         region, tid = key
         p = self._pending[key]
+        if tid in self._unconfirmed.get(region, ()):
+            return  # still only one radar sees it where another one looks
         if self._next_to_someone(region, tid, self._pos[region][tid]):
             return  # still beside the person it probably split from
-        if (tok := self._match(region, t, patient=t - p.first >= CONFIRM_S)) is not None:
+        # (Appeared at a doorway: someone from where it leads, not from a room without a radar elsewhere.)
+        patient = t - p.first >= CONFIRM_S and (p.portal is None or any(self._enclosed(r) for r in p.portal.to))
+        if (tok := self._match(region, t, patient=patient)) is not None:
             del self._pending[key]
             self._bind(tok, region, tid, t)
             return
