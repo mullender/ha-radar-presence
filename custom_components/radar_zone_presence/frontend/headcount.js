@@ -14,7 +14,7 @@ const COLORS = ['#1e88e5', '#43a047', '#8e24aa', '#f4511e', '#00897b', '#6d4c41'
 const KINDS = {
   moved: ['→', 'moved'], arrived: ['⇥', 'arrived'], left: ['⇤', 'left'], unknown: ['?', 'in doubt'], back: ['✓', 'back'],
   unexplained: ['+', 'appeared'], confirmed: ['✓', 'confirmed'], 'not a person': ['✕', 'not a person'], ghost: ['·', 'ghost track'],
-  restored: ['↺', 'restored'], bootstrap: ['+', 'counted at start'], evidence: ['☞', 'evidence'], door: ['🚪', 'door'],
+  restored: ['↺', 'restored'], corrected: ['✎', 'corrected by hand'], bootstrap: ['+', 'counted at start'], evidence: ['☞', 'evidence'], door: ['🚪', 'door'],
   signal: ['☞', 'used by hand'], ignored: ['∅', 'ignored'],
 };
 const CROSS_S = 30; // a doorway glows this long after someone crossed it
@@ -44,6 +44,10 @@ const css = `
 .space .top { display: flex; align-items: baseline; gap: 6px; }
 .space .name { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space .count { font-size: 22px; font-weight: 500; }
+.space .fix { display: none; gap: 2px; }
+.space:hover .fix { display: inline-flex; }
+.space .fix button { font: inherit; font-size: 13px; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: 1px solid var(--divider-color, #ccc);
+  background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); cursor: pointer; }
 .space .meta { font-size: 11px; color: var(--secondary-text-color, #777); }
 .dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; min-height: 22px; }
 .dot { font-size: 11px; min-width: 26px; height: 22px; padding: 0 5px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
@@ -276,7 +280,11 @@ export class RzpHeadcount extends HTMLElement {
         f.areas.map(a => {
           const doors = Object.entries(this.data.doors).filter(([, rs]) => rs.some(r => this.regionArea[r] === a.id));
           const box = el('div', { class: `space${a.observed ? '' : ' blind'}${hit.has(a.id) ? ' hit' : ''}` },
-            el('div', { class: 'top' }, el('span', { class: 'name', title: a.name }, a.name), el('span', { class: 'count' }, doubt ? `${per.get(a.id) || 0}?` : String(per.get(a.id) || 0))),
+            el('div', { class: 'top' }, el('span', { class: 'name', title: a.name }, a.name),
+              t === null ? el('span', { class: 'fix' },
+                el('button', { title: 'Correct: one person fewer here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) - 1) }, '−'),
+                el('button', { title: 'Correct: one more person here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) + 1) }, '+')) : '',
+              el('span', { class: 'count' }, doubt ? `${per.get(a.id) || 0}?` : String(per.get(a.id) || 0))),
             el('div', { class: 'meta' }, a.observed ? 'radar' : 'no radar: through its doorways'),
             el('div', { class: 'dots' }, (byArea.get(a.id) || []).sort((x, y) => x[0] - y[0]).map(([id, flags]) => this._dot(id, flags))),
             doors.length ? el('div', { class: 'doors' }, doors.map(([e]) => {
@@ -295,6 +303,16 @@ export class RzpHeadcount extends HTMLElement {
     this.houseEl.replaceChildren(this.svg, this.floorsEl, this._story());
     this._hot = hot;
     requestAnimationFrame(() => this._drawLinks());
+  }
+
+  /** A correction from someone who knows: this space holds n people now. */
+  async _correct(space, n) {
+    if (n < 0) return;
+    try {
+      await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, space, count: n });
+    } catch (err) {
+      alert(`Could not correct: ${err.message || err.code}`);
+    }
   }
 
   _dot(id, flags) {

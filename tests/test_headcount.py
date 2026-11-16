@@ -304,3 +304,14 @@ def test_someone_in_the_doorway_explains_the_switch() -> None:
     hc.frame("hall", {1: (500.0, 700.0)}, 5.0)
     hc.evidence("den", 5.5, "light.den")  # reaching in for the switch
     assert hc.by_region() == {"hall": 2, "den": 0}  # the other (unseen) one is not moved in
+
+
+def test_a_correction_removes_the_phantom_first() -> None:
+    hc = HeadCount([Region("living", 2)])
+    hc.seed("living", 2, 0.0)  # restored after a restart: one real, one left over
+    walk(hc, "living", 1, 10.0, [(1000.0, 1000.0), (1200.0, 1100.0)])  # the real one moves (now unseen again)
+    seen = next(tok.id for tok in hc.tokens.values() if tok.last_seen > 1.0)
+    hc.correct("living", 1, 20.0)
+    assert hc.count() == 1 and list(hc.tokens) == [seen]
+    hc.correct("living", 2, 30.0)
+    assert hc.count() == 2 and [c.kind for c in hc.changes[-2:]] == ["corrected", "corrected"]

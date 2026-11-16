@@ -24,6 +24,7 @@ from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, Home
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er, floor_registry as fr
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OUTSIDE_DOORS, DOMAIN, OUTSIDE
 from .engine.align import apply, invert, transform_polygon
@@ -41,7 +42,8 @@ SAVE_DELAY_S = 10
 TICK_S = 5
 LOG_KEEP_S = 3 * 86400.0  # the decision log the panel's head count view replays
 LOG_SAVE_DELAY_S = 120
-SEEN_EVERY_S = 15.0  # who a radar sees, logged at most this often
+SEEN_EVERY_S = 15.0
+EVENT_FRESH_S = 30.0  # a button press (event entity) counts only if its time is this recent  # who a radar sees, logged at most this often
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
 OPEN_STATES = {"on", "open", "opening", "closing"}
@@ -343,8 +345,13 @@ class HeadCountRuntime:
         new, old = event.data["new_state"], event.data["old_state"]
         if new is None or new.state in ("unavailable", "unknown"):
             return
-        if not entity_id.startswith("event.") and (old is None or old.state in ("unavailable", "unknown") or old.state == new.state):
-            return  # (an event entity's state is the time of the press: any new one counts)
+        if entity_id.startswith("event."):
+            # Its state is the time of the press. At start-up it restores the last one: only fresh presses count.
+            pressed = dt_util.parse_datetime(new.state)
+            if pressed is None or abs(time.time() - pressed.timestamp()) > EVENT_FRESH_S:
+                return
+        elif old is None or old.state in ("unavailable", "unknown") or old.state == new.state:
+            return
         t = new.last_changed_timestamp
         if new.context.parent_id is not None or new.context.user_id is not None:
             self._log_signal(t, "ignored", entity_id, f"{new.state}: by an automation or script" if new.context.parent_id else f"{new.state}: from the app")
@@ -465,6 +472,18 @@ class HeadCountRuntime:
                 if d and a < b:
                     out.setdefault(d, []).extend([a, b])
         return out
+
+    def correct(self, space_id: str, n: int) -> None:
+        """Someone who knows sets a space's count (a phantom left over, someone missed). Logged as 'corrected'."""
+        if self.hc is None or space_id not in self.spaces:
+            raise ValueError(f"unknown space {space_id}")
+        now = time.time()
+        area = self.spaces[space_id].area_id
+        for sid, sp in self.spaces.items():  # an area seen by several radar groups: the count goes to this one
+            if sp.area_id == area:
+                self.hc.correct(sid, n if sid == space_id else 0, now)
+        self._changed()
+        self._store.async_delay_save(self._data, 0)
 
     def home_count(self) -> int | None:
         return None if self.hc is None or self.hc.unknown() else self.hc.count()

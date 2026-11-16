@@ -49,6 +49,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_headcount,
         ws_headcount_history,
         ws_headcount_subscribe,
+        ws_headcount_correct,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -323,6 +324,25 @@ def ws_headcount_history(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
         return
     connection.send_result(msg["id"], entry.runtime_data.headcount.history(msg["start"], msg.get("end", float("inf"))))
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/headcount/correct", vol.Required("space"): str, vol.Required("count"): vol.All(int, vol.Range(min=0, max=50))}
+)
+@callback
+def ws_headcount_correct(hass: HomeAssistant, connection, msg) -> None:
+    """Set a space's people count (a correction from someone who knows)."""
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    try:
+        entry.runtime_data.headcount.correct(msg["space"], msg["count"])
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_space", str(err))
+        return
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/headcount/subscribe"})

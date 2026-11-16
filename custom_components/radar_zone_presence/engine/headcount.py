@@ -247,6 +247,27 @@ class HeadCount:
         ):
             self._establish(tok, t, why or "evidence")
 
+    def correct(self, region: str, n: int, t: float) -> None:
+        """Someone who knows says this region holds n people: add or remove people to match. Removes the
+        longest-unseen first (a phantom is someone nobody has seen), people in view last."""
+        if region not in self.regions or n < 0:
+            return
+        self._tick(t)
+        here = sorted(
+            (tok for tok in self.tokens.values() if tok.region == region and not tok.provisional),
+            key=lambda k: (k.visible is not None, k.last_seen),
+        )
+        for tok in here[: max(0, len(here) - n)]:
+            if tok.visible is not None:
+                self._binding.pop(tok.visible, None)
+            self._drop(tok, t, "corrected")
+        for _ in range(max(0, n - len(here))):
+            tok = self._new(region, t, "corrected")
+            tok.last_seen = t
+        for tok in here[-n:] if n else []:
+            if tok.unknown:
+                self._establish(tok, t, "corrected")
+
     def _in_doorway_to(self, region: str) -> bool:
         """Someone in view next door, at a doorway that leads into this region."""
         for other, r in self.regions.items():
