@@ -15,8 +15,9 @@ from .const import DEFAULT_MAX_DISTANCE_MM, PROFILE_EVERYTHING_PRESENCE, PROFILE
 from .engine import TargetEntities, to_mm
 
 TARGET_RE = re.compile(r"^sensor\.(?P<slug>.+?)_target(?P<sep>_?)(?P<slot>\d)_(?P<axis>x|y)$")
-# Device-side rectangles, for display only. EP: zone_1_begin_x / occupancy_mask_1_end_y;
-# Screek: zone1_x_begin / zout1_y_end.
+# Device-side rectangles, shown in the panel. EP: zone_1_begin_x / occupancy_mask_1_end_y; Screek: zone1_x_begin /
+# zout1_y_end. Not applied: the firmware still reports targets inside its exclusions, so the panel offers to import
+# them as our own exclusion zones (one source of truth).
 DEVICE_RECT_RE = re.compile(
     r"^number\..+?_(?P<key>zone_?\d|occupancy_mask_\d|zout\d)_"
     r"(?P<field>begin_x|end_x|begin_y|end_y|x_begin|x_end|y_begin|y_end)$"
@@ -24,6 +25,7 @@ DEVICE_RECT_RE = re.compile(
 MAX_DISTANCE_RE = re.compile(r"^number\..+_max_distance$")
 INSTALL_ANGLE_RE = re.compile(r"^number\..+_installation_angle$")  # EP Lite / Pro
 UPSIDE_DOWN_RE = re.compile(r"^switch\..+_upside_down_mounting$")  # EP Lite / Pro
+ZONE_ENABLE_RE = re.compile(r"^switch\..+?_(?P<key>zout\d)_enable$")  # Screek
 
 
 @dataclass
@@ -108,6 +110,7 @@ def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]
     rects: dict[str, dict[str, float]] = {}
     max_distance = DEFAULT_MAX_DISTANCE_MM
     mounting: dict[str, Any] = {}
+    enabled: dict[str, bool] = {}
     for entry in er.async_entries_for_device(ent_reg, device_id):
         if entry.disabled_by is not None:
             continue
@@ -118,6 +121,10 @@ def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]
         if INSTALL_ANGLE_RE.match(entry.entity_id):
             if (v := _float_state(hass, entry.entity_id)) is not None:
                 mounting["installation_angle_deg"] = v[0]
+            continue
+        if m := ZONE_ENABLE_RE.match(entry.entity_id):
+            if (state := hass.states.get(entry.entity_id)) is not None and state.state in ("on", "off"):
+                enabled[m["key"]] = state.state == "on"
             continue
         if UPSIDE_DOWN_RE.match(entry.entity_id):
             if (state := hass.states.get(entry.entity_id)) is not None and state.state in ("on", "off"):
@@ -145,6 +152,7 @@ def async_device_geometry(hass: HomeAssistant, device_id: str) -> dict[str, Any]
                 "key": key,
                 "kind": "exclude" if exclude else "include",
                 "polygon": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                "enabled": enabled.get(key, True),
             }
         )
     # The firmware applies its mounting settings to the coordinates it reports;

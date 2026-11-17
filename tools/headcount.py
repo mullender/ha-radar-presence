@@ -172,8 +172,14 @@ def main() -> None:
             if e not in ev_areas or (region := area_region.get(ev_areas[e][0])) is None:
                 continue
             prev = None
-            for t, state, by_hand, _origin in sorted(rows):
-                usable = state not in ("unavailable", "unknown") and (e.startswith("event.") or (prev not in (None, "unavailable", "unknown") and prev != state))
+            rows = sorted(rows)
+            flicker = set()  # door contacts open < 2 s (like the runtime): both edges ignored
+            if e.startswith("binary_sensor."):
+                for i in range(len(rows) - 1):
+                    if rows[i][1] == "on" and rows[i + 1][1] == "off" and rows[i + 1][0] - rows[i][0] < 2.0:
+                        flicker |= {i, i + 1}
+            for i, (t, state, by_hand, _origin) in enumerate(rows):
+                usable = i not in flicker and state not in ("unavailable", "unknown") and (e.startswith("event.") or (prev not in (None, "unavailable", "unknown") and prev != state))
                 prev = state
                 if usable and by_hand and (not ev_areas[e][1] or state == "on"):
                     off = state == "off" and e.split(".")[0] in ("light", "switch", "fan", "input_boolean")

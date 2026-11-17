@@ -721,3 +721,37 @@ async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_dev
     assert any("only switching on counts" in e["detail"] for e in log if e["kind"] == "ignored")
     moved = next(e for e in log if e["kind"] == "evidence")
     assert [t[1] for t in moved["tokens"]] == [den.id]  # who is where after it
+
+
+async def test_a_flickering_door_contact_is_not_evidence(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """A closet contact at the edge of its magnet's range flickers open for a fraction of a second: ignored."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Upstairs", level=1)
+    hall = ar.async_get(hass).async_create("Hall", floor_id=floor.floor_id)
+    den = ar.async_get(hass).async_create("Den", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=hall.id)
+    ent_reg = er.async_get(hass)
+    ent = ent_reg.async_get_or_create("binary_sensor", "test", "closet", suggested_object_id="closet")
+    ent_reg.async_update_entity(ent.entity_id, area_id=den.id)
+    hass.states.async_set(ent.entity_id, "off")
+    door = {**zone("door", "Den door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"), "leads_to": [den.id]}
+    entry = await setup_entry(hass, radar_device, [door])
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "evidence": [ent.entity_id]})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    rt.hc.seed(hall.id, 1, 0.0)
+
+    hass.states.async_set(ent.entity_id, "on")
+    await _tick(hass, freezer, 0.4)
+    hass.states.async_set(ent.entity_id, "off")
+    await _tick(hass, freezer, 5)
+    assert rt.hc.by_region()[den.id] == 0
+    assert any("flickering" in e["detail"] for e in rt.log if e["kind"] == "ignored")
+
+    hass.states.async_set(ent.entity_id, "on")  # opened for real
+    await _tick(hass, freezer, 3)
+    assert rt.hc.by_region()[den.id] == 1
+    hass.states.async_set(ent.entity_id, "off")
+    await _tick(hass, freezer, 1)
+    assert rt.hc.count() == 1

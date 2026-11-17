@@ -69,6 +69,7 @@ rzp-plot { flex: 1; min-height: 300px; }
 .section { padding: 10px 12px; border-bottom: 1px solid var(--divider-color, #ddd); }
 .section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666); display: flex; align-items: center; }
 .section h3 .grow { flex: 1; }
+.ghost-prompt.section { background: #fff8e1; border-left: 3px solid #f9a825; }
 .zone-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 6px; border-radius: 6px; cursor: pointer; }
 .zone-row:hover { background: var(--secondary-background-color, #f2f2f2); }
 .zone-row.sel { background: rgba(3,169,244,.12); outline: 1px solid var(--primary-color, #03a9f4); }
@@ -922,6 +923,26 @@ class RadarZonePresencePanel extends HTMLElement {
     this._updateFlags();
   }
 
+  /** The radar's own (firmware) exclusion zones: it still reports targets inside them, so offer them as ours. */
+  _firmwareSection() {
+    const fw = (this.config?.device_zones || []).filter(z => z.kind === 'exclude');
+    if (!fw.length) return '';
+    const same = (a, b) => a.length === b.length && a.every((p, i) => Math.abs(p[0] - b[i][0]) < 1 && Math.abs(p[1] - b[i][1]) < 1);
+    return el('div', { class: 'section' },
+      el('h3', {}, 'Radar firmware exclusions'),
+      el('div', { class: 'help' }, 'Set on the device itself. The radar still reports targets inside them, so they have no effect here until imported as one of your exclusion zones. After that only your zones count; later changes on the device are ignored.'),
+      fw.map(z => {
+        const imported = this.zones.some(q => q.kind === 'exclude' && same(q.polygon, z.polygon));
+        const [[x0, y0], , [x1, y1]] = z.polygon;
+        return el('div', { class: 'zone-row' },
+          el('div', { class: 'swatch', style: { background: EXCLUDE_COLOR, opacity: 0.6 } }),
+          el('div', {}, el('div', { class: 'zone-name' }, z.key), el('div', { class: 'zone-meta' },
+            `${this.units.fmtLong(Math.abs(x1 - x0))} × ${this.units.fmtLong(Math.abs(y1 - y0))}${z.enabled === false ? ' · switched off on the device' : ''}`)),
+          imported ? el('span', { class: 'badge' }, 'imported')
+            : el('button', { class: 'btn', title: 'Add as one of your exclusion zones (then Save)', onclick: e => { e.stopPropagation(); this._addZone(z.polygon, 'exclude', `${z.key} (from the radar)`); } }, 'Import'));
+      }));
+  }
+
   _deleteZone(id) {
     const z = this.zones.find(q => q.id === id);
     if (!z) return;
@@ -1405,7 +1426,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'actions' },
         el('button', { class: 'btn', title: 'Download these zones (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
         el('button', { class: 'btn', title: 'Load zones from an exported JSON file. Zones with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
-    s.replaceChildren(sensor, zonesSec, this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
+    s.replaceChildren(el('div', { class: 'ghost-prompt' }), sensor, zonesSec, this._firmwareSection(), this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
     this._renderLiveBadges();
     this._renderSideStats();
     this._renderSpots();
@@ -1696,7 +1717,38 @@ class RadarZonePresencePanel extends HTMLElement {
     ].filter(Boolean).join(' · ');
   }
 
+  /** Guided discovery: a spot that looks like a machine (motion, but nobody ever walks in or out) gets a question. */
+  _renderGhostPrompt() {
+    const box = this.side?.querySelector('.ghost-prompt');
+    if (!box) return;
+    const key = sp => `${Math.round(sp.centroid[0] / 300)},${Math.round(sp.centroid[1] / 300)}`;
+    const store = `rzp.notGhost.${this.radarId}`;
+    const dismissed = new Set(JSON.parse(localStorage.getItem(store) || '[]'));
+    const i = (this.spots || []).findIndex(sp => sp.cls.kind === 'ghost' && !dismissed.has(key(sp)));
+    if (i < 0) { box.replaceChildren(); box.className = 'ghost-prompt'; return; }
+    const sp = this.spots[i];
+    box.className = 'ghost-prompt section';
+    box.replaceChildren(
+      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, '💡 Something here moves, but nobody walks to it'),
+      el('div', { class: 'help', style: { marginBottom: '8px' } },
+        `Spot ${sp.n}, ${this.units.fmtLong(Math.hypot(...sp.centroid))} away: the radar sees motion here for ${fmtDuration(sp.dwell)}, but it appears and vanishes in place instead of someone walking in and out. It could be a plant, a heater or fan (even behind a wall), or a reflection. Exclude it?`),
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn primary', onclick: () => {
+          const poly = offsetConvex(sp.hull, Math.max(this._margin(), 150));
+          if (poly) this._addZone(poly, 'exclude', `Ghost ${sp.n} (plant, fan?)`);
+          this._toast('Added as an exclusion zone: press Save to keep it.');
+        } }, 'Exclude it'),
+        el('button', { class: 'btn', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); },
+          onclick: () => { this.showSpots = true; this.hoverSpot = i; this._updatePlot(); } }, 'Show me'),
+        el('button', { class: 'btn', title: 'People really are there: stop asking about this spot', onclick: () => {
+          dismissed.add(key(sp));
+          localStorage.setItem(store, JSON.stringify([...dismissed]));
+          this._renderGhostPrompt();
+        } }, 'It\'s a real spot')));
+  }
+
   _renderSpots() {
+    this._renderGhostPrompt();
     const box = this.side?.querySelector('.spots');
     if (!box) return;
     const head = el('h3', {}, el('span', { class: 'grow' }, 'Suggested zones'),

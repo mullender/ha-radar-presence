@@ -31,10 +31,11 @@ def floors(hc: HeadCount) -> tuple[int, int, int, int]:
     return hc.count(), f[3], f[2], f[1]
 
 
-def see(hc: HeadCount, region: str, t0: float, t1: float, tracks: dict[int, tuple[float, float]]) -> None:
+def see(hc: HeadCount, region: str, t0: float, t1: float, tracks: dict[int, tuple[float, float]], drift: float = 8.0) -> None:
+    """Tracks seen from t0 to t1, drifting `drift` mm/s (a person's track never stands perfectly still), then gone."""
     t = t0
     while t <= t1:
-        hc.frame(region, tracks, t)
+        hc.frame(region, {k: (x + drift * (t - t0), y) for k, (x, y) in tracks.items()}, t)
         t += 1.0
     hc.frame(region, {}, t1 + 1)
 
@@ -326,3 +327,26 @@ def test_nobody_home_clears_everyone() -> None:
     assert hc.by_region() == {"living": 1, "bedroom": 0}
     hc.correct_home(0, 40.0)
     assert hc.count() == 0 and not hc.tokens
+
+
+def test_a_fan_behind_the_wall_does_not_keep_someone_home() -> None:
+    """The last one leaves by the front door; a heater fan behind the entry wall then shows as a still track."""
+    hc = HeadCount(REGIONS, connections=LINKS)
+    hc.seed("living", 1, 0.0)
+    walk(hc, "living", 1, 100.0, [(1000.0 + 200 * k, 1000.0) for k in range(5)])
+    t = walk(hc, "entry", 2, 110.0, [(2000.0 - 300 * k, 1500.0) for k in range(5)])  # to the front door, gone
+    hc.door(FRONT, True, t)
+    hc.door(FRONT, False, t + 5)
+    hc.advance(t + 120)
+    for k in range(400):  # the fan: one spot, a few cm of jitter, for minutes
+        hc.frame("entry", {9: (-270.0 + (k % 3) * 20, 3190.0 + (k % 5) * 10)}, t + 600 + k)
+    hc.advance(t + 1200)
+    assert hc.count() == 0 and not hc.unknown()
+    assert any(c.kind in ("ghost", "not a person") for c in hc.changes)
+
+
+def test_a_still_track_never_becomes_a_new_person() -> None:
+    hc = HeadCount(REGIONS, connections=LINKS)
+    for k in range(4000):  # over an hour of a fan at night
+        hc.frame("entry", {9: (-270.0 + (k % 3) * 20, 3190.0)}, 1000.0 + k)
+    assert hc.count() == 0

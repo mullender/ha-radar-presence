@@ -97,6 +97,11 @@ ESTABLISH_ON_EXIT_FLOOR = True  # still seen on the exit floor LAG_S after the c
 REFOUND_MM = 2000.0  # ... and is this close to where they vanished
 REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
+STATIC_S = 90.0  # a track that stays within STATIC_MM of where it appeared this long is a machine (a fan behind a wall)...
+STATIC_MM = 400.0  # ... until it moves this far: ignored, and whoever it was given to goes back
+SPOT_MM = 500.0  # tracks standing still here add up: a spot with STATIC_S of still tracks (a fan the radar keeps
+SPOT_FORGET_S = 6 * 3600.0  # losing and re-finding) makes every track born there static; forgotten this long after
+SPOT_APPLY = False  # spots are only suggested (to exclude in the panel): applied automatically they also catch a desk
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +138,8 @@ class Token:
     floor_seen: dict[int, float] = field(default_factory=dict)  # floor -> last time seen there
     seen_region: str = ""  # where last actually seen (region can be a guess: moved unseen)
     pos: tuple[float, float] | None = None  # where last seen (in seen_region's coordinates)
+    before: tuple | None = None  # (track, region, seen_region, pos, last_seen, unknown, unknown_floor) before its current track
+    origin: tuple[str, int] | None = None  # the track that made this person (arrived / appeared there)
 
 
 @dataclass(slots=True)
@@ -188,6 +195,9 @@ class HeadCount:
         self.regions_seen: dict[int, str] = {}  # token -> first region it was seen in
         self._windows: dict[int, _Window] = {}  # floor -> current/last exit window
         self._at_exit: dict[tuple[str, int], tuple[float, str]] = {}
+        self._paths: dict[tuple[str, int], list[float]] = {}  # track -> [x0, y0, t0, farthest from (x0, y0)]
+        self._static: set[tuple[str, int]] = set()  # tracks that never moved: machines, ignored
+        self._spots: dict[str, list[list[float]]] = {}  # region -> [[x, y, still seconds, last time]]
         self._unconfirmed: dict[str, set[int]] = {}  # track -> (last time in an outside doorway, its name)
         self._bootstrap_until = bootstrap_until
         self._next = 1
@@ -302,6 +312,10 @@ class HeadCount:
                         return True
         return False
 
+    def still_spots(self, min_s: float = STATIC_S) -> dict[str, list[tuple[float, float, float]]]:
+        """Spots where tracks keep standing still (x, y, seconds): exclusion suggestions (a fan behind a wall)."""
+        return {r: [(sp[0], sp[1], sp[2]) for sp in spots if sp[2] >= min_s] for r, spots in self._spots.items() if spots}
+
     def by_region(self) -> dict[str, int]:
         out = dict.fromkeys(self.regions, 0)
         for tok in self._people():
@@ -360,6 +374,7 @@ class HeadCount:
         """The region's current tracks (id -> position) after a tracker update. ``unconfirmed``: tracks seen by one
         radar only where another radar of the region looks and sees nothing (a reflection, until confirmed)."""
         self._tick(t)
+        tracks = self._drop_static(region, tracks, t)
         self._unconfirmed[region] = set(unconfirmed)
         prev = self._visible[region]
         cur = set(tracks)
@@ -392,6 +407,62 @@ class HeadCount:
                     self._at_exit[(region, tid)] = (t, portal.name)
         self._visible[region] = cur
 
+    def _drop_static(self, region: str, tracks: Mapping[int, tuple[float, float]], t: float) -> dict[int, tuple[float, float]]:
+        """Tracks that have not moved STATIC_MM in STATIC_S are machines (a fan, seen through a wall): left out."""
+        for key in [k for k in self._paths if k[0] == region and k[1] not in tracks]:
+            del self._paths[key]
+            self._static.discard(key)
+        spots = self._spots.setdefault(region, [])
+        spots[:] = [sp for sp in spots if t - sp[3] < SPOT_FORGET_S]
+        for tid, (x, y) in tracks.items():
+            key = (region, tid)
+            p = self._paths.get(key)
+            if p is None:
+                self._paths[key] = [x, y, t, 0.0, t]
+                if SPOT_APPLY and any(sp[2] >= STATIC_S and math.hypot(x - sp[0], y - sp[1]) <= SPOT_MM for sp in spots):
+                    self._static.add(key)  # born on a spot where tracks never move
+                    self._give_back(key, t)  # (a re-found track id: whoever it had goes back)
+                continue
+            p[3] = max(p[3], math.hypot(x - p[0], y - p[1]))
+            if p[3] < STATIC_MM:  # still standing where it appeared: its time adds to that spot
+                sp = next((sp for sp in spots if math.hypot(p[0] - sp[0], p[1] - sp[1]) <= SPOT_MM), None)
+                if sp is None:
+                    sp = [p[0], p[1], 0.0, t]
+                    spots.append(sp)
+                sp[2] += t - p[4]
+                sp[3] = t
+            p[4] = t
+            if key in self._static:
+                if p[3] >= STATIC_MM:
+                    self._static.discard(key)  # it moved after all: a new track from here on
+            elif p[3] < STATIC_MM and (t - p[2] >= STATIC_S or SPOT_APPLY and any(
+                sq[2] >= STATIC_S and math.hypot(p[0] - sq[0], p[1] - sq[1]) <= SPOT_MM for sq in spots
+            )):
+                self._static.add(key)
+                self._give_back(key, t)
+        return {tid: pos for tid, pos in tracks.items() if (region, tid) not in self._static}
+
+    def _give_back(self, key: tuple[str, int], t: float) -> None:
+        """A track turned out static: whoever it was bound to goes back to before it (or was never anyone)."""
+        region, tid = key
+        if key in self._pending:
+            del self._pending[key]
+        tok = self.tokens.get(self._binding.pop(key, -1))
+        self._visible[region].discard(tid)
+        if tok is not None and tok.visible is None and tok.before is not None and tok.before[0] == key:
+            pass  # bound to this track id before it was lost: still theirs to give back
+        elif tok is None or tok.visible != key:
+            self.changes.append(Change(t, "ghost", 0, region, f"track {tid} never moved (a fan?)"))
+            return
+        tok.visible = None
+        if tok.origin == key:
+            self._drop(tok, t, "not a person")  # it only ever was this track
+            return
+        if tok.before is not None and tok.before[0] == key:
+            _key, tok.region, tok.seen_region, tok.pos, tok.last_seen, tok.unknown, tok.unknown_floor = tok.before
+        tok.before = None
+        self.changes.append(Change(t, "ghost", tok.id, tok.region, f"track {tid} in {region} never moved (a fan?): given back"))
+
     def frame_group(
         self, parts: Mapping[str, Mapping[int, tuple[float, float]]], t: float, unconfirmed: Iterable[int] = ()
     ) -> None:
@@ -416,10 +487,19 @@ class HeadCount:
             self._pending[(dst, tid)] = p
         if (ex := self._at_exit.pop((src, tid), None)) is not None:
             self._at_exit[(dst, tid)] = ex
+        if (path := self._paths.pop((src, tid), None)) is not None:
+            self._paths[(dst, tid)] = path
+        if (src, tid) in self._static:
+            self._static.discard((src, tid))
+            self._static.add((dst, tid))
         if (tok_id := self._binding.pop((src, tid), None)) is not None:
             self._binding[(dst, tid)] = tok_id
             if (tok := self.tokens.get(tok_id)) is not None and tok.visible == (src, tid):
                 tok.visible = (dst, tid)  # frame() sees it continuing, and logs the move
+                if tok.before is not None and tok.before[0] == (src, tid):
+                    tok.before = ((dst, tid), *tok.before[1:])
+                if tok.origin == (src, tid):
+                    tok.origin = (dst, tid)
 
     def advance(self, t: float) -> None:
         self._tick(t)
@@ -438,7 +518,8 @@ class HeadCount:
             if w.closed is not None:
                 w.closed = max(w.closed, t)
             return  # a door on this floor is in use already
-        self._windows[floor] = _Window(floor, t, closed=t)
+        # Nobody can have come in through a door that did not open: at most someone went out.
+        self._windows[floor] = _Window(floor, t, closed=t, direction="out")
         for tok in self.tokens.values():
             if self.regions[tok.region].floor == floor or t - tok.floor_seen.get(floor, float("-inf")) <= RECENT_S:
                 self._doubt(tok, t, f"vanished at {name}", floor)
@@ -514,6 +595,10 @@ class HeadCount:
 
     def _bind(self, tok: Token, region: str, tid: int, t: float) -> None:
         self.regions_seen.setdefault(tok.id, region)
+        if tok.visible != (region, tid):  # a new track for this person: remember where they were, in case it is a machine
+            tok.before = ((region, tid), tok.region, tok.seen_region, tok.pos, tok.last_seen, tok.unknown, tok.unknown_floor)
+            if tok.origin is None and tok.seen_s == 0.0 and t - tok.since < 1.0 and tok.reason in ("arrived", "unexplained", "bootstrap"):
+                tok.origin = (region, tid)
         if tok.visible == (region, tid):
             tok.seen_s += max(0.0, t - tok.last_seen)
         if tok.region != region:

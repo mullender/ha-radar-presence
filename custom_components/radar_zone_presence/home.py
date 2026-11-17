@@ -22,7 +22,9 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from datetime import timedelta
+
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 
 from .const import (
     CONF_DEVICE_ID,
@@ -38,7 +40,7 @@ from .const import (
     SUBENTRY_RADAR,
     SUBENTRY_ZONE,
 )
-from .discovery import async_resolve_units
+from .discovery import async_device_geometry, async_resolve_units
 from .engine import (
     COALESCE_S,
     KIND_EXCLUDE,
@@ -58,6 +60,7 @@ from .engine.tracker import Observation, Tracker
 from .engine.zones import KIND_LINGER, KIND_TRANSIENT
 
 _LOGGER = logging.getLogger(__name__)
+GEOMETRY_REFRESH_S = 60
 
 DOOR_WINDOW_S = 30.0  # a passage through an exit with a door counts if the door moved this close to it
 
@@ -327,6 +330,13 @@ class HomeRuntime:
             self._unsubs.append(
                 async_track_state_change_event(self.hass, list(self._feed_of_entity), self._on_state)
             )
+        # The radars' range setting can change, or be unavailable at start-up.
+        self._unsubs.append(async_track_time_interval(self.hass, self._refresh_geometry, timedelta(seconds=GEOMETRY_REFRESH_S)))
+
+    @callback
+    def _refresh_geometry(self, _now: Any = None) -> None:
+        for rid, feed in self.feeds.items():
+            self.set_max_distance(rid, async_device_geometry(self.hass, feed.device_id)["max_distance_mm"])
 
     @callback
     def async_stop(self) -> None:

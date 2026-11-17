@@ -17,12 +17,13 @@ import math
 import time
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er, floor_registry as fr
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -43,6 +44,7 @@ TICK_S = 5
 LOG_KEEP_S = 3 * 86400.0  # the decision log the panel's head count view replays
 LOG_SAVE_DELAY_S = 120
 SEEN_EVERY_S = 15.0
+CONTACT_MIN_S = 2.0  # a door contact must stay open this long to count (a magnet at the edge of its range flickers)
 EVENT_FRESH_S = 30.0  # a button press (event entity) counts only if its time is this recent  # who a radar sees, logged at most this often
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
@@ -84,6 +86,7 @@ class HeadCountRuntime:
         self.hc: HeadCount | None = None
         self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock"
         self._evidence: dict[str, tuple[str, bool]] = {}  # entity -> (region, only switching on counts)
+        self._contact_open: dict[str, float] = {}  # door contact -> when it opened (not counted yet)
         self._build()
 
     # ---------------------------------------------------------------- build
@@ -361,10 +364,30 @@ class HeadCountRuntime:
         if on_only and new.state != "on":
             self._log_signal(t, "ignored", entity_id, f"{new.state}: only switching on counts (a timer may turn it off)")
             return
+        if entity_id.startswith("binary_sensor."):
+            # Door contacts: an opening counts once it has lasted CONTACT_MIN_S; shorter ones are the sensor flickering.
+            if new.state == "on":
+                self._contact_open[entity_id] = t
+                async_call_later(self.hass, CONTACT_MIN_S, partial(self._contact_held, entity_id, t))
+                return
+            opened = self._contact_open.pop(entity_id, None)
+            if opened is not None and t - opened < CONTACT_MIN_S:
+                self._log_signal(t, "ignored", entity_id, f"open {t - opened:.1f} s only: the sensor flickering")
+                return
         self._log_signal(t, "signal", entity_id, new.state, region)
         # Switched off (a light on the way out): confirms who is there, moves nobody in. Contacts and buttons: both.
         off = new.state == "off" and entity_id.split(".")[0] in ("light", "switch", "fan", "input_boolean")
         self.hc.evidence(region, new.last_changed_timestamp, entity_id, move=not off)
+        self._changed()
+
+    @callback
+    def _contact_held(self, entity_id: str, opened: float, _now: Any) -> None:
+        """A door contact still open CONTACT_MIN_S after opening: someone opened it (at the time it opened)."""
+        if self.hc is None or self._contact_open.get(entity_id) != opened:
+            return
+        region, _on_only = self._evidence[entity_id]
+        self._log_signal(opened, "signal", entity_id, "on", region)
+        self.hc.evidence(region, opened, entity_id)
         self._changed()
 
     @callback
