@@ -12,6 +12,7 @@ home; locks count as door activity.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import time
@@ -27,7 +28,7 @@ from homeassistant.helpers.event import async_call_later, async_track_state_chan
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OUTSIDE_DOORS, DOMAIN, OUTSIDE
+from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OUTSIDE_DOORS, CONF_VACUUMS, DOMAIN, OUTSIDE
 from .engine.align import apply, invert, transform_polygon
 from .engine.headcount import HeadCount, Portal, Region
 from .engine.rooms import RoomRadar, Rooms
@@ -49,6 +50,20 @@ EVENT_FRESH_S = 30.0  # a button press (event entity) counts only if its time is
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
 OPEN_STATES = {"on", "open", "opening", "closing"}
+VACUUM_ACTIVE = {"cleaning", "returning"}
+HOLD_MAX_S = 300.0  # a robot vacuum that has not said where it is cleaning by then: replay without knowing
+
+
+@dataclass
+class _Hold:
+    """A robot vacuum started without saying where: the head count as it was, and everything fed to it since, to
+    replay once its room is known (with that room's radar ignored). Meanwhile new tracks wait."""
+
+    hc: HeadCount
+    log_len: int
+    logged: int
+    started: float
+    calls: list[tuple[str, tuple]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,9 +99,13 @@ class HeadCountRuntime:
         self._seen_logged: tuple = ()
         self._seen_at = 0.0
         self.hc: HeadCount | None = None
-        self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock"
+        self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock" | "door_lock"
+        self._lock_of: dict[str, str] = {}  # door contact -> the lock on the same device (a smart lock's door sensor)
         self._evidence: dict[str, tuple[str, bool]] = {}  # entity -> (region, only switching on counts)
         self._contact_open: dict[str, float] = {}  # door contact -> when it opened (not counted yet)
+        self._vacuums: dict[str, str | None] = {}  # robot vacuum -> its current room sensor
+        self._vacuumed: dict[str, str] = {}  # space a robot vacuum is cleaning -> the vacuum: its tracks are it
+        self._hold: _Hold | None = None  # one is cleaning, its room not known yet
         self._build()
 
     # ---------------------------------------------------------------- build
@@ -110,6 +129,22 @@ class HeadCountRuntime:
         if ent.device_id and (dev := dr.async_get(self.hass).async_get(ent.device_id)):
             return dev.area_id
         return None
+
+    def _pair_locks(self) -> None:
+        """A door contact with a lock on the same device (a smart lock's door sensor): when it is locked the door
+        is closed, whatever the contact says (one stayed "open" all night after the door was locked)."""
+        ents = er.async_get(self.hass)
+        for door, kind in list(self._door_kind.items()):
+            if kind != "door" or (ent := ents.async_get(door)) is None or not ent.device_id:
+                continue
+            locks = [e.entity_id for e in er.async_entries_for_device(ents, ent.device_id) if e.domain == "lock"]
+            if len(locks) == 1:
+                self._lock_of[door] = locks[0]
+                self._door_kind.setdefault(locks[0], "door_lock")
+
+    def _locked(self, door: str) -> bool:
+        lock = self._lock_of.get(door)
+        return lock is not None and (st := self.hass.states.get(lock)) is not None and st.state == "locked"
 
     def _add_space(self, region_id: str, area_id: str, observed: bool) -> None:
         info = self._area(area_id)
@@ -224,12 +259,23 @@ class HeadCountRuntime:
                     _LOGGER.warning("Head count: %s is not in an area of the head count, ignored", entity_id)
                     continue
                 self._evidence[entity_id] = (region_id, on_only)
+        ents = er.async_get(self.hass)
+        for vac in home.entry.options.get(CONF_VACUUMS, []) or []:
+            ent = ents.async_get(vac)
+            rooms = [
+                e.entity_id for e in (er.async_entries_for_device(ents, ent.device_id) if ent and ent.device_id else [])
+                if e.domain == "sensor" and (e.translation_key == "current_room" or e.entity_id.endswith("_current_room"))
+            ]
+            self._vacuums[vac] = rooms[0] if rooms else None
+            if not rooms:
+                _LOGGER.warning("Head count: robot vacuum %s reports no current room; its tracks cannot be ignored", vac)
         for region_id, doors in exits.items():
             for d in doors:
                 self._door_kind.setdefault(d, "lock" if d.startswith("lock.") else "door")
         for _a, _b, door in links:
             if door:
                 self._door_kind.setdefault(door, "door")
+        self._pair_locks()
 
         if not self.spaces:
             return
@@ -264,10 +310,13 @@ class HeadCountRuntime:
             now = time.time()
             for entity_id, kind in self._door_kind.items():
                 state = self.hass.states.get(entity_id)
-                if kind == "door" and state is not None and state.state in OPEN_STATES:
-                    self.hc.door(entity_id, True, now)
+                if kind == "door" and state is not None and state.state in OPEN_STATES and not self._locked(entity_id):
+                    self._hc("door", entity_id, True, now)
         if self._evidence:
             self._unsubs.append(async_track_state_change_event(self.hass, list(self._evidence), self._on_evidence))
+        if watch := [e for pair in self._vacuums.items() for e in pair if e]:
+            self._unsubs.append(async_track_state_change_event(self.hass, watch, self._on_vacuum))
+            self._update_vacuumed(time.time())
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=TICK_S)))
         self._changed()
 
@@ -297,10 +346,44 @@ class HeadCountRuntime:
         tracks = {tg.slot: (tg.x, tg.y) for tg in group.last_targets}
         unconfirmed = self._unconfirmed(group)
         if rooms is None:
-            self.hc.frame(next(iter(region_of_area.values())), tracks, t, unconfirmed)
+            self._hc("frame", {next(iter(region_of_area.values())): tracks}, t, unconfirmed)
         else:
-            parts = rooms.split(tracks)
-            self.hc.frame_group({region_of_area[a]: part for a, part in parts.items()}, t, unconfirmed)
+            self._hc("frame_group", {region_of_area[a]: part for a, part in rooms.split(tracks).items()}, t, unconfirmed)
+        self._changed()
+
+    def _hc(self, name: str, *args: Any, replay: bool = False) -> None:
+        """Feed the head count. Tracks in a room a robot vacuum is cleaning are left out; while it has not said
+        where yet, every input is kept to replay and new tracks wait (unconfirmed)."""
+        assert self.hc is not None
+        if self._hold is not None and not replay:
+            self._hold.calls.append((name, args))
+        if name in ("frame", "frame_group"):
+            parts, t, unconfirmed = args
+            if self._hold is not None and not replay:
+                unconfirmed = {tid for part in parts.values() for tid in part}
+            parts = {r: {} if r in self._vacuumed else part for r, part in parts.items()}
+            if name == "frame":
+                ((region, tracks),) = parts.items()
+                self.hc.frame(region, tracks, t, unconfirmed)
+            else:
+                self.hc.frame_group(parts, t, unconfirmed)
+            return
+        getattr(self.hc, name)(*args)
+
+    def _end_hold(self, t: float) -> None:
+        """Back to the head count as it was when the vacuum started; replay what came since, now knowing its room."""
+        hold, self._hold = self._hold, None
+        if hold is None:
+            return
+        signals = [e for e in self.log[hold.log_len :] if e["kind"] in ("door", "signal", "ignored")]
+        del self.log[hold.log_len :]
+        self.log += signals
+        self.hc, self._logged = hold.hc, hold.logged
+        for name, args in hold.calls:
+            self._hc(name, *args, replay=True)
+        self._log_changes()
+        self.log[hold.log_len :] = sorted(self.log[hold.log_len :], key=lambda e: e["t"])
+        self._log_signal(t, "signal", next(iter(self._vacuums)), f"replayed {len(hold.calls)} updates since it started")
         self._changed()
 
     def _unconfirmed(self, group: GroupRuntime) -> set[int]:
@@ -331,12 +414,31 @@ class HeadCountRuntime:
         if new is None or new.state in ("unavailable", "unknown"):
             return
         t = new.last_changed_timestamp
+        kind = self._door_kind.get(entity_id)
+        if new.state == "locked":  # the door it locks is closed
+            for door, lock in self._lock_of.items():
+                if lock == entity_id and (seen := self.hc._door_seen.get(door)) is not None and seen[0]:
+                    self._log_signal(t, "door", door, "off (locked)")
+                    self._hc("door", door, False, t)
+                    self._changed()
+        elif old is not None and old.state == "locked":  # unlocked: the contact counts again (it may say open already)
+            for door, lock in self._lock_of.items():
+                if (lock == entity_id and (st := self.hass.states.get(door)) is not None and st.state in OPEN_STATES
+                        and not self.hc._door_seen.get(door, (False,))[0]):
+                    self._log_signal(t, "door", door, f"{st.state} (unlocked)")
+                    self._hc("door", door, True, t)
+                    self._changed()
+        if kind == "door_lock":
+            return
+        if kind == "door" and new.state in OPEN_STATES and self._locked(entity_id):
+            self._log_signal(t, "ignored", entity_id, f"{new.state}: the door is locked, so it is closed")
+            return
         self._log_signal(t, "door", entity_id, new.state)
-        if self._door_kind.get(entity_id) == "lock":
+        if kind == "lock":
             if old is not None and old.state != new.state and old.state not in ("unavailable", "unknown"):
-                self.hc.pulse(entity_id, t)
+                self._hc("pulse", entity_id, t)
         else:
-            self.hc.door(entity_id, new.state in OPEN_STATES, t)
+            self._hc("door", entity_id, new.state in OPEN_STATES, t)
         self._changed()
 
     @callback
@@ -377,8 +479,40 @@ class HeadCountRuntime:
         self._log_signal(t, "signal", entity_id, new.state, region)
         # Switched off (a light on the way out): confirms who is there, moves nobody in. Contacts and buttons: both.
         off = new.state == "off" and entity_id.split(".")[0] in ("light", "switch", "fan", "input_boolean")
-        self.hc.evidence(region, new.last_changed_timestamp, entity_id, move=not off)
+        self._hc("evidence", region, new.last_changed_timestamp, entity_id, not off)
         self._changed()
+
+    @callback
+    def _on_vacuum(self, event: Event[EventStateChangedData]) -> None:
+        if self.hc is not None and (new := event.data["new_state"]) is not None:
+            self._update_vacuumed(new.last_changed_timestamp)
+
+    def _update_vacuumed(self, t: float) -> None:
+        """The spaces of the rooms the robot vacuums are cleaning (their room sensor's state is an area name)."""
+        by: dict[str, str] = {}  # room name -> the vacuum cleaning it
+        unsure = False
+        for vac, room in self._vacuums.items():
+            st = self.hass.states.get(vac)
+            if st is None or st.state not in VACUUM_ACTIVE:
+                continue
+            rs = self.hass.states.get(room) if room else None
+            if rs is None or rs.state in ("unknown", "unavailable", ""):
+                unsure = True  # (it reports its room a minute or two after it starts)
+            else:
+                by[rs.state.casefold()] = vac
+        if unsure and self._hold is None:
+            self._log_signal(t, "signal", next(iter(self._vacuums)), "cleaning, room not known yet: new tracks wait")
+            self._hold = _Hold(copy.deepcopy(self.hc), len(self.log), self._logged, t, [])
+        vacuumed = {sid: by[sp.name.casefold()] for sid, sp in self.spaces.items() if sp.name.casefold() in by}
+        if vacuumed != self._vacuumed:
+            for sid in vacuumed.keys() - self._vacuumed.keys():
+                self._log_signal(t, "signal", vacuumed[sid], "cleaning here: this radar is ignored", sid)
+            for sid in self._vacuumed.keys() - vacuumed.keys():
+                self._log_signal(t, "signal", self._vacuumed[sid], "done: this radar counts again", sid)
+            self._vacuumed = vacuumed
+            self._changed()
+        if not unsure and self._hold is not None:
+            self._end_hold(t)
 
     @callback
     def _contact_held(self, entity_id: str, opened: float, _now: Any) -> None:
@@ -387,7 +521,7 @@ class HeadCountRuntime:
             return
         region, _on_only = self._evidence[entity_id]
         self._log_signal(opened, "signal", entity_id, "on", region)
-        self.hc.evidence(region, opened, entity_id)
+        self._hc("evidence", region, opened, entity_id)
         self._changed()
 
     @callback
@@ -395,7 +529,9 @@ class HeadCountRuntime:
         if self.hc is None:
             return
         now = time.time()
-        self.hc.advance(now)
+        if self._hold is not None and now - self._hold.started > HOLD_MAX_S:
+            self._end_hold(now)
+        self._hc("advance", now)
         self._changed()
         seen = tuple(sorted(tok.id for tok in self.hc.tokens.values() if tok.visible is not None))
         if seen != self._seen_logged and now - self._seen_at >= SEEN_EVERY_S:
@@ -502,6 +638,7 @@ class HeadCountRuntime:
         if self.hc is None or space_id not in self.spaces:
             raise ValueError(f"unknown space {space_id}")
         now = time.time()
+        self._end_hold(now)
         area = self.spaces[space_id].area_id
         for sid, sp in self.spaces.items():  # an area seen by several radar groups: the count goes to this one
             if sp.area_id == area:
@@ -513,6 +650,7 @@ class HeadCountRuntime:
         """Someone who knows sets the home count (0: nobody home). Only removes people. Logged as 'corrected'."""
         if self.hc is None:
             raise ValueError("no head count")
+        self._end_hold(time.time())
         self.hc.correct_home(n, time.time())
         self._changed()
         self._store.async_delay_save(self._data, 0)

@@ -80,13 +80,15 @@
           "reconnect_grace_s": "Ignore targets after reconnect",
           "outside_doors": "Doors to outside no radar sees",
           "evidence": "Signs of someone there",
-          "evidence_on": "Signs of someone there (switched on only)"
+          "evidence_on": "Signs of someone there (switched on only)",
+          "vacuums": "Robot vacuums"
         },
         "data_description": {
           "reconnect_grace_s": "Seconds to ignore a radar's detections after it comes back from unavailable. Ghost targets often appear right after a reconnect.",
           "outside_doors": "Doors, garage doors and locks to outside that no radar watches (a garage door: its area becomes a space without a radar). Used by the head count; doors on exit zones are picked up from the zones.",
           "evidence": "Switches, lights, buttons and door contacts (closets, inner doors) that mean someone is in their area when used. Only changes made by hand count: not by automations, scripts or the app. Used by the head count, for rooms without a radar and for people who sit still.",
-          "evidence_on": "Like the above, but only switching on counts: for things a timer or the device itself turns off (a fan on a timer)."
+          "evidence_on": "Like the above, but only switching on counts: for things a timer or the device itself turns off (a fan on a timer).",
+          "vacuums": "A robot vacuum moves like a person to a radar. While one is cleaning, the head count ignores the radars in the room it reports (its current room sensor, matched to an area by name)."
         }
       }
     }

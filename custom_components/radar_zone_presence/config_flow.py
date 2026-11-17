@@ -33,6 +33,7 @@ from .const import (
     CONF_RECONNECT_GRACE,
     CONF_TARGETS,
     CONF_UNIT,
+    CONF_VACUUMS,
     CONF_ZONES,
     DOMAIN,
     SUBENTRY_RADAR,
@@ -273,6 +274,10 @@ class RadarZonePresenceOptionsFlow(OptionsFlow):
                         CONF_EVIDENCE_ON,
                         default=self.config_entry.options.get(CONF_EVIDENCE_ON, []),
                     ): selector.EntitySelector(selector.EntitySelectorConfig(domain=EVIDENCE_DOMAINS, multiple=True)),
+                    vol.Optional(
+                        CONF_VACUUMS,
+                        default=self.config_entry.options.get(CONF_VACUUMS, []),
+                    ): selector.EntitySelector(selector.EntitySelectorConfig(domain="vacuum", multiple=True)),
                 }
             ),
         )

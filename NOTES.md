@@ -425,3 +425,19 @@ What made the difference, each found by tracing a wrong moment in the replay:
 - Tracker track ids get reused: a re-found track keeps its person only within 2 m and (after 30 s) if they were not seen elsewhere since.
 - Rooms without a radar behind a doorway hold their sleeper; a split or two-radar double sighting does not create or move people.
 Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidence.
+
+## 2026-11-16: smart locks and robot vacuums
+
+- A door contact with a lock on the same device (a smart lock's door sensor): locked means closed, whatever the
+  contact says. One stayed "open" for a whole night after the door was locked, which kept an exit window open (all
+  counts in doubt) and, once fixed naively, hid the next morning's departure (the contact never went open again).
+  So: locking closes the door; an "open" while locked is ignored (logged); unlocking makes the contact count again,
+  open already if it says so.
+- A robot vacuum moves like a person to a radar (slow sweeps, ~10 cm/s, across a whole room). Robot vacuums are
+  picked in the home options. While one cleans or returns, the radars in the room it reports (a `current_room`
+  sensor on its device, matched to an area by name, case-insensitive) are ignored. It reports the room a minute or
+  two after starting: until then the head count keeps a copy of itself and every input; new tracks wait. Once the
+  room is known (or after 5 minutes, or when it stops) it goes back to the copy and replays the inputs with that
+  room ignored. Log entries of the discarded branch are dropped (door/signal entries kept).
+- Replay tool: `--door-locks '{contact: lock}'` and `--vacuums '{vacuum: room sensor}'` (rows in --doors); for
+  the vacuum it looks ahead to the room it reports next, which is what the runtime ends up with.

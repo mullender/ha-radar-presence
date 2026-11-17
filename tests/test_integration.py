@@ -755,3 +755,101 @@ async def test_a_flickering_door_contact_is_not_evidence(hass: HomeAssistant, ra
     hass.states.async_set(ent.entity_id, "off")
     await _tick(hass, freezer, 1)
     assert rt.hc.count() == 1
+
+
+def _device_with(hass: HomeAssistant, name: str, entities: list[tuple[str, str]]) -> list[str]:
+    """A device (a smart lock, a robot vacuum) with these (domain, key) entities; their entity ids."""
+    source = MockConfigEntry(domain="demo", title=name)
+    source.add_to_hass(hass)
+    dev = dr.async_get(hass).async_get_or_create(config_entry_id=source.entry_id, identifiers={("demo", name)}, name=name)
+    ent_reg = er.async_get(hass)
+    return [
+        ent_reg.async_get_or_create(domain, "demo", f"{name}_{key}", suggested_object_id=f"{name}_{key}", device_id=dev.id).entity_id
+        for domain, key in entities
+    ]
+
+
+async def test_a_locked_door_is_closed_whatever_its_contact_says(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """A smart lock's door sensor stayed "open" all night after the door was locked: locked means closed."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    contact, lock = _device_with(hass, "front_lock", [("binary_sensor", "door"), ("lock", "lock")])
+    hass.states.async_set(contact, "off")
+    hass.states.async_set(lock, "locked")
+    door = {
+        **zone("door", "Front door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"),
+        "door_entity_id": contact,
+        "leads_to": ["outside"],
+    }
+    entry = await setup_entry(hass, radar_device, [door])
+    rt = entry.runtime_data.headcount
+    assert rt._lock_of == {contact: lock}
+    is_open = lambda: rt.hc._door_seen.get(contact, (False,))[0]  # noqa: E731
+
+    hass.states.async_set(lock, "unlocked")
+    hass.states.async_set(contact, "on")
+    await _tick(hass, freezer, 3)
+    assert is_open()
+    hass.states.async_set(lock, "locked")  # the contact still says open
+    await _tick(hass, freezer, 1)
+    assert not is_open()
+    assert any(e["detail"] == "off (locked)" for e in rt.log if e["kind"] == "door")
+
+    hass.states.async_set(contact, "off")
+    hass.states.async_set(contact, "on")  # while locked: the sensor is wrong
+    await _tick(hass, freezer, 1)
+    assert not is_open()
+    assert any("locked, so it is closed" in e["detail"] for e in rt.log if e["kind"] == "ignored")
+
+    hass.states.async_set(lock, "unlocked")  # the contact says open already: now it counts
+    await _tick(hass, freezer, 1)
+    assert is_open()
+
+
+async def test_a_robot_vacuum_is_not_a_person(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """While the vacuum cleans a room, that room's radar is ignored; it says which room only after a while, so
+    the head count replays those minutes once it does."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    vac, room = _device_with(hass, "robo", [("vacuum", "vacuum"), ("sensor", "current_room")])
+    hass.states.async_set(vac, "docked")
+    hass.states.async_set(room, "Pantry")
+    entry = await setup_entry(hass, radar_device, [])
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "vacuums": [vac]})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    assert rt._vacuums == {vac: room}
+    rt.hc._bootstrap_until = float("-inf")
+
+    hass.states.async_set(vac, "cleaning")
+    hass.states.async_set(room, "unknown")
+    await hass.async_block_till_done()
+    assert rt._hold is not None
+    for k in range(20):  # it roams the entry: 80 s, more than an unexplained person needs
+        await move(hass, 1, -40 + 3 * k, 60 + (k % 5) * 10)
+        await _tick(hass, freezer, 4)
+    assert rt.hc.count() == 0
+    hass.states.async_set(room, "Entry")
+    await hass.async_block_till_done()
+    assert rt._hold is None and area.id in rt._vacuumed
+    for k in range(20):
+        await move(hass, 1, 20 - 3 * k, 60 + (k % 5) * 10)
+        await _tick(hass, freezer, 4)
+    assert rt.hc.count() == 0
+    assert any("replayed" in e["detail"] for e in rt.log if e["kind"] == "signal")
+
+    hass.states.async_set(vac, "docked")  # done: someone seen there now is someone
+    await hass.async_block_till_done()
+    assert not rt._vacuumed and not rt.hc.changes
+    await move(hass, 1, 0, 0)
+    await _tick(hass, freezer, 4)
+    for k in range(25):
+        await move(hass, 1, -40 + 4 * (k % 20), 100 + 2 * (k % 7))
+        await _tick(hass, freezer, 4)
+    assert [c.kind for c in rt.hc.changes] == ["unexplained"]  # (a person once seen for a while)

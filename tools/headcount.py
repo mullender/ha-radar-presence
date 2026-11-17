@@ -45,6 +45,8 @@ def main() -> None:
     ap.add_argument("--data", type=Path, nargs="+", required=True, help="export directories, merged")
     ap.add_argument("--configs", type=Path, required=True)
     ap.add_argument("--doors", type=Path, required=True)
+    ap.add_argument("--vacuums", default="{}", help='JSON: robot vacuum -> its current room sensor (rows of both in --doors): while it cleans, the radars in that room are ignored')
+    ap.add_argument("--door-locks", default="{}", help='JSON: door contact -> its lock (rows in --doors): locked means closed, as the integration pairs a lock on the same device')
     ap.add_argument("--floors", required=True, help="JSON: area id -> floor level")
     ap.add_argument("--exits", required=True, help="JSON: area id -> [true exit door entity ids]")
     ap.add_argument("--unobserved", default="{}", help='JSON: area -> floor of areas without a usable radar (their radar is ignored)')
@@ -184,7 +186,18 @@ def main() -> None:
                 if usable and by_hand and (not ev_areas[e][1] or state == "on"):
                     off = state == "off" and e.split(".")[0] in ("light", "switch", "fan", "input_boolean")
                     events.append((t, 2, region, (e, not off)))
+    door_locks = json.loads(a.door_locks)
     events.sort(key=lambda e: (e[0], e[1]))
+    lock_state: dict[str, str] = {}
+    door_state: dict[str, str] = {}  # contacts' own states (paired with a lock)
+    vacuums = json.loads(a.vacuums)
+    vac_watch = set(vacuums) | set(vacuums.values())
+    vac_state: dict[str, str] = {}
+    vacuumed: set[str] = set()
+
+    def next_room(room: str, t: float) -> str:
+        return next((s_ for t_, s_ in sorted(doors.get(room, [])) if t <= t_ <= t + 600 and s_ not in ("unknown", "unavailable", "")), "")
+    area_of = {r.id: r.name.replace("_", " ").casefold() for r in regions}
     t_from, t_to = ts(a.t_from), ts(a.t_to)
     last_counts = None
     timeline: list[tuple[float, int, bool]] = []  # (t, home count, unknown)
@@ -211,7 +224,39 @@ def main() -> None:
             hc.evidence(key, t, payload[0], move=payload[1])
             record(timeline, hc, t)
             continue
+        if kind == 1 and key in vac_watch:
+            vac_state[key] = payload
+            active = [room for vac, room in vacuums.items() if vac_state.get(vac) in ("cleaning", "returning")]
+            # The room it reports a minute or two after starting is where it was all along (the integration
+            # replays those minutes once it knows; here we can just look ahead).
+            rooms_now = {(vac_state.get(room) if vac_state.get(room) not in (None, "unknown", "unavailable", "") else next_room(room, t)).casefold() for room in active}
+            now = {rid for rid, area in area_of.items() if area in rooms_now}
+            if now != vacuumed and (t_from is None or t >= t_from):
+                say(f"{fmt(t)}  vacuum cleaning: {', '.join(sorted(now)) or 'done'}")
+            vacuumed = now
+            continue
         if kind == 1:
+            if key.startswith("lock."):
+                lock_state[key] = payload
+                for door, lock in door_locks.items():
+                    if lock == key and payload == "locked" and hc._door_seen.get(door, (False,))[0]:
+                        hc.door(door, False, t)
+                        record(timeline, hc, t)
+                        if t_from is None or t >= t_from:
+                            say(f"{fmt(t)}  door {door.split('.')[-1]} -> off (locked)")
+                    if lock == key and payload != "locked" and door_state.get(door) in OPEN_STATES and not hc._door_seen.get(door, (False,))[0]:
+                        hc.door(door, True, t)  # unlocked: the contact counts again, it may say open already
+                        record(timeline, hc, t)
+                        if t_from is None or t >= t_from:
+                            say(f"{fmt(t)}  door {door.split('.')[-1]} -> {door_state[door]} (unlocked)")
+                if key not in hc._door_region:
+                    continue
+            elif key in door_locks:
+                door_state[key] = payload
+                if payload in OPEN_STATES and lock_state.get(door_locks[key]) == "locked":
+                    if t_from is None or t >= t_from:
+                        say(f"{fmt(t)}  door {key.split('.')[-1]} -> {payload} ignored: locked")
+                    continue
             hc.door(key, payload in OPEN_STATES, t)
             record(timeline, hc, t)
             if (t_from is None or t >= t_from) and key in hc._door_region:
@@ -228,9 +273,11 @@ def main() -> None:
         tracks = {tg.slot: (tg.x, tg.y) for tg in out.targets}
         flagged = unconfirmed(tr, out, g, cfgs) if a.cross_check else set()
         if rooms is None:
-            hc.frame(next(iter(region_of_area.values())), tracks, t, flagged)
+            region = next(iter(region_of_area.values()))
+            hc.frame(region, {} if region in vacuumed else tracks, t, flagged)
         else:
-            hc.frame_group({region_of_area[r]: part for r, part in rooms.split(tracks).items()}, t, flagged)
+            parts = {region_of_area[r]: part for r, part in rooms.split(tracks).items()}
+            hc.frame_group({r: {} if r in vacuumed else part for r, part in parts.items()}, t, flagged)
         for name in region_of_area.values():
             if name in a.dump and (t_from is None or t >= t_from):
                 ids = {s_: (round(x), round(y), hc._binding.get((name, s_))) for s_, (x, y) in hc._pos[name].items()}
