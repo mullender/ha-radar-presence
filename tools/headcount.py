@@ -22,6 +22,7 @@ import datetime as dt
 import gzip
 import heapq
 import json
+import re
 import math
 import sys
 from pathlib import Path
@@ -197,7 +198,8 @@ def main() -> None:
 
     def next_room(room: str, t: float) -> str:
         return next((s_ for t_, s_ in sorted(doors.get(room, [])) if t <= t_ <= t + 600 and s_ not in ("unknown", "unavailable", "")), "")
-    area_of = {r.id: r.name.replace("_", " ").casefold() for r in regions}
+    room_key = lambda name: re.sub(r"[\W_]+", "", name.casefold())  # noqa: E731  (as the integration matches them)
+    area_of = {r.id: room_key(r.name) for r in regions}
     t_from, t_to = ts(a.t_from), ts(a.t_to)
     last_counts = None
     timeline: list[tuple[float, int, bool]] = []  # (t, home count, unknown)
@@ -229,7 +231,7 @@ def main() -> None:
             active = [room for vac, room in vacuums.items() if vac_state.get(vac) in ("cleaning", "returning")]
             # The room it reports a minute or two after starting is where it was all along (the integration
             # replays those minutes once it knows; here we can just look ahead).
-            rooms_now = {(vac_state.get(room) if vac_state.get(room) not in (None, "unknown", "unavailable", "") else next_room(room, t)).casefold() for room in active}
+            rooms_now = {room_key(vac_state.get(room) if vac_state.get(room) not in (None, "unknown", "unavailable", "") else next_room(room, t)) for room in active}
             now = {rid for rid, area in area_of.items() if area in rooms_now}
             if now != vacuumed and (t_from is None or t >= t_from):
                 say(f"{fmt(t)}  vacuum cleaning: {', '.join(sorted(now)) or 'done'}")

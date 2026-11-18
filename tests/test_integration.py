@@ -835,7 +835,7 @@ async def test_a_robot_vacuum_is_not_a_person(hass: HomeAssistant, radar_device:
         await move(hass, 1, -40 + 3 * k, 60 + (k % 5) * 10)
         await _tick(hass, freezer, 4)
     assert rt.hc.count() == 0
-    hass.states.async_set(room, "Entry")
+    hass.states.async_set(room, "ENTRY’")  # its own spelling
     await hass.async_block_till_done()
     assert rt._hold is None and area.id in rt._vacuumed
     for k in range(20):

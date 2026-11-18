@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -52,6 +53,11 @@ COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its v
 OPEN_STATES = {"on", "open", "opening", "closing"}
 VACUUM_ACTIVE = {"cleaning", "returning"}
 HOLD_MAX_S = 300.0  # a robot vacuum that has not said where it is cleaning by then: replay without knowing
+
+
+def _room_key(name: str) -> str:
+    """A vacuum's room name against an area name: letters and digits only ("Guest’s Room", "living room")."""
+    return re.sub(r"[\W_]+", "", name.casefold())
 
 
 @dataclass
@@ -499,11 +505,11 @@ class HeadCountRuntime:
             if rs is None or rs.state in ("unknown", "unavailable", ""):
                 unsure = True  # (it reports its room a minute or two after it starts)
             else:
-                by[rs.state.casefold()] = vac
+                by[_room_key(rs.state)] = vac
         if unsure and self._hold is None:
             self._log_signal(t, "signal", next(iter(self._vacuums)), "cleaning, room not known yet: new tracks wait")
             self._hold = _Hold(copy.deepcopy(self.hc), len(self.log), self._logged, t, [])
-        vacuumed = {sid: by[sp.name.casefold()] for sid, sp in self.spaces.items() if sp.name.casefold() in by}
+        vacuumed = {sid: by[_room_key(sp.name)] for sid, sp in self.spaces.items() if _room_key(sp.name) in by}
         if vacuumed != self._vacuumed:
             for sid in vacuumed.keys() - self._vacuumed.keys():
                 self._log_signal(t, "signal", vacuumed[sid], "cleaning here: this radar is ignored", sid)
