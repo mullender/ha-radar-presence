@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Zone Presence — Detection Logic Specification</title>
+<style>
+:root { --ink:#1d2430; --mute:#5b6676; --line:#d5dbe5; --bg:#fbfcfe; --cfg:#e8f0fe; --cfgb:#7a9bd8; --ha:#f1f3f6; --hab:#9aa5b4;
+  --ext:#fff3e3; --extb:#e0a458; --rt:#f3ecfb; --rtb:#a487cf; --out:#e9f7ee; --outb:#6fb486; --usr:#fdeef3; --usrb:#d98aa7; }
+* { box-sizing: border-box; }
+body { margin:0; font:15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg); }
+main { max-width:1120px; margin:0 auto; padding:28px 28px 80px; }
+h1 { font-size:30px; margin:0 0 4px; }
+h2 { font-size:23px; margin:44px 0 10px; padding-top:12px; border-top:2px solid var(--line); }
+h3 { font-size:18px; margin:28px 0 8px; }
+h4 { font-size:15px; margin:18px 0 6px; color:#2c3a52; }
+p, li { max-width:900px; }
+code { font:12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#eef1f6; padding:1px 4px; border-radius:3px; }
+pre { font:12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#f2f4f8; border:1px solid var(--line); border-radius:6px; padding:10px 12px; overflow-x:auto; }
+pre code { background:none; padding:0; }
+.sub { color:var(--mute); margin:0 0 18px; }
+.meta { display:grid; grid-template-columns:170px 1fr; gap:2px 12px; font-size:14px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 16px; max-width:900px; }
+.meta b { color:var(--mute); font-weight:600; }
+nav.toc { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 20px; margin:18px 0; columns:2; column-gap:40px; font-size:14px; }
+nav.toc a { color:#1f5fbf; text-decoration:none; } nav.toc a:hover { text-decoration:underline; }
+nav.toc ol { margin:0; padding-left:20px; } nav.toc li { break-inside:avoid; }
+table { border-collapse:collapse; width:100%; font-size:13.5px; margin:10px 0 18px; background:#fff; }
+th, td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+th { background:#eef2f8; font-weight:600; }
+td code { white-space:nowrap; }
+.rule { border-left:4px solid #4a6fb5; background:#fff; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; max-width:960px; }
+.rule .id { font:600 12px ui-monospace, Menlo, monospace; color:#4a6fb5; margin-right:6px; }
+.note { border-left:4px solid #d9a521; background:#fffaf0; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; max-width:960px; }
+.warn { border-left:4px solid #d1495b; background:#fff4f5; padding:8px 12px; margin:10px 0; border-radius:0 6px 6px 0; max-width:960px; }
+.src { font-size:12px; color:var(--mute); }
+.src code { font-size:11.5px; }
+figure { margin:16px 0 22px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px; }
+figcaption { font-size:13px; color:var(--mute); margin-top:6px; }
+svg.dg { width:100%; height:auto; display:block; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+svg.dg text { font-size:12px; fill:#1d2430; }
+svg.dg .t { font-weight:700; font-size:12.5px; }
+svg.dg .s { font-size:11px; fill:#4b5565; }
+svg.dg .lb { font-size:10.5px; fill:#4b5565; }
+svg.dg .cfg { fill:var(--cfg); stroke:var(--cfgb); } svg.dg .ha { fill:var(--ha); stroke:var(--hab); }
+svg.dg .ext { fill:var(--ext); stroke:var(--extb); } svg.dg .rt { fill:var(--rt); stroke:var(--rtb); }
+svg.dg .out { fill:var(--out); stroke:var(--outb); } svg.dg .usr { fill:var(--usr); stroke:var(--usrb); }
+svg.dg rect { stroke-width:1.3; }
+svg.dg .ln { fill:none; stroke:#5f6b7c; stroke-width:1.3; }
+svg.dg .dash { stroke-dasharray:5 4; }
+.legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12.5px; margin:6px 0 0; }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+.legend i { width:14px; height:12px; border:1px solid; border-radius:3px; display:inline-block; }
+/* decision trees */
+.dt { margin:12px 0 20px; font-size:13.5px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.dt .title { font-weight:700; margin-bottom:6px; }
+.dt ul { list-style:none; margin:0 0 0 14px; padding:0; }
+.dt li { position:relative; padding:3px 0 3px 26px; border-left:2px solid #c3cfe2; }
+.dt li:last-child { border-left-color:transparent; }
+.dt li::before { content:""; position:absolute; left:-2px; top:0; width:22px; height:19px; border-left:2px solid #c3cfe2; border-bottom:2px solid #c3cfe2; border-bottom-left-radius:6px; }
+.dt .n { display:inline-block; border:1px solid; border-radius:6px; padding:4px 9px; max-width:860px; vertical-align:top; }
+.dt .q { background:#eef4ff; border-color:#8aa8e0; }
+.dt .q::before { content:"◆ "; color:#4a6fb5; }
+.dt .a { background:#eefaf0; border-color:#7fbf8a; }
+.dt .a::before { content:"▶ "; color:#3d8b4f; }
+.dt .w { background:#fff8e6; border-color:#e0bf6a; }
+.dt .w::before { content:"⏸ "; color:#a07a17; }
+.dt .x { background:#fff1f0; border-color:#e09a92; }
+.dt .x::before { content:"✕ "; color:#b5473b; }
+.dt .lbl { display:inline-block; font-size:11px; font-weight:700; color:#3a4658; background:#e6ebf3; border-radius:9px; padding:1px 7px; margin-right:6px; vertical-align:top; margin-top:5px; }
+.dt pre { margin:4px 0 0; padding:4px 7px; font-size:11.5px; background:rgba(0,0,0,.035); border:0; white-space:pre-wrap; }
+.dt .root { margin-left:0; }
+.cov-y { color:#2e7d32; font-weight:700; } .cov-p { color:#b07d00; font-weight:700; } .cov-n { color:#c62828; font-weight:700; }
+.ec td:first-child { font:600 12px ui-monospace, Menlo, monospace; white-space:nowrap; }
+.ec td[colspan] { font:700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f3f6fa; }
+.small { font-size:12.5px; color:var(--mute); }
+@media print { nav.toc { columns:1; } h2 { break-before:page; } figure, .dt, table { break-inside:avoid; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Radar Zone Presence — Detection Logic Specification</h1>
+<p class="sub">Zone presence, people tracking, exit passages and the home head count: rules, data flow, parameters and the special cases that the tests protect.</p>
+
+<div class="meta">
+  <b>Describes</b><span>Integration <code>radar_zone_presence</code> at commit <code>3ec02b0</code> (main, 2026-11-17).</span>
+  <b>Status</b><span>Descriptive specification of current behaviour. Where this document and the code disagree, the code is authoritative and this document is to be corrected.</span>
+  <b>Audience</b><span>Reviewers, maintainers, and anyone simplifying the logic who needs to know which behaviours are load-bearing.</span>
+  <b>Conventions</b><span>Distances in millimetres in a radar's frame (origin at the sensor, +Y straight out, +X as reported by the firmware). Times in seconds (epoch). <code>UPPER_CASE</code> names are the parameters in <a href="#params">§13</a>. Rule identifiers (e.g. <span class="rule" style="display:inline;padding:0 4px;margin:0;border:0"><span class="id">HC-AP-3</span></span>) are stable references for review comments. Source references name <code>file:function</code>.</span>
+</div>
+
+<nav class="toc"><ol>
+  <li><a href="#overview">System overview</a></li>
+  <li><a href="#entities">Configuration entities and their relations</a></li>
+  <li><a href="#frames">Stage 1 — frame assembly</a></li>
+  <li><a href="#feeds">Stage 2 — per-radar feed (grace, exclusions)</a></li>
+  <li><a href="#align">Stage 3 — alignment groups and transforms</a></li>
+  <li><a href="#tracker">Stage 4 — people tracker</a></li>
+  <li><a href="#zones">Stage 5 — zone engine</a></li>
+  <li><a href="#passages">Stage 6 — exit passages</a></li>
+  <li><a href="#hcmodel">Head count — model and construction</a></li>
+  <li><a href="#hcengine">Head count — engine rules</a></li>
+  <li><a href="#hcruntime">Head count — runtime inputs (doors, locks, evidence, vacuums, corrections)</a></li>
+  <li><a href="#advisory">Advisory analysis (panel guide)</a></li>
+  <li><a href="#params">Parameters</a></li>
+  <li><a href="#edge">Edge cases and special handling (test map)</a></li>
+  <li><a href="#invariants">Invariants and known limitations</a></li>
+  <li><a href="#verify">Verification assets and simplification guidance</a></li>
+</ol></nav>
+
+<!-- ================================================================== -->
+<h2 id="overview">1. System overview</h2>
+
+<p>The integration turns raw target coordinates from LD2450-based mmWave radars (Everything Presence Lite, Screek Human Sensor 2A, generic ESPHome) into four kinds of output:</p>
+<ol>
+  <li><b>Zone presence</b>: an occupancy binary sensor per user-drawn polygon (plus a target-count sensor and, for zones several radars see, per-radar "seen by" diagnostics).</li>
+  <li><b>Exit passages</b>: an event entity per exit zone firing <code>arrived</code> / <code>left</code>.</li>
+  <li><b>Head count</b>: people home, per floor and per area, maintained by conservation of people (tokens) across areas, floors and the home's true exits.</li>
+  <li><b>Advisory analysis</b> (panel only): suggested zones, ghost detection, and tidy-up questions derived from recorder history. It never changes detection by itself; the user accepts a suggestion, which edits the saved zones.</li>
+</ol>
+<p>Zone presence and the head count are independent consumers of the same tracked targets. The head count never alters zone states, and zone filters (delays, holds) never affect the head count.</p>
+
+<figure id="fig1">
+<svg class="dg" viewBox="0 0 1060 600" role="img" aria-label="Data flow from radar sensors to outputs">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7c"/></marker></defs>
+  <!-- radars -->
+  <rect class="ext" x="20" y="40" width="140" height="56" rx="6"/><text x="30" y="62" class="t">Radar A</text><text x="30" y="80" class="s">X / Y sensor updates</text>
+  <rect class="ext" x="20" y="130" width="140" height="56" rx="6"/><text x="30" y="152" class="t">Radar B (aligned)</text><text x="30" y="170" class="s">X / Y sensor updates</text>
+  <rect class="rt" x="185" y="40" width="130" height="56" rx="6"/><text x="195" y="62" class="t">Frame assembly</text><text x="195" y="80" class="s">50 ms coalescing §3</text>
+  <rect class="rt" x="185" y="130" width="130" height="56" rx="6"/><text x="195" y="152" class="t">Frame assembly</text><text x="195" y="170" class="s">50 ms coalescing §3</text>
+  <rect class="rt" x="340" y="40" width="160" height="56" rx="6"/><text x="350" y="62" class="t">Feed A</text><text x="350" y="80" class="s">reconnect grace, exclusions §4</text>
+  <rect class="rt" x="340" y="130" width="160" height="56" rx="6"/><text x="350" y="152" class="t">Feed B</text><text x="350" y="170" class="s">reconnect grace, exclusions §4</text>
+  <path class="ln" d="M160,68 H183" marker-end="url(#a1)"/><path class="ln" d="M315,68 H338" marker-end="url(#a1)"/>
+  <path class="ln" d="M160,158 H183" marker-end="url(#a1)"/><path class="ln" d="M315,158 H338" marker-end="url(#a1)"/>
+  <!-- group -->
+  <rect x="525" y="18" width="520" height="196" rx="10" fill="none" stroke="#a487cf" stroke-dasharray="6 4"/>
+  <text x="535" y="34" class="lb">Alignment group — evaluated in the anchor radar's frame §5</text>
+  <rect class="rt" x="540" y="50" width="150" height="140" rx="6"/>
+  <text x="550" y="72" class="t">Transform → anchor</text><text x="550" y="92" class="s">then</text><text x="550" y="112" class="t">Tracker §6</text>
+  <text x="550" y="132" class="s">stable track ids,</text><text x="550" y="148" class="s">fusion, lost / settled</text><text x="550" y="164" class="s">memory</text>
+  <rect class="rt" x="715" y="48" width="145" height="62" rx="6"/><text x="725" y="68" class="t">Zone engine §7</text><text x="725" y="85" class="s">include, hysteresis,</text><text x="725" y="100" class="s">hold, delays</text>
+  <rect class="rt" x="715" y="128" width="145" height="62" rx="6"/><text x="725" y="148" class="t">Passages §8</text><text x="725" y="165" class="s">born / vanished in exit,</text><text x="725" y="180" class="s">door within 30 s</text>
+  <rect class="out" x="885" y="48" width="150" height="62" rx="6"/><text x="895" y="68" class="t">Zone entities</text><text x="895" y="85" class="s">occupancy, targets,</text><text x="895" y="100" class="s">seen-by (diagnostic)</text>
+  <rect class="out" x="885" y="128" width="150" height="62" rx="6"/><text x="895" y="148" class="t">Exit event entities</text><text x="895" y="165" class="s">arrived / left</text>
+  <path class="ln" d="M500,68 L538,95" marker-end="url(#a1)"/><path class="ln" d="M500,158 L538,150" marker-end="url(#a1)"/>
+  <path class="ln" d="M690,79 H713" marker-end="url(#a1)"/><path class="ln" d="M690,159 H713" marker-end="url(#a1)"/>
+  <path class="ln" d="M860,79 H883" marker-end="url(#a1)"/><path class="ln" d="M860,159 H883" marker-end="url(#a1)"/>
+  <!-- head count -->
+  <rect class="ext" x="20" y="250" width="170" height="40" rx="6"/><text x="30" y="275" class="s">Door contacts, covers</text>
+  <rect class="ext" x="20" y="300" width="170" height="40" rx="6"/><text x="30" y="325" class="s">Locks (pairing / pulse)</text>
+  <rect class="ext" x="20" y="350" width="170" height="40" rx="6"/><text x="30" y="368" class="s">Evidence: switches,</text><text x="30" y="382" class="s">contacts, buttons</text>
+  <rect class="ext" x="20" y="400" width="170" height="40" rx="6"/><text x="30" y="418" class="s">Robot vacuum +</text><text x="30" y="432" class="s">current room sensor</text>
+  <rect class="usr" x="20" y="450" width="170" height="40" rx="6"/><text x="30" y="468" class="s">Corrections: card, panel,</text><text x="30" y="482" class="s">"Nobody home" button</text>
+  <rect x="230" y="240" width="470" height="255" rx="10" fill="#faf7fe" stroke="#a487cf"/>
+  <text x="242" y="260" class="t">HeadCountRuntime §11</text>
+  <text x="242" y="282" class="s">• door / lock rules (contact vs lock)</text>
+  <text x="242" y="300" class="s">• evidence filters (by hand only,</text>
+  <text x="252" y="316" class="s">on-only, flicker, freshness)</text>
+  <text x="242" y="334" class="s">• vacuum: ignore its room;</text>
+  <text x="252" y="350" class="s">hold + replay while room unknown</text>
+  <text x="242" y="368" class="s">• reflection flags for overlapping radars</text>
+  <text x="242" y="386" class="s">• persistence, decision log, corrections</text>
+  <rect class="rt" x="520" y="262" width="165" height="62" rx="6"/><text x="530" y="283" class="t">Rooms §9.2</text><text x="530" y="300" class="s">split a group's tracks</text><text x="530" y="315" class="s">by area</text>
+  <rect class="rt" x="520" y="345" width="165" height="70" rx="6"/><text x="530" y="366" class="t">_hc() wrapper</text><text x="530" y="383" class="s">the only way into the</text><text x="530" y="398" class="s">engine (vacuum filter)</text>
+  <path class="ln" d="M602,190 V260" marker-end="url(#a1)"/><text x="608" y="232" class="lb">fused tracks</text>
+  <path class="ln" d="M602,324 V343" marker-end="url(#a1)"/>
+  <path class="ln" d="M190,270 H228" marker-end="url(#a1)"/><path class="ln" d="M190,320 H228" marker-end="url(#a1)"/><path class="ln" d="M190,370 H228" marker-end="url(#a1)"/>
+  <path class="ln" d="M190,420 H228" marker-end="url(#a1)"/><path class="ln" d="M190,470 H228" marker-end="url(#a1)"/>
+  <rect class="rt" x="725" y="335" width="160" height="90" rx="6"/><text x="735" y="356" class="t">HeadCount engine §10</text><text x="735" y="374" class="s">tokens · regions ·</text><text x="735" y="390" class="s">exit windows ·</text><text x="735" y="406" class="s">matching rules</text>
+  <path class="ln" d="M685,380 H723" marker-end="url(#a1)"/>
+  <rect class="out" x="905" y="335" width="135" height="90" rx="6"/><text x="915" y="356" class="t">People sensors</text><text x="915" y="374" class="s">home, per floor,</text><text x="915" y="390" class="s">per area; button;</text><text x="915" y="406" class="s">decision log</text>
+  <path class="ln" d="M885,380 H903" marker-end="url(#a1)"/>
+  <!-- advisory -->
+  <rect class="ha" x="20" y="525" width="170" height="50" rx="6"/><text x="30" y="546" class="t">Recorder history</text><text x="30" y="563" class="s">coordinates, zone states</text>
+  <rect class="usr" x="230" y="520" width="470" height="60" rx="6"/><text x="242" y="542" class="t">Panel analysis (advisory) §12</text><text x="242" y="560" class="s">dwell spots, ghost classification, cross-check with aligned radars, guide questions</text>
+  <rect class="cfg" x="725" y="525" width="315" height="50" rx="6"/><text x="735" y="546" class="t">User accepts → zones saved</text><text x="735" y="563" class="s">changes the configuration, then everything above</text>
+  <path class="ln" d="M190,550 H228" marker-end="url(#a1)"/><path class="ln" d="M700,550 H723" marker-end="url(#a1)"/>
+</svg>
+<div class="legend"><span><i style="background:var(--ext);border-color:var(--extb)"></i>external HA entity</span><span><i style="background:var(--rt);border-color:var(--rtb)"></i>runtime logic</span><span><i style="background:var(--out);border-color:var(--outb)"></i>entities produced</span><span><i style="background:var(--usr);border-color:var(--usrb)"></i>user action / advisory</span><span><i style="background:var(--cfg);border-color:var(--cfgb)"></i>configuration</span><span><i style="background:var(--ha);border-color:var(--hab)"></i>HA registry / recorder</span></div>
+<figcaption>Figure 1 — Data flow. Each radar update passes stages 1–6. After each group evaluation, the head count receives the group's fused tracks. Timers (zone delays, hold expiry, lost-track expiry, the head count's 5 s tick) also advance the engines between frames.</figcaption>
+</figure>
+
+<h3>1.1 Event loop</h3>
+<p>Everything runs on Home Assistant's event loop with no worker threads. Inputs are state-change events: coordinate sensors, doors, locks, evidence entities and vacuums. Timers drive deadlines:</p>
+<ul>
+  <li>the frame flush, <code>COALESCE_S</code> after the first update;</li>
+  <li>the group deadline: the earliest of the zone delays, hold expiry and lost-track expiry;</li>
+  <li>the head count tick, every <code>TICK_S</code> = 5 s;</li>
+  <li>the contact-held check, <code>CONTACT_MIN_S</code> after a contact opens;</li>
+  <li>the radar range refresh, every 60 s.</li>
+</ul>
+<p>The engines (<code>engine/*.py</code>) are pure Python with time passed in. The same code runs live, in history replay (<code>tools/</code>) and in tests. <code>frontend/engine.js</code> and <code>frontend/tracker.js</code> are line-by-line ports used by the panel's preview, and test vectors keep the two languages in lock-step.</p>
+
+<!-- ================================================================== -->
+<h2 id="entities">2. Configuration entities and their relations</h2>
+
+<figure id="fig2">
+<svg class="dg" viewBox="0 0 1070 595" role="img" aria-label="Entity relationship diagram">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7c"/></marker></defs>
+  <rect class="ha" x="20" y="20" width="250" height="80" rx="6"/><text x="30" y="40" class="t">ESPHome radar device</text><text x="30" y="58" class="s">LD2450 target X / Y sensors (slots 1–3)</text><text x="30" y="74" class="s">max_distance number, mounting</text><text x="30" y="90" class="s">device area</text>
+  <rect class="cfg" x="20" y="150" width="250" height="110" rx="6"/><text x="30" y="170" class="t">Radar (subentry)</text><text x="30" y="188" class="s">device_id, targets {slot: x, y entity}</text><text x="30" y="204" class="s">zones[] in its own frame (mm)</text><text x="30" y="220" class="s">display.aligned_to {radar, angle,</text><text x="30" y="236" class="s">  reflect, offset}</text><text x="30" y="252" class="s">headcount: on / off</text>
+  <rect class="cfg" x="20" y="310" width="250" height="110" rx="6"/><text x="30" y="330" class="t">Radar-local zones</text><text x="30" y="348" class="s">exclude: ignore targets inside</text><text x="30" y="364" class="s">exit: door_entity_id?, leads_to[]</text><text x="30" y="380" class="s">   (area ids or "outside")</text><text x="30" y="396" class="s">linger / transient: tracker spots</text>
+  <rect class="cfg" x="400" y="20" width="260" height="95" rx="6"/><text x="410" y="40" class="t">Home (config entry, one per HA)</text><text x="410" y="58" class="s">options: reconnect_grace_s</text><text x="410" y="74" class="s">outside_doors[], evidence[], evidence_on[]</text><text x="410" y="90" class="s">vacuums[]</text>
+  <rect class="cfg" x="400" y="170" width="260" height="90" rx="6"/><text x="410" y="190" class="t">Presence zone (subentry)</text><text x="410" y="208" class="s">radar: the frame it is drawn in</text><text x="410" y="224" class="s">polygon, filters</text><text x="410" y="240" class="s">area_id (optional)</text>
+  <rect class="ha" x="790" y="170" width="250" height="60" rx="6"/><text x="800" y="192" class="t">HA Area</text><text x="800" y="210" class="s">name, floor</text>
+  <rect class="ha" x="790" y="280" width="250" height="50" rx="6"/><text x="800" y="300" class="t">HA Floor</text><text x="800" y="318" class="s">level (integer)</text>
+  <rect class="ext" x="400" y="480" width="200" height="80" rx="6"/><text x="410" y="500" class="t">Door entity</text><text x="410" y="518" class="s">binary_sensor / cover / lock</text><text x="410" y="534" class="s">contact + lock on one device</text><text x="410" y="550" class="s">= paired (§11.2)</text>
+  <rect class="ext" x="620" y="480" width="200" height="80" rx="6"/><text x="630" y="500" class="t">Evidence entity</text><text x="630" y="518" class="s">light, switch, fan, input_boolean,</text><text x="630" y="534" class="s">binary_sensor (contact),</text><text x="630" y="550" class="s">event (button)</text>
+  <rect class="ext" x="840" y="480" width="200" height="80" rx="6"/><text x="850" y="500" class="t">Robot vacuum</text><text x="850" y="518" class="s">state cleaning / returning</text><text x="850" y="534" class="s">current_room sensor</text><text x="850" y="550" class="s">(same device)</text>
+  <path class="ln" d="M145,100 V148" marker-end="url(#a2)"/><text x="152" y="128" class="lb">1 : 1 (device_id)</text>
+  <path class="ln" d="M400,95 H300 V205 H272" marker-end="url(#a2)"/><text x="306" y="125" class="lb">subentries</text>
+  <path class="ln" d="M530,115 V168" marker-end="url(#a2)"/><text x="536" y="146" class="lb">subentries</text>
+  <path class="ln" d="M400,240 H272" marker-end="url(#a2)"/><text x="282" y="234" class="lb">drawn in frame of</text>
+  <path class="ln" d="M20,175 H8 V235 H18" marker-end="url(#a2)"/><text x="24" y="288" class="lb">aligned_to → group</text>
+  <path class="ln" d="M145,260 V308" marker-end="url(#a2)"/><text x="152" y="290" class="lb">contains</text>
+  <path class="ln" d="M660,200 H788" marker-end="url(#a2)"/><text x="668" y="192" class="lb">area_id</text><text x="668" y="214" class="lb">(else radar's area)</text>
+  <path class="ln dash" d="M220,20 V10 H915 V168" marker-end="url(#a2)"/><text x="700" y="24" class="lb">device area</text>
+  <path class="ln" d="M915,230 V278" marker-end="url(#a2)"/><text x="922" y="258" class="lb">floor</text>
+  <path class="ln" d="M270,350 H740 V218 H788" marker-end="url(#a2)"/><text x="420" y="344" class="lb">exit.leads_to (areas)</text>
+  <path class="ln" d="M270,395 H500 V478" marker-end="url(#a2)"/><text x="300" y="389" class="lb">exit.door_entity_id</text>
+  <path class="ln" d="M660,60 H700 V450 H940 V478" marker-end="url(#a2)"/><path class="ln" d="M700,450 H540 V478" marker-end="url(#a2)"/><path class="ln" d="M720,450 V478" marker-end="url(#a2)"/>
+  <text x="546" y="470" class="lb">outside_doors</text><text x="726" y="470" class="lb">evidence[_on]</text><text x="946" y="470" class="lb">vacuums</text>
+  <path class="ln dash" d="M500,560 V574 H1058 V200 H1042" marker-end="url(#a2)"/><path class="ln dash" d="M720,560 V574"/><path class="ln dash" d="M940,560 V574"/>
+  <text x="400" y="590" class="lb">each placed by its HA area (the entity's, else its device's); the vacuum's room is matched to an area by name</text>
+</svg>
+<figcaption>Figure 2 — Configuration entities (blue), Home Assistant registry objects (grey) and external entities (orange). A radar's own zones live inside its subentry, in its own coordinate frame. Presence zones are separate subentries so that each gets its own HA device.</figcaption>
+</figure>
+
+<h3>2.1 Zone kinds</h3>
+<table>
+<tr><th>Kind</th><th>Stored in</th><th>Frame</th><th>Used by</th><th>Meaning</th></tr>
+<tr><td><code>include</code></td><td>zone subentry</td><td>its radar</td><td>zone engine</td><td>A presence zone with its own occupancy sensor. Optional filters: on/off delay, edge margin, hold until exit, max hold.</td></tr>
+<tr><td><code>exclude</code></td><td>radar subentry</td><td>own radar</td><td>feed</td><td>Targets inside are dropped before tracking, for this radar only (§4).</td></tr>
+<tr><td><code>exit</code></td><td>radar subentry</td><td>own radar</td><td>tracker, zone engine (holds), passages, head count</td><td>A doorway, stairs or front door. Optional <code>door_entity_id</code>. Optional <code>leads_to</code>: area ids and/or <code>"outside"</code> (§9).</td></tr>
+<tr><td><code>linger</code></td><td>radar subentry</td><td>own radar</td><td>tracker</td><td>A bed, couch or chair. A person lost here is settled (remembered <code>SETTLED_TTL_S</code>).</td></tr>
+<tr><td><code>transient</code></td><td>radar subentry</td><td>own radar</td><td>tracker</td><td>A hallway or passage. A person lost here is gone soon (<code>TRANSIENT_TTL_S</code>).</td></tr>
+</table>
+
+<h3>2.2 Entities produced</h3>
+<table>
+<tr><th>Entity</th><th>Per</th><th>State</th><th>Source</th></tr>
+<tr><td>Zone occupancy <code>binary_sensor</code> (device class occupancy)</td><td>presence zone</td><td>on / off after filters; attributes <code>target_count</code>, <code>zone_id</code>, <code>held</code></td><td><code>binary_sensor.py:ZonePresenceSensor</code></td></tr>
+<tr><td>"Seen by &lt;radar&gt;" <code>binary_sensor</code> (diagnostic)</td><td>zone × covering radar, if ≥2 radars cover it</td><td>that radar currently contributes a track inside the zone (before delays and holds)</td><td><code>ZoneSeenBySensor</code>, <code>GroupRuntime.coverage/seen_by</code></td></tr>
+<tr><td>Zone target count <code>sensor</code> (disabled by default)</td><td>presence zone</td><td>targets inside + held occupants</td><td><code>sensor.py:ZoneTargetCountSensor</code></td></tr>
+<tr><td>Exit passage <code>event</code></td><td>exit zone</td><td>event types <code>arrived</code>, <code>left</code>; attribute <code>door_entity_id</code> when door-gated</td><td><code>event.py</code>, <code>HomeRuntime._passage</code></td></tr>
+<tr><td>People home <code>sensor</code></td><td>home</td><td>count, or unknown while any exit window is unsettled (attribute <code>at_least</code>)</td><td><code>HomePeopleSensor</code></td></tr>
+<tr><td>People on floor <code>sensor</code></td><td>HA floor level</td><td>count, or unknown while that floor's window is unsettled</td><td><code>FloorPeopleSensor</code></td></tr>
+<tr><td>People in area <code>sensor</code></td><td>area with a space</td><td>sum over the area's spaces; unknown while its floor is unsettled; attribute <code>radar</code> (observed)</td><td><code>SpacePeopleSensor</code></td></tr>
+<tr><td>"Nobody home" <code>button</code></td><td>home</td><td>press = home correction to 0</td><td><code>button.py</code></td></tr>
+</table>
+
+<h3>2.3 Discovery and geometry</h3>
+<p>Each radar is a device recognised by profile: Everything Presence, Screek 2A or generic ESPHome. Its <code>targets</code> map slots to X/Y sensor entities.</p>
+<ul>
+  <li><b>Range:</b> <code>max_distance</code> comes from the device's range number every 60 s, defaulting to 8000 mm. A range with no unit is read by its size, since one firmware reported centimetres.</li>
+  <li><b>Field of view:</b> ±<code>FOV_HALF_ANGLE_DEG</code> = 60°.</li>
+  <li><b>Units:</b> coordinate units come from the sensors' <code>unit_of_measurement</code>. A unitless sensor falls back to a sibling's unit, then to the unit remembered in the entry.</li>
+  <li><b>Firmware exclusions:</b> exclusion zones set on the device itself are only offered for import in the panel. The radar still reports targets inside them, and they have no effect until imported as an <code>exclude</code> zone.</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="frames">3. Stage 1 — frame assembly</h2>
+<p class="src">Source: <code>engine/frames.py:FrameAssembler</code>, <code>home.py:HomeRuntime._on_state/_flush</code></p>
+<div class="rule"><span class="id">FR-1</span>Firmwares publish each target's X and Y as separate state updates, a few milliseconds apart, and HA drops updates whose value did not change. The first update after a quiet period opens a window of <code>COALESCE_S</code> = 50 ms. Every update inside the window belongs to one frame, built from the latest value of every coordinate entity when the window closes.</div>
+<div class="rule"><span class="id">FR-2</span>A slot is a target only if both X and Y parse as numbers and Y ≠ 0. An empty slot reads (0, 0); X = 0 is a valid boresight reading.</div>
+<div class="rule"><span class="id">FR-3</span>A frame is <i>available</i> if any coordinate entity parses. Values are converted to mm with the entity's unit (mm, cm, m, in, ft; none = mm). The frame time is the newest <code>last_updated</code> in the window.</div>
+<div class="rule"><span class="id">FR-4</span>At start-up, current states seed the assembler and one frame is built and evaluated at once. Targets already in view at start-up are not passages.</div>
+
+<!-- ================================================================== -->
+<h2 id="feeds">4. Stage 2 — per-radar feed</h2>
+<p class="src">Source: <code>home.py:RadarFeed.process</code></p>
+<div class="dt"><div class="title">Per frame, per radar</div>
+<ul class="root"><li><span class="n q">Frame available now and the previous one was not? <pre>frame.available and not self._available</pre></span>
+  <ul><li><span class="lbl">yes</span><span class="n a">Start grace: <code>grace_until = t + reconnect_grace_s</code> (home option, default 0)</span></li></ul></li>
+<li><span class="n q">Inside reconnect grace? <pre>t &lt; grace_until</pre></span>
+  <ul><li><span class="lbl">yes</span><span class="n x">kept = () (suppressed: the junk a radar reports right after reconnecting is ignored)</span></li>
+      <li><span class="lbl">no</span><span class="n a">kept = targets not inside any of <b>this radar's</b> exclusion polygons (radar frame, even-odd rule)</span></li></ul></li>
+</ul></div>
+<div class="note">Exclusions apply per radar, before fusion, in that radar's own frame. An area excluded on radar A is still seen by an aligned radar B. That is intended: B can confirm a real person where A sees a reflection.</div>
+
+<!-- ================================================================== -->
+<h2 id="align">5. Stage 3 — alignment groups and transforms</h2>
+<p class="src">Source: <code>engine/align.py</code>, <code>home.py:GroupRuntime</code></p>
+<div class="rule"><span class="id">AL-1</span>A radar may store <code>aligned_to = {radar_id, angle_deg, reflect, offset_mm}</code>: the rigid transform from its frame into the reference radar's frame. This is an optional X mirror, then a rotation, then a translation.</div>
+<div class="rule"><span class="id">AL-2</span>Radars connected by alignments form a group. The anchor is the root of the chain: the member not aligned to another member, or for a cycle the first in configuration order. Each member's transform into the anchor frame comes from a breadth-first walk, using inverse transforms against the arrow direction.</div>
+<div class="rule"><span class="id">AL-3</span>Each group runs one tracker and one zone engine in the anchor frame. All its members' include zones, exits and spots are transformed into that frame. A radar with no alignment is a group of one with the identity transform: exactly the single-radar behaviour.</div>
+<div class="rule"><span class="id">AL-4</span><b>Coverage</b> of a zone: the zone's own radar, plus every group member whose field of view contains a sample of the zone polygon. Samples are the vertices, edge midpoints and centroid; "in view" means y &gt; 0, within range and within ±60°. With ≥2 covering radars, "seen by" sensors are created.</div>
+
+<!-- ================================================================== -->
+<h2 id="tracker">6. Stage 4 — people tracker</h2>
+<p class="src">Source: <code>engine/tracker.py:Tracker.fuse</code> (port: <code>frontend/tracker.js</code>)</p>
+<p>Radar slots are not identities. When the LD2450 drops a target (someone sitting still), the remaining ones are renumbered: slot 2 becomes slot 1, a 5 m "jump" in one frame. A person who reappears gets any free slot. The tracker turns observations (already in the group frame) into tracks with stable integer ids, which the zone engine uses as slots.</p>
+
+<div class="dt"><div class="title">Tracker: one fuse() call (all observations of the group at time t)</div>
+<ul class="root">
+<li><span class="n a">1. Expire lost tracks past their TTL → ids reported in <code>dropped</code>.</span></li>
+<li><span class="n q">2. For each observation: its (radar, slot) belonged to a track, and it lies within reach of that track? <pre>reach = NOISE_MM + min(VMAX_MM_S · dt, MAX_STEP_MM)   # 500 + min(2500·dt, 1500)</pre></span>
+  <ul><li><span class="lbl">yes</span><span class="n a">assigned to that track</span></li><li><span class="lbl">no</span><span class="n w">unassigned (slot renumbered or reused)</span></li></ul></li>
+<li><span class="n q">3. A track with ≥2 observations (several radars): any lies more than <code>SPLIT_MM</code> = 1200 from the observation of its oldest member?</span>
+  <ul><li><span class="lbl">yes</span><span class="n w">split off → unassigned</span></li></ul></li>
+<li><span class="n a">4. Pair leftovers, nearest first (greedy over all candidate pairs sorted by distance):</span>
+  <ul>
+   <li><span class="n a">with a previous track that already has a member from the observation's radar, within <code>reach(MAX_STEP_MM)</code> (a renumbered slot);</span></li>
+   <li><span class="n a">with a previous track of <i>other</i> radars only, within <code>MERGE_MM</code> = 600 (the same person seen by a second radar);</span></li>
+   <li><span class="n a">with a lost track within <code>NOISE_MM + min(VMAX_MM_S · dt, REVIVE_MM)</code> (re-found near where they vanished; keeps the id).</span></li>
+   <li><span class="n x">A track never takes two observations from the same radar. A lost track is revived at most once.</span></li>
+  </ul></li>
+<li><span class="n a">5. Build the tracks: position = mean of the track's observations. Members keep their order (oldest first).</span></li>
+<li><span class="n q">6. Previous tracks not continued → lost. Settled? (see the tree below)</span>
+  <ul><li><span class="n a">Remembered as <code>_Lost(settled)</code>. Above <code>MAX_LOST</code> = 32, the oldest are forgotten (reported in <code>dropped</code>).</span></li></ul></li>
+<li><span class="n q">7. Each remaining observation: a live track of another radar within <code>MERGE_MM</code>?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">joins the nearest such track</span></li>
+      <li><span class="lbl">no</span><span class="n a">new track; id = <code>10·radar_index + slot</code> if free and &lt; 1000, else the first free id ≥ 1000 → reported in <code>born</code></span></li></ul></li>
+<li><span class="n q">8. Merge loop: two tracks with disjoint radars within <code>MERGE_MM</code>?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">merge into the older one (by creation order). The absorbed id is removed from <code>born</code> if newborn, added to <code>dropped</code> if just revived (its hold moves to the survivor), else reported in <code>gone</code>.</span></li></ul></li>
+</ul></div>
+
+<div class="dt"><div class="title">Is a lost track settled? (<code>Tracker._settled</code>)</div>
+<ul class="root"><li><span class="n q">Last position inside a transient or exit zone (any group radar's)?</span>
+  <ul><li><span class="lbl">yes</span><span class="n x">not settled: forgotten after <code>TRANSIENT_TTL_S</code> = 20 s</span></li>
+  <li><span class="lbl">no</span><span class="n q">Inside a linger zone?</span>
+    <ul><li><span class="lbl">yes</span><span class="n a">settled: remembered <code>SETTLED_TTL_S</code> = 12 h</span></li>
+    <li><span class="lbl">no</span><span class="n q">Is it at least <code>EDGE_MM</code> = 600 from the side of the field of view of <i>any</i> radar that saw it? (Or are no radar views known?)
+      <pre>side_margin(x, y) = r · sin(60° − |atan2(x, y)|)   # distance to the nearer ±60° side</pre></span>
+      <ul><li><span class="lbl">yes</span><span class="n a">settled (vanished mid-room: still there, just not detected)</span></li>
+          <li><span class="lbl">no</span><span class="n x">not settled (walked out of every view's side)</span></li></ul></li></ul></li></ul></li></ul></div>
+<div class="note">The far end of the range does not count as "leaving": it is usually the far wall, with a bed or desk against it.</div>
+<p><b>Outputs per frame:</b></p>
+<ul>
+  <li><code>targets</code>: track id and position, in the anchor frame;</li>
+  <li><code>gone</code>: tracks merged away;</li>
+  <li><code>radars</code>: track → the radar indexes that see it;</li>
+  <li><code>born</code>: new tracks;</li>
+  <li><code>dropped</code>: lost tracks forgotten, whose holds are released.</li>
+</ul>
+<p>Between frames, the group deadline expires lost tracks and releases their holds (<code>ZoneEngine.release</code>).</p>
+
+<!-- ================================================================== -->
+<h2 id="zones">7. Stage 5 — zone engine</h2>
+<p class="src">Source: <code>engine/zones.py:ZoneEngine.process</code> (port: <code>frontend/engine.js</code>)</p>
+<p>The group's engine holds every member's include zones and every exit (anchor frame). Its own grace is 0 and it has no exclusions: both were applied per feed. Each frame carries the fused targets, <code>available = any member available</code>, and the tracker's <code>gone</code> and <code>dropped</code>.</p>
+
+<div class="dt"><div class="title">Zone engine: process(frame) — per include zone</div>
+<ul class="root">
+<li><span class="n a">0. <code>advance(t)</code>: expire holds past <code>hold_max_s</code>; apply delayed transitions that are due.</span></li>
+<li><span class="n a">1. <code>exit_slots</code> = kept targets inside any exit polygon.</span></li>
+<li><span class="n q">2. Which targets are inside? Edge margin <i>m</i> &gt; 0?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">Hysteresis: while the zone is raw-off, a target must be ≥ m <i>inside</i> the edge to count. While raw-on, it counts until it is &gt; m <i>outside</i>. <pre>threshold = -m if rt.raw else m;  inside = signed_distance(x, y, polygon) &gt;= threshold</pre></span></li>
+      <li><span class="lbl">no</span><span class="n a">point-in-polygon (even-odd rule)</span></li></ul></li>
+<li><span class="n q">3. <code>hold_until_exit</code> on?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">Update holds (tree below)</span></li><li><span class="lbl">no</span><span class="n a">clear all holds</span></li></ul></li>
+<li><span class="n a">4. Release holds of tracks in <code>frame.dropped</code>.</span></li>
+<li><span class="n a">5. <code>count = |inside| + |holds|</code>; <code>raw = count &gt; 0</code>. When raw changes, <code>since = t</code>.</span></li>
+<li><span class="n q">6. raw ≠ published state, and <code>t − since ≥ delay</code>? (delay = <code>on_delay_s</code> if raw is on, else <code>off_delay_s</code>)</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">state = raw</span></li><li><span class="lbl">no</span><span class="n w">wait; a timer fires at <code>since + delay</code> (<code>next_deadline</code>), with no frame needed</span></li></ul></li>
+<li><span class="n a">7. Group presence (any target not excluded, no delays).</span></li>
+</ul></div>
+
+<div class="dt"><div class="title">Hold until exit — per zone, per frame (<code>_update_hold</code>)</div>
+<ul class="root">
+<li><span class="n q">A slot was inside last frame and is absent now?</span>
+ <ul><li><span class="lbl">yes</span><span class="n q">Was it standing in an exit last frame, or is it in <code>gone</code> (merged into another track)?</span>
+   <ul><li><span class="lbl">yes</span><span class="n x">no hold (it left, or it was a duplicate)</span></li>
+       <li><span class="lbl">no</span><span class="n a">hold[slot] = t: it vanished inside, so it is still there, just not detected</span></li></ul></li></ul></li>
+<li><span class="n q">A held slot is seen again (anywhere, inside or outside)?</span>
+ <ul><li><span class="lbl">yes</span><span class="n a">release the hold. Inside, it counts as present again. Outside, it left without being seen crossing the edge.</span></li></ul></li>
+<li><span class="n q">The tracker forgot the slot (<code>dropped</code>), or <code>t ≥ hold + hold_max_s</code> (if &gt; 0)?</span>
+ <ul><li><span class="lbl">yes</span><span class="n x">release. An expiry is timestamped at <code>hold + hold_max_s</code>, so the off delay counts from then.</span></li></ul></li>
+</ul></div>
+<div class="note">A track id is stable because of the tracker. Before the tracker existed, slot renumbering "walked" a seated person out of their zone. The hold logic depends on stable ids, and protecting that is the purpose of the vector <code>test_desk_stays_on_while_the_radar_renumbers_targets</code>.</div>
+
+<!-- ================================================================== -->
+<h2 id="passages">8. Stage 6 — exit passages</h2>
+<p class="src">Source: <code>home.py:GroupRuntime._passages</code>, <code>HomeRuntime._passage/_on_door</code></p>
+<div class="rule"><span class="id">PS-1</span><b>left</b>: a track present last frame, absent now and not in <code>gone</code>, whose last position is inside an exit. <b>arrived</b>: a track in <code>born</code> whose position is inside an exit. A track revived by the tracker is not <code>born</code>, so re-finding someone in a doorway is not an arrival.</div>
+<div class="dt"><div class="title">Door-gated passage</div>
+<ul class="root"><li><span class="n q">Does the exit have a <code>door_entity_id</code>?</span>
+ <ul><li><span class="lbl">no</span><span class="n a">fire the event</span></li>
+ <li><span class="lbl">yes</span><span class="n q">Did the door's <code>last_changed</code> fall within <code>DOOR_WINDOW_S</code> = 30 s of the passage?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">fire, with attribute <code>door_entity_id</code></span></li>
+  <li><span class="lbl">no</span><span class="n w">pending: fire if the door changes within 30 s of the passage (people often vanish before the door shuts), else drop it</span></li></ul></li></ul></li></ul></div>
+
+<!-- ================================================================== -->
+<h2 id="hcmodel">9. Head count — model and construction</h2>
+<p class="src">Source: <code>headcount_runtime.py:HeadCountRuntime._build</code>, <code>engine/rooms.py</code>, <code>engine/headcount.py</code> (module docstring)</p>
+<p>People do not appear or vanish: they come in and leave through the home's true exits, and move between floors over the stairs. Radars lose people who sit or lie still, and rooms without a radar never see anyone. So the count is kept as <b>tokens</b>, one per person believed to be home, each in the region where it was last seen or inferred to be.</p>
+
+<h3>9.1 Derived objects</h3>
+<table>
+<tr><th>Object</th><th>Derived from</th><th>Rule</th></tr>
+<tr><td><b>Space / Region</b> (observed)</td><td>Radar groups with ≥1 radar whose <code>headcount</code> is on</td><td>
+  <ul>
+    <li><b>Which areas:</b> each head-count radar's device area (falling back to the anchor's area) is a region. So is every area that one of the group's include zones lives in (the zone's <code>area_id</code>, else its radar's area): a radar can see into the next room.</li>
+    <li><b>Region id:</b> the area id. If another group already made a region for that area, the id is <code>&lt;area&gt;_&lt;last 6 chars of anchor id&gt;</code>.</li>
+    <li><b>Floor:</b> the HA floor <code>level</code>, or 0.</li>
+  </ul></td></tr>
+<tr><td><b>Space</b> (unobserved)</td><td>An area that an exit <code>leads_to</code>, or the area of an <code>outside_doors</code> entity, that no radar watches</td><td><code>observed = False</code>. Its occupancy is inferred from its doors (§10.6).</td></tr>
+<tr><td><b>Portal</b></td><td>Each exit zone (with <code>leads_to</code>) of a head-count radar</td><td>The polygon is transformed into the anchor frame. <code>to</code> = the destination regions (excluding itself). <code>to = ()</code> means outside: only when <code>leads_to</code> is exactly <code>["outside"]</code>. An exit leading to both outside and an area becomes a portal to the area, and its door also becomes an exit door.</td></tr>
+<tr><td><b>Exit door</b> of a region</td><td>An exit zone with <code>leads_to ∋ "outside"</code> and a door entity; each <code>outside_doors</code> option entity, placed in its area's region (which may be newly created, unobserved)</td><td>Opening one starts an exit window (§10.4). Entities in the <code>lock</code> domain are door kind <code>lock</code>: each state change is a pulse (open + close).</td></tr>
+<tr><td><b>Connection</b> (a, b, door?)</td><td>(1) exit <code>leads_to</code> an area: (region, dest, exit's door); (2) every pair of regions in one group: no door; (3) every pair of spaces in the same area (different groups): no door</td><td>Undirected. If both directions exist, the one with a door wins. With any connections, people move only along them, and through a door only while it is in use (§10.3).</td></tr>
+<tr><td><b>Evidence</b> mapping</td><td><code>evidence</code> / <code>evidence_on</code> options</td><td>The entity's area (else its device's area) must already be a space, or the entity is ignored with a warning.</td></tr>
+<tr><td><b>Vacuum</b> → room sensor</td><td><code>vacuums</code> option</td><td>A <code>sensor</code> on the vacuum's device with translation key <code>current_room</code> or an entity id ending <code>_current_room</code>. If there is none, a warning is logged and the vacuum's tracks cannot be ignored.</td></tr>
+<tr><td><b>Lock pairing</b></td><td>A door entity (kind <code>door</code>) whose device has exactly one <code>lock</code> entity</td><td><code>lock_of[door] = lock</code>. If the lock is not configured itself, its kind is <code>door_lock</code>: it is watched only to close and reopen the contact (§11.2).</td></tr>
+<tr><td><b>space_radars</b> (panel only)</td><td>Per region: the radars in its area, then the radars with zones in it, else all the group's head-count radars</td><td>Lets the head count log open the right radar view at a decision's time.</td></tr>
+</table>
+
+<h3>9.2 Rooms inside one aligned group</h3>
+<p class="src">Source: <code>engine/rooms.py:Rooms.room_at/split</code></p>
+<p>Aligning radars merges their tracks into one picture. It does not merge the rooms. When a group spans several regions, each fused track is assigned to a region every frame:</p>
+<div class="dt"><div class="title">Which room is a fused track in?</div>
+<ul class="root"><li><span class="n q">Inside a zone of the group (zone area, else its radar's area)? Overlapping zones: the smallest wins.</span>
+<ul><li><span class="lbl">yes</span><span class="n a">that zone's room</span></li>
+<li><span class="lbl">no</span><span class="n a">The room of the nearest radar that <i>covers</i> the spot: side margin ≥ 0 and within its <code>max_distance</code>. If none covers it, the nearest radar regardless of coverage.</span>
+ <ul><li><span class="n q">The track's previous room is within <code>HYSTERESIS_MM</code> = 500 of the best distance?</span>
+ <ul><li><span class="lbl">yes</span><span class="n a">keep the previous room (no flicker in a doorway)</span></li></ul></li></ul></li></ul></li></ul></div>
+<p>The head count receives the split as one <code>frame_group</code> call. A track id that moves from one region to another between frames is <b>handed over</b>: the same person walking through, with bindings, pending state, path and exit marks moved along. It is not matched again.</p>
+
+<h3>9.3 Token data model</h3>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>region</code></td><td>Where the person is believed to be (may be inferred: moved unseen).</td></tr>
+<tr><td><code>visible</code></td><td>(region, track id) while a track is bound to the token; else None (unseen).</td></tr>
+<tr><td><code>last_seen</code>, <code>seen_region</code>, <code>pos</code>, <code>floor_seen{}</code></td><td>When, where and at which position the person was last actually seen; the last time they were seen on each floor.</td></tr>
+<tr><td><code>unknown</code>, <code>unknown_floor</code></td><td>In doubt: on (or recently seen on) an exit floor while its door was used. Not counted.</td></tr>
+<tr><td><code>provisional</code></td><td>Created from an unexplained track, not yet confirmed as a person. Not counted.</td></tr>
+<tr><td><code>reason</code></td><td><code>arrived</code>, <code>bootstrap</code>, <code>unexplained</code>, <code>restored</code>, <code>corrected</code>.</td></tr>
+<tr><td><code>seen_s</code>, <code>since</code></td><td>Total time seen; creation time (reset when put in doubt, and at the window close for those visible).</td></tr>
+<tr><td><code>before</code>, <code>origin</code></td><td>The token's state before its current track, so a track found to be a machine can be given back; the track that created the token.</td></tr>
+</table>
+
+<figure id="fig3">
+<svg class="dg" viewBox="0 0 1060 450" role="img" aria-label="Token state diagram">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7c"/></marker></defs>
+  <rect class="rt" x="330" y="40" width="200" height="70" rx="8"/><text x="345" y="66" class="t">Provisional</text><text x="345" y="84" class="s">unexplained; not counted</text><text x="345" y="100" class="s">(visible or unseen)</text>
+  <rect class="cfg" x="620" y="40" width="200" height="70" rx="8"/><text x="635" y="62" class="t">Created directly</text><text x="635" y="80" class="s">restored after restart,</text><text x="635" y="96" class="s">correction, arrival</text>
+  <rect x="30" y="200" width="190" height="80" rx="8" fill="#fff" stroke="#8592a6" stroke-dasharray="5 4"/><text x="45" y="224" class="t">Pending track</text><text x="45" y="242" class="s">a track with no token yet,</text><text x="45" y="258" class="s">waiting to be explained</text>
+  <rect class="out" x="620" y="200" width="200" height="80" rx="8" stroke-width="2.2"/><text x="635" y="226" class="t">Counted (known)</text><text x="635" y="244" class="s">visible or unseen;</text><text x="635" y="260" class="s">in count(), sensors</text>
+  <rect class="ext" x="330" y="360" width="200" height="70" rx="8"/><text x="345" y="386" class="t">In doubt (unknown)</text><text x="345" y="404" class="s">exit floor while its door is</text><text x="345" y="420" class="s">used; not counted</text>
+  <rect x="880" y="200" width="150" height="70" rx="8" fill="#f6f6f6" stroke="#999"/><text x="895" y="230" class="t">Removed</text><text x="895" y="248" class="s">token deleted</text>
+  <!-- P->V --><path class="ln" d="M220,215 L328,105" marker-end="url(#a3)"/><text x="232" y="138" class="lb" text-anchor="end">after CONFIRM_S: apart from</text><text x="232" y="152" class="lb" text-anchor="end">others, no neighbour in view</text>
+  <!-- P->K --><path class="ln" d="M220,240 L618,240" marker-end="url(#a3)"/><text x="240" y="232" class="lb">bootstrap hour: new person after 20 s</text><text x="240" y="256" class="lb">matched to an unseen token: binds it (no new person)</text>
+  <!-- P->U --><path class="ln" d="M220,265 L328,380" marker-end="url(#a3)"/><text x="300" y="405" class="lb" text-anchor="end">exit window, not "out":</text><text x="300" y="419" class="lb" text-anchor="end">new person "arrived", in doubt</text>
+  <!-- P discard --><path class="ln" d="M60,280 V330"/><circle cx="60" cy="336" r="6" fill="#fff" stroke="#c62828" stroke-width="1.5"/><text x="40" y="360" class="lb">track lost / found static first:</text><text x="40" y="374" class="lb">"ghost", nothing counted</text>
+  <!-- V->K --><path class="ln" d="M500,110 L640,198" marker-end="url(#a3)"/><text x="590" y="140" class="lb">walks into another region,</text><text x="590" y="154" class="lb">or seen ≥ UNEXPLAINED_SEEN_S</text>
+  <!-- S->K --><path class="ln" d="M800,110 V198" marker-end="url(#a3)"/><text x="808" y="150" class="lb">restart: seeded, unseen</text><text x="808" y="164" class="lb">correction: added</text><text x="808" y="178" class="lb">out of an unobserved region</text>
+  <!-- V->X --><path class="ln" d="M430,40 V24 H955 V198" marker-end="url(#a3)"/><text x="560" y="18" class="lb">1 h unconfirmed, its creating track static, or Nobody home: "not a person"</text>
+  <!-- K->U --><path class="ln" d="M700,280 L532,400" marker-end="url(#a3)"/><text x="720" y="320" class="lb">doubt: exit door opens (not "in"),</text><text x="720" y="334" class="lb">a virtual exit, or seen / moved onto</text><text x="720" y="348" class="lb">the exit floor while it is unsettled</text>
+  <!-- U->K --><path class="ln" d="M532,368 L660,280" marker-end="url(#a3)"/><text x="590" y="300" class="lb" text-anchor="end">back: seen on a floor with no open window,</text><text x="590" y="314" class="lb" text-anchor="end">still seen LAG_S after the close,</text><text x="590" y="328" class="lb" text-anchor="end">evidence, or a correction</text>
+  <!-- U->X --><path class="ln" d="M530,415 H955 V272" marker-end="url(#a3)"/><text x="640" y="432" class="lb">not re-established REESTABLISH_S after the close: "left"</text>
+  <!-- K->X --><path class="ln" d="M820,235 L878,235" marker-end="url(#a3)"/><text x="826" y="228" class="lb">correction</text>
+</svg>
+<figcaption>Figure 3 — Token life cycle. "Visible / unseen" is a separate dimension: each state can be visible or not. A pending track is not a token, and removing one never changes a count. The labels in quotes are the change kinds written to the decision log.</figcaption>
+</figure>
+
+<!-- ================================================================== -->
+<h2 id="hcengine">10. Head count — engine rules</h2>
+<p class="src">Source: <code>engine/headcount.py:HeadCount</code></p>
+
+<h3>10.1 Frame processing</h3>
+<div class="dt"><div class="title">HeadCount.frame(region, tracks, t, unconfirmed)</div>
+<ul class="root">
+<li><span class="n a">1. <code>_tick(t)</code>: expire doubt (§10.4), confirm or expire provisional tokens (§10.7).</span></li>
+<li><span class="n a">2. Machine filter (§10.8): leave out tracks that have not moved <code>STATIC_MM</code> from where they appeared within <code>STATIC_S</code>.</span></li>
+<li><span class="n a">3. Remember <code>unconfirmed</code> (reflection flags from the runtime, §11.5).</span></li>
+<li><span class="n a">4. Each track that vanished: <code>_lose</code> (§10.5). If it was pending, discard it ("ghost").</span></li>
+<li><span class="n q">5. Each current track, in id order. Is it pending?</span>
+ <ul><li><span class="lbl">yes</span><span class="n w">skip (re-checked in step 6)</span></li>
+ <li><span class="lbl">no</span><span class="n q">Bound to a token that is visible on this very track?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">continuing: <code>_bind</code> (update position and time, moved / doubt / establish checks)</span></li>
+  <li><span class="lbl">no</span><span class="n q">Appearing (new, or re-found by the tracker). Is the token it was bound to <b>stale</b>? Stale means: no such token, it is visible elsewhere, it was last seen in another region, or it vanished more than <code>REFOUND_MM</code> = 2000 from here (track ids are reused).</span>
+   <ul><li><span class="lbl">stale</span><span class="n a"><code>_appear(prefer=None)</code></span></li><li><span class="lbl">fresh</span><span class="n a"><code>_appear(prefer=token)</code></span></li></ul></li></ul></li></ul></li>
+<li><span class="n a">6. Re-check every pending track of this region (§10.7).</span></li>
+<li><span class="n a">7. Mark tracks within <code>EXIT_NEAR_MM</code> = 400 of an outside portal (<code>to = ()</code>): "passed the front door at t".</span></li>
+</ul></div>
+
+<h3>10.2 A track appears: who is it?</h3>
+<div class="dt"><div class="title">_appear(region, track, t, pos, prefer)</div>
+<ul class="root">
+<li><span class="n q">No preferred token, and the runtime flags the track as a one-radar reflection?</span><ul><li><span class="lbl">yes</span><span class="n w">pending (until another radar confirms it)</span></li></ul></li>
+<li><span class="n q">No preferred token, not at a portal, and within <code>SEPARATE_MM</code> = 1500 of someone visible in this region?</span><ul><li><span class="lbl">yes</span><span class="n w">pending (most likely that person's track splitting)</span></li></ul></li>
+<li><span class="n q">At a portal (within <code>PORTAL_MM</code> = 1200 of it)? Which kind?</span>
+ <ul>
+ <li><span class="lbl">to outside / unobserved only</span><span class="n a">candidate = the most recently seen unseen token in the portal's destinations (back from the garage), else in this region (lost at the door a moment ago, or seen through it)</span></li>
+ <li><span class="lbl">to observed regions (stairs)</span><span class="n a">candidate = someone from where it leads, however long they sat still; else someone from this region; else anyone who could have walked here</span></li>
+ <li><span class="lbl">no portal</span><span class="n a">candidate = <code>_match(region)</code> (§10.3)</span></li></ul></li>
+<li><span class="n q">A preferred token (the tracker re-found its track), and (no candidate, or the candidate was seen no later than the preferred token, or the preferred token was lost ≤ <code>REFOUND_S</code> = 30 s ago)?</span><ul><li><span class="lbl">yes</span><span class="n a">candidate = the preferred token</span></li></ul></li>
+<li><span class="n q">Is there a candidate?</span>
+ <ul><li><span class="lbl">yes</span><span class="n a">bind it (no new person)</span></li>
+ <li><span class="lbl">no</span><span class="n q">Is this floor's exit window unsettled with direction ≠ "out"?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">new token "arrived", <b>in doubt</b> (counted once re-established like everyone there)</span></li>
+  <li><span class="lbl">no</span><span class="n q">Coming out of an unobserved region? (a door to it was used in the last <code>CROSS_WINDOW_S</code> and one of its exits opened in the last <code>UNOBSERVED_ARRIVE_S</code> = 600 s)</span>
+   <ul><li><span class="lbl">yes</span><span class="n a">new token "arrived", counted</span></li>
+   <li><span class="lbl">no</span><span class="n w">pending, remembering the portal it appeared at</span></li></ul></li></ul></li></ul></li>
+</ul></div>
+
+<h3>10.3 Matching an unseen token to a new track</h3>
+<div class="dt"><div class="title">_match(region, t, only=None, patient=False): the unseen token most likely to be a new track</div>
+<ul class="root">
+<li><span class="n a">Candidates: tokens not visible (in <code>only</code>, if given).</span></li>
+<li><span class="n x">Skip a token in doubt from another region when this region has portals, unless <code>only</code> includes its region. Someone at the exit comes back through the doorway from where they are, not out of thin air.</span></li>
+<li><span class="n x">Skip a token in an <b>enclosed</b> room (unobserved, no exits, reachable only by doorless links from observed regions; a bedroom without a radar), unless <code>only</code> includes it or <code>patient</code>. They come out through its door.</span></li>
+<li><span class="n q">Can the token have reached this region? (<code>_reach</code>)</span>
+ <ul><li><span class="n a">Same region: cost 0.</span></li>
+ <li><span class="n x">"Gate": this floor's window is unsettled, the token is not in doubt, and this region has no portals. Then a token seen more than <code>RECENT_S</code> = 120 s ago cannot be this track: during an exit window, a new track is someone coming in, not a sleeper.</span></li>
+ <li><span class="n q">Connections exist?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">fewest hops along connections; a door link counts only if its door is open or changed in the last <code>CROSS_WINDOW_S</code> = 60 s. No path, or faster than <code>FLOOR_TRAVEL_S</code> = 3 s per floor → impossible. Under the gate, more than 1 hop is impossible. Cost = 1 + hops.</span></li>
+  <li><span class="lbl">no</span><span class="n a">any floor; needs <code>FLOOR_TRAVEL_S · max(floors, 1)</code> since last seen. Cost = 1 + floors.</span></li></ul></li></ul></li>
+<li><span class="n a">Choose the most recently seen candidate; ties go to the lower cost (nearer). A still person who reappears is usually re-found by the tracker near where they vanished, so a new track is usually someone on the move.</span></li>
+</ul></div>
+
+<h3>10.4 Exit windows (doors to outside)</h3>
+<figure id="fig4">
+<svg class="dg" viewBox="0 0 1060 300" role="img" aria-label="Exit window timeline">
+  <defs><pattern id="hx" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="#9aa5b4" stroke-width="2"/></pattern></defs>
+  <line x1="60" y1="250" x2="1030" y2="250" stroke="#5f6b7c"/>
+  <g class="lb"><line x1="120" y1="245" x2="120" y2="255" stroke="#5f6b7c"/><text x="120" y="270" text-anchor="middle" class="lb">t0 − RECENT_S</text>
+  <line x1="260" y1="240" x2="260" y2="255" stroke="#5f6b7c"/><text x="260" y="270" text-anchor="middle" class="lb">door opens t0</text>
+  <line x1="420" y1="240" x2="420" y2="255" stroke="#5f6b7c"/><text x="420" y="270" text-anchor="middle" class="lb">last exit door closes t1</text>
+  <line x1="500" y1="245" x2="500" y2="255" stroke="#5f6b7c"/><text x="500" y="286" text-anchor="middle" class="lb">t1 + LAG_S (45 s)</text>
+  <line x1="540" y1="245" x2="540" y2="255" stroke="#5f6b7c"/><text x="560" y="270" text-anchor="middle" class="lb">t1 + SETTLE_S (60 s)</text>
+  <line x1="900" y1="245" x2="900" y2="255" stroke="#5f6b7c"/><text x="900" y="270" text-anchor="middle" class="lb">t1 + REESTABLISH_S (600 s)</text></g>
+  <text x="10" y="44" class="s">Door</text><rect x="260" y="30" width="160" height="22" rx="3" fill="#fb8c00" opacity=".75"/><text x="270" y="46" class="s" style="fill:#fff">open (any exit door)</text>
+  <text x="10" y="84" class="s">Count</text><rect x="260" y="70" width="280" height="22" rx="3" fill="url(#hx)" stroke="#9aa5b4"/><text x="270" y="86" class="s">home / floor sensor: unknown (at_least = known)</text><text x="550" y="86" class="s">→ known people only; those still in doubt are not counted until back</text>
+  <text x="10" y="124" class="s">Tokens</text><rect x="120" y="110" width="140" height="22" rx="3" fill="none" stroke="#e0a458" stroke-dasharray="4 3"/><text x="128" y="126" class="lb">seen on floor ≤ 120 s</text>
+  <rect x="260" y="110" width="640" height="22" rx="3" fill="#fff3e3" stroke="#e0a458"/><text x="270" y="126" class="s">on the floor, or seen there in the last 120 s: in doubt (unless direction "in")</text>
+  <text x="10" y="164" class="s">New track</text><rect x="260" y="150" width="280" height="22" rx="3" fill="#e9f7ee" stroke="#6fb486"/><text x="270" y="166" class="s">new person "arrived" (in doubt)</text><text x="550" y="166" class="s">unless someone explains it, or the direction is "out"</text>
+  <text x="10" y="204" class="s">Outcome</text>
+  <circle cx="470" cy="198" r="5" fill="#2e7d32"/><text x="300" y="218" class="lb">seen on another floor (no window there): back at once</text>
+  <circle cx="505" cy="198" r="5" fill="#2e7d32"/><text x="512" y="190" class="lb">still seen: back</text>
+  <circle cx="900" cy="198" r="5" fill="#c62828"/><text x="760" y="218" class="lb">never seen again: "left" (removed)</text>
+</svg>
+<figcaption>Figure 4 — One exit window on one floor (not to scale). Windows are per floor. Another floor's counts stay firm, but the home count is unknown while any floor is unsettled.</figcaption>
+</figure>
+
+<div class="dt"><div class="title">door(entity, open, t): a true exit door changes</div>
+<ul class="root">
+<li><span class="n a">Record the door's state and change time (all doors, including connection doors). Run "into unobserved" (§10.6).</span></li>
+<li><span class="n q">Not an exit door of any region?</span><ul><li><span class="lbl">yes</span><span class="n x">done (connection doors only gate paths)</span></li></ul></li>
+<li><span class="n q">Opened?</span>
+<ul><li><span class="lbl">yes</span><span class="n q">Does the floor have no window, or a window that closed and has settled?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">new window, <code>opened = t</code>, <code>direction</code> from the door order (§10.6)</span></li>
+  <li><span class="lbl">no</span><span class="n a">continue the same window. If this door's direction differs from the window's: direction = None (unknown).</span></li></ul>
+  <ul><li><span class="n a">Add it to the open doors; <code>closed = None</code>. Unless the direction is "in": every token on this floor, or seen on it in the last <code>RECENT_S</code>, goes in doubt.</span></li></ul></li>
+ <li><span class="lbl">closed</span><span class="n q">Was it the last open door of the window?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a"><code>closed = t</code>. For visible tokens in doubt, <code>since = t</code> (the LAG_S clock starts at the close).</span></li></ul></li></ul></li>
+</ul></div>
+
+<div class="dt"><div class="title">On every tick: tokens in doubt whose window has closed (<code>_expire_unknown</code>)</div>
+<ul class="root"><li><span class="n q">Visible, and <code>t − max(closed, since) ≥ LAG_S</code> (45 s)?</span>
+ <ul><li><span class="lbl">yes</span><span class="n a">established "still here": radars lag, and some see a little through doors</span></li>
+ <li><span class="lbl">no</span><span class="n q"><code>t − closed ≥ REESTABLISH_S</code> (600 s), and not visible (or visible for less than LAG_S)?</span>
+  <ul><li><span class="lbl">yes</span><span class="n x">removed "left"</span></li></ul></li></ul></li></ul></div>
+<div class="rule"><span class="id">HC-EW-1</span>A token in doubt is also re-established whenever it is bound to a track in a region whose floor has no unsettled window ("walked in"). This covers both seen on another floor and seen on the exit floor after it settled. Evidence and corrections also re-establish (§11). The "back" change is logged as <code>arrived</code> if the token was created by an arrival and has been seen for ≤ 4 · LAG_S, else <code>back</code>.</div>
+<div class="rule"><span class="id">HC-EW-2</span>While a floor's window is unsettled and its direction is not "in", a counted token bound to a track on that floor goes in doubt ("on the exit floor": walked down to the door while it is in use). So does a token moved there unseen ("towards the exit"). Provisional tokens are exempt.</div>
+
+<h3>10.5 A track vanishes</h3>
+<div class="dt"><div class="title">_lose(region, track, t, last position)</div>
+<ul class="root"><li><span class="n q">Bound to a token visible on it?</span><ul><li><span class="lbl">no</span><span class="n x">nothing</span></li><li><span class="lbl">yes</span><span class="n a">token unseen. Then:</span>
+<ul>
+<li><span class="n q">Was it within <code>EXIT_NEAR_MM</code> of an outside portal in the last <code>EXIT_PASS_S</code> = 10 s? (<code>VIRTUAL_EXITS</code>)</span>
+ <ul><li><span class="lbl">yes</span><span class="n q">Is a window on this floor open or unsettled?</span>
+   <ul><li><span class="lbl">yes</span><span class="n a">extend it: <code>closed = max(closed, t)</code></span></li>
+   <li><span class="lbl">no</span><span class="n a"><b>virtual exit</b>: a window opened and closed at t with direction "out". Tokens on the floor, or seen there in the last 120 s, go in doubt. Nobody can have come in through a door that did not open, so it only counts people out.</span></li></ul></li></ul></li>
+<li><span class="n q">Lost at a portal with exactly one destination that is observed or enclosed?</span>
+ <ul><li><span class="lbl">yes</span><span class="n a">move the token there unseen (went through). A stairwell leading both up and down: unknown which, so stay.</span></li>
+ <li><span class="lbl">no</span><span class="n q">A door from here into an unobserved region is open, or changed within <code>INTO_UNOBSERVED_S</code> = 20 s?</span>
+  <ul><li><span class="lbl">yes</span><span class="n a">move the token into that region unseen</span></li></ul></li></ul></li>
+</ul></li></ul></li></ul></div>
+
+<h3>10.6 Unobserved regions (garage) and door order</h3>
+<div class="rule"><span class="id">HC-UN-1</span><b>Into</b>: when a door between an observed region <i>a</i> and an unobserved region <i>b</i> changes, every unseen token in <i>a</i> lost within <code>INTO_UNOBSERVED_S</code> is moved into <i>b</i>. A token lost after the door moved is handled by <code>_lose</code> (§10.5).</div>
+<div class="rule"><span class="id">HC-UN-2</span><b>Out of</b>: a new track in a region linked to an unobserved region is a counted arrival when the link's door was used in the last 60 s and one of the unobserved region's exits opened in the last <code>UNOBSERVED_ARRIVE_S</code> = 600 s.</div>
+<div class="rule"><span class="id">HC-UN-3</span><b>Direction</b> of an exit window, for an exit of an unobserved region with doors to observed regions only. If any inner door is open, or changed within <code>DIRECTION_S</code> = 90 s before the exit opened, the direction is <b>"out"</b>: through the garage-entry door, press the button, the big door opens. Otherwise it is <b>"in"</b>: the remote in the car opens the big door first. For observed regions the direction is None (unknown).
+<ul><li>"out": the floor is put in doubt, but new tracks are not arrivals.</li><li>"in": nobody is put in doubt; new tracks are arrivals.</li><li>None: both.</li></ul></div>
+
+<h3>10.7 Unexplained tracks</h3>
+<div class="dt"><div class="title">_recheck(pending track) — every frame of its region</div>
+<ul class="root">
+<li><span class="n q">Still flagged as a one-radar reflection?</span><ul><li><span class="lbl">yes</span><span class="n w">wait</span></li></ul></li>
+<li><span class="n q">Still within 1500 mm of someone visible?</span><ul><li><span class="lbl">yes</span><span class="n w">wait</span></li></ul></li>
+<li><span class="n a"><code>patient</code> = waited ≥ <code>CONFIRM_S</code>, and it appeared at no portal or at a portal to an enclosed room. (The radar missed them coming out.)</span></li>
+<li><span class="n q"><code>_match(region, patient)</code> finds someone?</span><ul><li><span class="lbl">yes</span><span class="n a">bind (someone who went unseen meanwhile)</span></li></ul></li>
+<li><span class="n q">This floor's window unsettled, direction ≠ "out"?</span><ul><li><span class="lbl">yes</span><span class="n a">new token "arrived", in doubt (seen through the door before it opened)</span></li></ul></li>
+<li><span class="n q">Waited ≥ <code>CONFIRM_S</code> (60 s; <code>BOOTSTRAP_CONFIRM_S</code> = 20 s in the bootstrap hour)?</span><ul><li><span class="lbl">no</span><span class="n w">wait</span></li></ul></li>
+<li><span class="n q">Someone visible in a doorless neighbouring region (possibly the same person seen by two radars), or anyone within 1500 mm in this region?</span>
+ <ul><li><span class="lbl">yes</span><span class="n w">wait</span></li><li><span class="lbl">no</span><span class="n a">new token: "bootstrap" (counted) in the first hour without saved counts; else "unexplained", <b>provisional</b></span></li></ul></li>
+</ul></div>
+<div class="rule"><span class="id">HC-PR-1</span>A provisional token is <b>confirmed</b> (counted) once it is bound in a region other than the first it was seen in, or its total seen time reaches <code>UNEXPLAINED_SEEN_S</code> = 600 s. It is <b>removed</b> "not a person" if neither happens within <code>UNEXPLAINED_EXPIRE_S</code> = 3600 s. Washers, fans and reflections do not walk on.</div>
+
+<h3>10.8 Machines: tracks that never move</h3>
+<div class="rule"><span class="id">HC-ST-1</span>For each track, the engine keeps where it appeared and the farthest it has moved from there. A track that is still within <code>STATIC_MM</code> = 400 of where it appeared after <code>STATIC_S</code> = 90 s is <b>static</b>, a machine such as a fan seen through a wall. It is left out of every later frame until it moves ≥ 400 mm, after which it is treated as a new appearance.</div>
+<div class="dt"><div class="title">A track turns static: give back (<code>_give_back</code>)</div>
+<ul class="root"><li><span class="n q">Was it pending?</span><ul><li><span class="lbl">yes</span><span class="n x">discard ("ghost: never moved")</span></li></ul></li>
+<li><span class="n q">Bound to a token? Did that track create the token (<code>origin</code>)?</span><ul><li><span class="lbl">yes</span><span class="n x">remove the token "not a person"</span></li>
+<li><span class="lbl">no</span><span class="n a">restore the token's <code>before</code> snapshot (region, seen region, position, last seen, doubt). The person goes back to where they were before this track; they are not removed.</span></li></ul></li></ul></div>
+<div class="rule"><span class="id">HC-ST-2</span>Still spots: the seconds that still tracks spend within <code>SPOT_MM</code> = 500 of a point are added up per region and forgotten <code>SPOT_FORGET_S</code> = 6 h after the spot was last active. <code>SPOT_APPLY = False</code>: spots are only reported (<code>still_spots()</code>, <code>tools/headcount.py --spots</code>), never applied, because applied automatically they also catch a desk.</div>
+
+<h3>10.9 Evidence and corrections (engine side)</h3>
+<div class="dt"><div class="title">evidence(region, t, why, move): someone is here, though no track says so</div>
+<ul class="root"><li><span class="n q">Is a counted or in-doubt token in this region visible?</span><ul><li><span class="lbl">yes</span><span class="n x">nothing to add</span></li></ul></li>
+<li><span class="n q">Is someone visible in another region within <code>PORTAL_MM</code> of a portal leading here (reaching in for the switch)?</span><ul><li><span class="lbl">yes</span><span class="n x">them; nothing</span></li></ul></li>
+<li><span class="n q">Is a token believed to be here?</span><ul><li><span class="lbl">yes</span><span class="n a">the most recently seen one</span></li><li><span class="lbl">no</span><span class="n q"><code>move</code>?</span><ul><li><span class="lbl">yes</span><span class="n a"><code>_match(region)</code>: the unseen person who could have walked here (never out of an enclosed room)</span></li><li><span class="lbl">no</span><span class="n x">nothing (a light switched off confirms, it does not move anyone)</span></li></ul></li></ul></li>
+<li><span class="n a">Move it here if needed; <code>last_seen = t</code>; log "evidence". If it is in doubt and the floor has no unsettled window: re-establish it. <b>Evidence never adds a person</b>: a switch does not say who.</span></li></ul></div>
+<div class="rule"><span class="id">HC-CO-1</span><code>correct(region, n)</code>: remove tokens beyond n, longest-unseen first and visible ones last (a phantom is someone nobody has seen). Add "corrected" tokens (unseen, seen now) up to n. Re-establish the remaining tokens in doubt.</div>
+<div class="rule"><span class="id">HC-CO-2</span><code>correct_home(n)</code>: only removes, anywhere, longest-unseen first. Adding is not supported, because who is where is not known. With n = 0 it also removes provisional tokens and clears pending tracks.</div>
+
+<!-- ================================================================== -->
+<h2 id="hcruntime">11. Head count — runtime inputs</h2>
+<p class="src">Source: <code>headcount_runtime.py</code></p>
+<div class="rule"><span class="id">RT-0</span>Every input reaches the engine through <code>_hc(name, *args)</code>: frames, doors, pulses, evidence and ticks. This is the single point where vacuum filtering and hold/replay apply (§11.4). A new input path must go through it too.</div>
+
+<h3>11.1 Doors to outside and connection doors</h3>
+<ul>
+  <li><b>Door kinds:</b> <code>door</code> covers contacts and covers; "open" means a state in {on, open, opening, closing}. <code>lock</code> covers lock entities configured as outside doors. <code>door_lock</code> covers locks found only by pairing.</li>
+  <li><b>Ignored states:</b> unavailable and unknown are ignored. The event time is the state's <code>last_changed</code>.</li>
+  <li><b>Start-up:</b> a <code>door</code> that is open at start-up and not locked is fed as opening at start-up.</li>
+</ul>
+
+<h3>11.2 Door and lock decision tree</h3>
+<div class="dt"><div class="title">_on_door(event)</div>
+<ul class="root">
+<li><span class="n q">New state unavailable / unknown?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore</span></li></ul></li>
+<li><span class="n q">New state "locked"?</span><ul><li><span class="lbl">yes</span><span class="n a">Each door paired with this lock that the engine believes open: log "off (locked)" and feed the door as closed. A locked door is closed, whatever its contact says.</span></li></ul></li>
+<li><span class="n q">Otherwise, was the old state "locked" (unlocked now)?</span><ul><li><span class="lbl">yes</span><span class="n a">Each paired door whose contact says open while the engine believes it closed: log "&lt;state&gt; (unlocked)" and feed it open. The contact counts again and may already say open.</span></li></ul></li>
+<li><span class="n q">Kind <code>door_lock</code>?</span><ul><li><span class="lbl">yes</span><span class="n x">stop (watched only for the two rules above)</span></li></ul></li>
+<li><span class="n q">Kind <code>door</code>, an open state, and its paired lock is locked?</span><ul><li><span class="lbl">yes</span><span class="n x">log "ignored: the door is locked, so it is closed"; stop</span></li></ul></li>
+<li><span class="n q">Kind <code>lock</code>?</span><ul><li><span class="lbl">yes</span><span class="n a">If the old state was known and differs: <b>pulse</b> (open and close at t). This starts and immediately closes an exit window on the lock's floor.</span></li>
+<li><span class="lbl">no</span><span class="n a">feed <code>door(entity, state ∈ OPEN_STATES, t)</code></span></li></ul></li></ul></div>
+<div class="warn">A lock configured as an outside door pulses on every lock and unlock. Each pulse puts everyone on that floor (or seen there in the last 120 s) in doubt. People who stay unseen there for 10 minutes, such as a sleeper on the entry floor, are then removed as "left". When the door also has a paired contact, the pairing alone already covers "locked = closed". Consider whether the lock should be an outside door at all.</div>
+
+<h3>11.3 Evidence (switches, contacts, buttons)</h3>
+<div class="dt"><div class="title">_on_evidence(event)</div>
+<ul class="root">
+<li><span class="n q">New state unavailable / unknown?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore</span></li></ul></li>
+<li><span class="n q">An <code>event.*</code> entity (button)?</span><ul><li><span class="lbl">yes</span><span class="n q">Is the press time (its state) within <code>EVENT_FRESH_S</code> = 30 s of now?</span><ul><li><span class="lbl">no</span><span class="n x">ignore (at start-up it restores its last press)</span></li></ul></li>
+<li><span class="lbl">no</span><span class="n q">Old state missing, unavailable or unknown, or unchanged?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore</span></li></ul></li></ul></li>
+<li><span class="n q">Does the context have a <code>parent_id</code> (an automation or script) or a <code>user_id</code> (the app)?</span><ul><li><span class="lbl">yes</span><span class="n x">log "ignored: by an automation or script / from the app". Only use by hand counts.</span></li></ul></li>
+<li><span class="n q">Listed in <code>evidence_on</code>, and the new state is not "on"?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore (a timer may turn it off)</span></li></ul></li>
+<li><span class="n q">A <code>binary_sensor</code> (door contact)?</span><ul><li><span class="lbl">opened</span><span class="n w">wait <code>CONTACT_MIN_S</code> = 2 s. If it is still open then: evidence at the time it opened (move = true).</span></li>
+<li><span class="lbl">closed</span><span class="n q">Was it open for less than 2 s?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore (the magnet flickering at the edge of its range)</span></li></ul></li></ul></li>
+<li><span class="n a">Log the signal; <code>evidence(region, t, entity, move)</code>, with move = false when a light, switch, fan or input_boolean turned off (on the way out: confirms, moves nobody).</span></li></ul></div>
+
+<h3>11.4 Robot vacuums</h3>
+<p>A robot vacuum moves like a person to a radar: slow sweeps across a whole room. While a configured vacuum is <code>cleaning</code> or <code>returning</code>, the head count ignores the radars of the room it reports. Its room sensor's state is matched to a space whose area name has the same letters and digits (case-insensitive, punctuation and spaces removed).</p>
+<figure id="fig5">
+<svg class="dg" viewBox="0 0 1060 210" role="img" aria-label="Vacuum hold and replay timeline">
+  <defs><pattern id="hx2" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="#9aa5b4" stroke-width="2"/></pattern></defs>
+  <line x1="60" y1="185" x2="1030" y2="185" stroke="#5f6b7c"/>
+  <text x="10" y="40" class="s">Vacuum</text><rect x="150" y="26" width="700" height="22" rx="3" fill="#fff3e3" stroke="#e0a458"/><text x="160" y="42" class="s">cleaning / returning</text>
+  <text x="10" y="80" class="s">Room sensor</text><rect x="150" y="66" width="250" height="22" rx="3" fill="url(#hx2)" stroke="#9aa5b4"/><text x="160" y="82" class="s">unknown (1–2 min)</text><rect x="400" y="66" width="450" height="22" rx="3" fill="#e8f0fe" stroke="#7a9bd8"/><text x="410" y="82" class="s">"Entry"</text>
+  <text x="10" y="120" class="s">Head count</text><rect x="150" y="106" width="250" height="22" rx="3" fill="#f3ecfb" stroke="#a487cf"/><text x="158" y="122" class="lb">copy kept; inputs recorded; new tracks wait</text>
+  <rect x="400" y="106" width="450" height="22" rx="3" fill="#e9f7ee" stroke="#6fb486"/><text x="410" y="122" class="lb">restored copy + replay done; Entry's tracks fed as empty ("this radar is ignored")</text>
+  <line x1="150" y1="20" x2="150" y2="190" stroke="#a487cf" stroke-dasharray="3 3"/><text x="150" y="203" class="lb" text-anchor="middle">start: snapshot</text>
+  <line x1="400" y1="20" x2="400" y2="190" stroke="#6fb486" stroke-dasharray="3 3"/><text x="400" y="203" class="lb" text-anchor="middle">room known: replay</text>
+  <line x1="850" y1="20" x2="850" y2="190" stroke="#5f6b7c" stroke-dasharray="3 3"/><text x="850" y="203" class="lb" text-anchor="middle">stops: "counts again"</text>
+  <text x="470" y="160" class="lb">The hold also ends after HOLD_MAX_S = 300 s (tick), when the vacuum stops, or on any correction.</text>
+</svg>
+<figcaption>Figure 5 — Hold and replay. The vacuum reports its room a minute or two after it starts. Holding new tracks home-wide in the meantime broke doorway chains, so the runtime keeps a copy of the engine and replays instead.</figcaption>
+</figure>
+<div class="rule"><span class="id">RT-VAC-1</span><b>Start of a hold:</b> a vacuum is active but its room is unknown, unavailable or empty. The runtime deep-copies the engine and remembers the log length. Every call through <code>_hc</code> is recorded, and while the hold lasts every track in a frame is flagged unconfirmed: new tracks wait, while continuing and re-found tracks go on.</div>
+<div class="rule"><span class="id">RT-VAC-2</span><b>End of a hold:</b> no active vacuum is unsure any more, or the hold has lasted <code>HOLD_MAX_S</code>, or a correction arrives. The runtime restores the copy and drops the log entries written since, except door, signal and ignored entries. It replays the recorded calls with the now-known vacuumed spaces and the real reflection flags, sorts the log tail by time, and logs "replayed N updates".</div>
+<div class="rule"><span class="id">RT-VAC-3</span>A vacuumed space receives an empty track list every frame. Tracks there are therefore <i>lost</i> at the moment cleaning starts, with the usual §10.5 consequences: portal moves and virtual exits. Zone presence is not affected; the vacuum still turns zones on.</div>
+
+<h3>11.5 Reflection flags for overlapping radars</h3>
+<div class="rule"><span class="id">RT-REF-1</span>In a group with ≥2 radars, a fused track seen by exactly one radar is flagged <b>unconfirmed</b> if another available member covers its position with margin: side margin ≥ <code>COVER_MARGIN_MM</code> = 500 and range ≤ max − 500. Another radar looks there and sees nothing, so it is probably a reflection (a kitchen radar seeing someone twice). It explains nobody and creates nobody until another radar also sees it (§10.2, §10.7).</div>
+
+<h3>11.6 Persistence, start-up and outputs</h3>
+<ul>
+<li><b>Saved counts:</b> counts per region (<code>by_region</code>: counted tokens only) are saved 10 s after a change, but only while no window is unsettled. They are saved immediately after a correction, and again at shutdown.</li>
+<li><b>Restore:</b> at start-up each saved region gets that many tokens, unseen, with <code>last_seen = now − 1 day</code>, so anyone seen since is preferred when matching. Bootstrap is then off.</li>
+<li><b>Bootstrap:</b> without saved counts, the first <code>BOOTSTRAP_S</code> = 1 h is bootstrap. Unexplained tracks become counted people after 20 s, not provisional ones.</li>
+<li><b>Decision log:</b> every change, door and signal, each with a snapshot of the tokens. "Seen" snapshots are added at most every 15 s. The log is kept for 3 days, saved with a 120 s delay, and the panel's head count view replays it.</li>
+<li><b>Outputs:</b> <code>home_count</code> is None while any floor is unsettled. A floor's count is None while that floor is unsettled. An area's count sums its spaces (an area seen by two groups), and a correction of an area's count goes to the chosen space with the others set to 0.</li>
+<li><b>Radars switched off:</b> a radar with <code>headcount = off</code> does not define a region. If it belongs to an aligned group, its observations are still fused into the group's tracks, which the head count receives.</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="advisory">12. Advisory analysis (panel guide)</h2>
+<p class="src">Source: <code>frontend/analysis.js</code>, <code>frontend/panel.js:_computeSpots/_renderGuide/_tidySuggestions</code></p>
+<p>Runs in the browser over the loaded history (the selected range), never on the server, and changes nothing until the user acts.</p>
+<table>
+<tr><th>Step</th><th>Rule</th></tr>
+<tr><td>Dwell grid</td><td>100 mm cells. Each target adds the time to the next frame, capped at 5 s. Exclusions are applied.</td></tr>
+<tr><td>Dwell spots</td><td>Cells with ≥ <code>clamp(span/5760, 3, 30)</code> s form 8-connected groups. A group needs ≥3 cells and ≥10× the cell threshold. The 6 largest are kept, each as a convex hull plus the margin.</td></tr>
+<tr><td>Trail statistics</td><td>Per polygon, with 100 mm edge hysteresis: walk-ins and walk-outs; appear and vanish inside; episodes started by a walk-in vs an appearance; still gaps; edge bounces (out and back within 3 s); detection count; RMS spread.</td></tr>
+<tr><td>Classification</td><td>
+  <ul>
+    <li><b>Pinpoint first:</b> ≥1000 detections within 90 mm RMS is a ghost, whatever the walk-ins. A fan measured 58–63 mm; people sitting 118–481 mm.</li>
+    <li><b>Otherwise:</b> with &lt;3 episode starts, "not enough activity". Walk-in share ≥0.5 is a dwell spot, ≤0.15 a ghost, otherwise mixed.</li>
+  </ul></td></tr>
+<tr><td>Cross-check (aligned radars)</td><td>For each peer whose view contains the spot's centroid with 500 mm margin, compare this radar's visits (detections less than 3 s apart form one visit) with the peer's targets within 600 mm of the polygon, ±1 s. A spot with ≥5 visits that the peer can see into (≥5 visits of its own there) but confirms ≤20% of the time is a ghost of this radar.</td></tr>
+<tr><td>Hold suggestion</td><td>Suggested when there are ≥5 visits, vanish-inside / visits ≥ 0.2, and reappear-inside ≥ 2 × reappear-outside. Max hold = 1.5 × the longest still gap, rounded up to 5 min, within 15 min–4 h.</td></tr>
+<tr><td>Guide: hot spot</td><td>A spot not inside an include zone and not answered yet (keyed by its centroid rounded to 300 mm). Shows facts only: spread, walk-ins, busiest quarter-hour, hours of the day. Answers:
+  <ul>
+    <li>"Something fixed" adds an exclusion (hull + max(margin, 150 mm)).</li>
+    <li>"A place people stay" adds a zone (with a hold if suggested).</li>
+    <li>"Nothing special" stops asking.</li>
+    <li>"Show me" jumps to the busiest quarter-hour.</li>
+  </ul></td></tr>
+<tr><td>Guide: tidy-up</td><td>
+  <ul>
+    <li><b>Exclusion people walk through:</b> walk-ins ≥ max(10, span/7200 s) and walk-outs ≥ walk-ins/2. Aligned radars decide: confirmed &lt;20% is a reflection (no question); 20–60% asks whether to shrink it; ≥60%, or no radar to ask, asks whether to shrink or remove it.</li>
+    <li><b>Empty exclusion:</b> nothing inside in ≥6 days of history.</li>
+    <li><b>Unused include zone:</b> never on in ≥6 days, and not used by any automation, script or scene (HA <code>search/related</code>).</li>
+  </ul>
+  Answers are stored per browser (localStorage).</td></tr>
+<tr><td>Replay views</td><td>The panel previews zones with the same group replay as the server (<code>replayGroup</code>). During replay it draws aligned radars' targets and trails at the cursor and merges their frames into the frame table, because a zone can be turned on by an aligned radar alone.</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="params">13. Parameters</h2>
+<table>
+<tr><th>Name</th><th>Value</th><th>Where</th><th>Meaning</th></tr>
+<tr><td><code>COALESCE_S</code></td><td>0.05 s</td><td>frames</td><td>frame assembly window</td></tr>
+<tr><td><code>reconnect_grace_s</code></td><td>0 (option)</td><td>feed</td><td>ignore targets this long after a radar comes back</td></tr>
+<tr><td><code>DEFAULT_MAX_DISTANCE_MM</code> / FOV</td><td>8000 mm / ±60°</td><td>const</td><td>range when the device reports none; field of view</td></tr>
+<tr><td><code>NOISE_MM</code></td><td>500</td><td>tracker</td><td>jitter plus alignment error in every reach</td></tr>
+<tr><td><code>VMAX_MM_S</code></td><td>2500 mm/s</td><td>tracker</td><td>a brisk walk</td></tr>
+<tr><td><code>MAX_STEP_MM</code> / <code>REVIVE_MM</code></td><td>1500 / 1500</td><td>tracker</td><td>cap on the speed term while seen / when re-finding</td></tr>
+<tr><td><code>MERGE_MM</code> / <code>SPLIT_MM</code></td><td>600 / 1200</td><td>tracker</td><td>same person on two radars / slot drifted off its track</td></tr>
+<tr><td><code>EDGE_MM</code></td><td>600</td><td>tracker</td><td>vanishing this close to a side of the view = left</td></tr>
+<tr><td><code>TRANSIENT_TTL_S</code> / <code>SETTLED_TTL_S</code></td><td>20 s / 12 h</td><td>tracker</td><td>memory of lost tracks</td></tr>
+<tr><td><code>MAX_LOST</code></td><td>32</td><td>tracker</td><td>bound on remembered lost tracks</td></tr>
+<tr><td>zone filters</td><td>per zone</td><td>zones</td><td>on_delay_s, off_delay_s, edge_margin_mm, hold_until_exit, hold_max_s</td></tr>
+<tr><td><code>DOOR_WINDOW_S</code></td><td>30 s</td><td>home</td><td>door-gated passage tolerance</td></tr>
+<tr><td><code>HYSTERESIS_MM</code></td><td>500</td><td>rooms</td><td>a track keeps its room until another radar is this much nearer</td></tr>
+<tr><td><code>FLOOR_TRAVEL_S</code></td><td>3 s</td><td>headcount</td><td>fastest floor change</td></tr>
+<tr><td><code>SETTLE_S</code></td><td>60 s</td><td>headcount</td><td>count unknown until this long after the exit doors closed</td></tr>
+<tr><td><code>LAG_S</code></td><td>45 s</td><td>headcount</td><td>still seen this long after the close: did not leave</td></tr>
+<tr><td><code>REESTABLISH_S</code></td><td>600 s</td><td>headcount</td><td>in doubt and not seen again: left</td></tr>
+<tr><td><code>RECENT_S</code></td><td>120 s</td><td>headcount</td><td>look-back for doubt; gate for explaining tracks during a window</td></tr>
+<tr><td><code>CONFIRM_S</code> / <code>BOOTSTRAP_CONFIRM_S</code></td><td>60 s / 20 s</td><td>headcount</td><td>wait before an unexplained track becomes someone</td></tr>
+<tr><td><code>SEPARATE_MM</code></td><td>1500</td><td>headcount</td><td>closer than this to someone visible: probably their split track</td></tr>
+<tr><td><code>CROSS_WINDOW_S</code></td><td>60 s</td><td>headcount</td><td>a door link is passable this long after the door was used</td></tr>
+<tr><td><code>INTO_UNOBSERVED_S</code></td><td>20 s</td><td>headcount</td><td>lost this close to a door into an unobserved region: went in</td></tr>
+<tr><td><code>UNOBSERVED_ARRIVE_S</code></td><td>600 s</td><td>headcount</td><td>new track out of an unobserved region this long after its exit opened</td></tr>
+<tr><td><code>UNEXPLAINED_SEEN_S</code> / <code>_EXPIRE_S</code></td><td>600 s / 3600 s</td><td>headcount</td><td>confirm a provisional person / give up on it</td></tr>
+<tr><td><code>DIRECTION_S</code></td><td>90 s</td><td>headcount</td><td>inner door used this long before the exit opened: going out</td></tr>
+<tr><td><code>EXIT_NEAR_MM</code> / <code>EXIT_PASS_S</code> / <code>VIRTUAL_EXITS</code></td><td>400 / 10 s / on</td><td>headcount</td><td>a track walking out of the front door counts as the door opening</td></tr>
+<tr><td><code>ESTABLISH_ON_EXIT_FLOOR</code></td><td>True</td><td>headcount</td><td>still seen on the exit floor after LAG_S re-establishes</td></tr>
+<tr><td><code>REFOUND_MM</code> / <code>REFOUND_S</code></td><td>2000 / 30 s</td><td>headcount</td><td>a re-found track keeps its person only nearby / within this long</td></tr>
+<tr><td><code>PORTAL_MM</code></td><td>1200</td><td>headcount</td><td>appearing or vanishing this close to a doorway = through it</td></tr>
+<tr><td><code>STATIC_S</code> / <code>STATIC_MM</code></td><td>90 s / 400</td><td>headcount</td><td>machine track</td></tr>
+<tr><td><code>SPOT_MM</code> / <code>SPOT_FORGET_S</code> / <code>SPOT_APPLY</code></td><td>500 / 6 h / False</td><td>headcount</td><td>still spots (suggestion only)</td></tr>
+<tr><td><code>TICK_S</code></td><td>5 s</td><td>runtime</td><td>head count tick</td></tr>
+<tr><td><code>CONTACT_MIN_S</code></td><td>2 s</td><td>runtime</td><td>a contact must stay open this long to be evidence</td></tr>
+<tr><td><code>EVENT_FRESH_S</code></td><td>30 s</td><td>runtime</td><td>a button press counts only if this recent</td></tr>
+<tr><td><code>BOOTSTRAP_S</code></td><td>3600 s</td><td>runtime</td><td>bootstrap period without saved counts</td></tr>
+<tr><td><code>COVER_MARGIN_MM</code></td><td>500</td><td>runtime</td><td>another radar "looks" at a spot this far inside its view</td></tr>
+<tr><td><code>HOLD_MAX_S</code></td><td>300 s</td><td>runtime</td><td>vacuum hold limit</td></tr>
+<tr><td><code>SEEN_EVERY_S</code> / <code>LOG_KEEP_S</code></td><td>15 s / 3 days</td><td>runtime</td><td>decision log</td></tr>
+<tr><td><code>PINPOINT_MM</code> / <code>PINPOINT_MIN_POINTS</code></td><td>90 / 1000</td><td>analysis.js</td><td>pinpoint ghost</td></tr>
+<tr><td><code>CONFIRM_MM</code> (analysis)</td><td>600</td><td>analysis.js</td><td>a peer's target this close confirms a visit</td></tr>
+</table>
+<p class="small"><code>tools/headcount.py --set NAME=VALUE</code> overrides engine constants in replay, for tuning experiments.</p>
+
+<!-- ================================================================== -->
+<h2 id="edge">14. Edge cases and special handling (test map)</h2>
+<p>Coverage: <span class="cov-y">✔</span> a named unit or integration test exercises it; <span class="cov-p">◐</span> exercised only indirectly, as part of a larger scenario; <span class="cov-n">✘</span> no automated test. Behaviour marked ✘ was tuned and checked only by replaying real household data against a private ground truth (§16). A simplification that touches it can break without any test failing.</p>
+<table class="ec">
+<tr><th>ID</th><th>Situation</th><th>Handling</th><th>Rule</th><th>Tests</th></tr>
+<tr><td colspan="5"><b>Frames and feeds</b></td></tr>
+<tr><td>EC-01</td><td>X and Y arrive as separate updates</td><td>50 ms coalescing</td><td>FR-1</td><td><span class="cov-y">✔</span> test_x_then_y_forms_one_frame, test_x_then_y_does_not_flicker</td></tr>
+<tr><td>EC-02</td><td>Empty slot (0, 0) vs X = 0 on boresight</td><td>Y = 0 means absent</td><td>FR-2</td><td><span class="cov-y">✔</span> test_y_zero_is_absent_but_x_zero_is_present</td></tr>
+<tr><td>EC-03</td><td>Only X changes (unchanged Y is not published)</td><td>latest value of every entity</td><td>FR-1</td><td><span class="cov-y">✔</span> test_x_only_update_still_produces_frame</td></tr>
+<tr><td>EC-04</td><td>Units: cm, in, unitless sensors, range without a unit</td><td>conversion; sibling fallback; remembered unit; read by size</td><td>FR-3, §2.3</td><td><span class="cov-y">✔</span> test_units_are_converted, test_live_units_fall_back_to_siblings, test_unit_remembered_in_entry, test_history_units_survive_unitless_state, test_a_range_without_a_unit_is_read_by_its_size</td></tr>
+<tr><td>EC-05</td><td>Radar unavailable</td><td>frame unavailable; zones unavailable</td><td>FR-3</td><td><span class="cov-y">✔</span> test_unavailable_flags_frame, test_unavailable_radar_makes_zones_unavailable</td></tr>
+<tr><td>EC-06</td><td>Junk after a reconnect</td><td>reconnect grace</td><td>§4</td><td><span class="cov-y">✔</span> test_reconnect_grace</td></tr>
+<tr><td>EC-07</td><td>Firmware exclusion zones do not filter what is reported</td><td>offered for import</td><td>§2.3</td><td><span class="cov-n">✘</span> (UI only)</td></tr>
+<tr><td colspan="5"><b>Tracker</b></td></tr>
+<tr><td>EC-10</td><td>Slot renumbering when a target is dropped</td><td>continue by position, not slot</td><td>§6 step 2/4</td><td><span class="cov-y">✔</span> test_renumbered_slot_keeps_both_people_apart, test_desk_stays_held_while_the_radar_renumbers_and_reuses_slots, test_renumbered_slots_do_not_walk_the_held_person_out, vector test_desk_stays_on_while_the_radar_renumbers_targets</td></tr>
+<tr><td>EC-11</td><td>One person seen by two radars; walking from one view into the other</td><td>merge / hand-over keeps the id</td><td>§6 step 4/7/8</td><td><span class="cov-y">✔</span> test_same_person_seen_by_two_radars_is_one_track_and_survives_handover, test_converging_tracks_merge_and_report_gone</td></tr>
+<tr><td>EC-12</td><td>Two people close together on one radar</td><td>merging only across radars</td><td>§6 step 8</td><td><span class="cov-y">✔</span> test_two_people_close_together_on_one_radar_stay_apart</td></tr>
+<tr><td>EC-13</td><td>A slot jumps &gt; 1.2 m within a multi-radar track</td><td>split</td><td>§6 step 3</td><td><span class="cov-y">✔</span> test_jump_splits_off</td></tr>
+<tr><td>EC-14</td><td>A merge must not leave a phantom hold</td><td>absorbed id in <code>gone</code>, or in <code>dropped</code> if revived</td><td>§6 step 8, §7</td><td><span class="cov-y">✔</span> test_merge_does_not_leave_a_phantom_hold</td></tr>
+<tr><td>EC-15</td><td>A lost person re-found nearby keeps their id</td><td>revive within reach</td><td>§6 step 4</td><td><span class="cov-y">✔</span> test_lost_person_is_refound_near_where_they_vanished</td></tr>
+<tr><td>EC-16</td><td>Vanish mid-room vs at a side, an exit or a transient spot</td><td>settled 12 h vs 20 s</td><td>§6 settled</td><td><span class="cov-y">✔</span> test_where_someone_vanishes_decides_how_long_they_are_held, test_linger_and_transient_spots_reach_the_tracker</td></tr>
+<tr><td>EC-17</td><td>Unbounded lost memory</td><td>MAX_LOST, oldest dropped</td><td>§6 step 6</td><td><span class="cov-y">✔</span> test_lost_memory_is_bounded</td></tr>
+<tr><td colspan="5"><b>Zones and passages</b></td></tr>
+<tr><td>EC-20</td><td>Target in both an exclusion and a zone</td><td>exclusion first</td><td>§4</td><td><span class="cov-y">✔</span> test_exclusion_applies_before_inclusion, test_zone_presence_and_exclusion</td></tr>
+<tr><td>EC-21</td><td>Short ghost blips</td><td>on delay</td><td>§7 step 6</td><td><span class="cov-y">✔</span> test_on_delay_suppresses_short_blip, test_kitchen_ghost_suppressed_by_on_delay, test_kitchen_ghost_legacy_flickers_engine_does_not</td></tr>
+<tr><td>EC-22</td><td>Off delay with no further frames</td><td>timer deadline</td><td>§7 step 6</td><td><span class="cov-y">✔</span> test_off_delay_fires_without_further_frames, test_off_delay_timer</td></tr>
+<tr><td>EC-23</td><td>Jitter across a zone edge</td><td>edge-margin hysteresis</td><td>§7 step 2</td><td><span class="cov-y">✔</span> test_edge_margin_hysteresis</td></tr>
+<tr><td>EC-24</td><td>A still person stops being detected inside a zone</td><td>hold until seen leaving; exit vanish = left; someone new via the exit is not the held person; max hold; expiry respects the off delay</td><td>§7 hold</td><td><span class="cov-y">✔</span> test_hold_* (9 tests), test_hold_until_exit_with_max_hold</td></tr>
+<tr><td>EC-25</td><td>Door-gated passage: the person vanishes before the door shuts</td><td>pending, fires on a door change within 30 s</td><td>§8</td><td><span class="cov-p">◐</span> test_exit_passages_fire_events (door case partially)</td></tr>
+<tr><td>EC-26</td><td>Someone re-found in a doorway, or a merge in a doorway</td><td>not a passage (not born / in gone)</td><td>PS-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td colspan="5"><b>Head count: identity and conservation</b></td></tr>
+<tr><td>EC-40</td><td>A sleeper the radar loses stays counted; walking between floors</td><td>tokens are conserved</td><td>§10</td><td><span class="cov-y">✔</span> test_saturday_morning</td></tr>
+<tr><td>EC-41</td><td>Something moves downstairs for minutes with no door used</td><td>pending → provisional, not counted</td><td>§10.7</td><td><span class="cov-y">✔</span> test_nobody_appears_without_a_door</td></tr>
+<tr><td>EC-42</td><td>Provisional confirmed (walks to another region / 10 min) or expired (1 h)</td><td>HC-PR-1</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-43</td><td>Car pulls into an observed garage</td><td>no inner door used: not a person</td><td>§10.7</td><td><span class="cov-y">✔</span> test_car_in_the_garage_is_not_a_person</td></tr>
+<tr><td>EC-44</td><td>Someone goes to the front door and comes back</td><td>doubt, then re-established</td><td>§10.4</td><td><span class="cov-y">✔</span> test_going_to_the_door_and_back_changes_nothing</td></tr>
+<tr><td>EC-45</td><td>A person who sat still for hours walks down and leaves</td><td>stairs portal identifies them</td><td>§10.2</td><td><span class="cov-y">✔</span> test_someone_who_sat_still_for_hours_and_then_leaves_is_gone</td></tr>
+<tr><td>EC-46</td><td>A blip downstairs must not "wake" a sleeper in a room without a radar</td><td>enclosed rooms are skipped unless patient</td><td>§10.3</td><td><span class="cov-y">✔</span> test_a_ghost_downstairs_does_not_wake_the_sleeper_in_a_room_without_a_radar</td></tr>
+<tr><td>EC-47</td><td>Track splitting next to a person</td><td>pending while within 1.5 m</td><td>§10.2</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-48</td><td>Two radars of neighbouring regions see the same person</td><td>no new person while a doorless neighbour has someone visible</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-49</td><td>The tracker reuses a track id for another person far away, or after they were seen elsewhere</td><td>stale binding: REFOUND_MM / REFOUND_S</td><td>§10.1 step 5, §10.2</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-50</td><td>One-radar reflection in an overlapping group</td><td>unconfirmed → pending</td><td>RT-REF-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-51</td><td>Rooms in one aligned group; doorway flicker</td><td>nearest covering radar, zones' rooms, hysteresis</td><td>§9.2</td><td><span class="cov-y">✔</span> test_rooms_follow_the_nearest_radar_that_sees_the_spot</td></tr>
+<tr><td>EC-52</td><td>Walking from one room into another in one fused track</td><td>hand-over, not re-matching</td><td>§9.2</td><td><span class="cov-y">✔</span> test_walking_out_of_the_bedroom_in_one_track_is_a_handover</td></tr>
+<tr><td>EC-53</td><td>One area seen by two groups</td><td>linked spaces, summed count, correction to one</td><td>§9.1, §11.6</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-54</td><td>Stairwell portal leading up and down</td><td>lost there: stays (unknown which)</td><td>§10.5</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-55</td><td>Floor change faster than physically possible</td><td>FLOOR_TRAVEL_S</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-56</td><td>An unknown (doubt) token cannot reappear inside a region with portals</td><td>must come back through a doorway</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td colspan="5"><b>Head count: exits and doors</b></td></tr>
+<tr><td>EC-60</td><td>A sleeper elsewhere must not explain a new track during a window</td><td>RECENT_S gate; 1 hop</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-61</td><td>Someone still visible on the exit floor after the door closes (radar lag, seeing through the door)</td><td>back after LAG_S</td><td>§10.4</td><td><span class="cov-p">◐</span> test_going_to_the_door_and_back_changes_nothing</td></tr>
+<tr><td>EC-62</td><td>Someone in doubt is never seen again</td><td>left after REESTABLISH_S</td><td>§10.4</td><td><span class="cov-y">✔</span> test_someone_who_sat_still_for_hours_and_then_leaves_is_gone</td></tr>
+<tr><td>EC-63</td><td>Seen outside through the door before it opened, then the door opens</td><td>pending → arrived on re-check</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-64</td><td>Front door contact misses the opening</td><td>virtual exit (outbound only)</td><td>§10.5</td><td><span class="cov-y">✔</span> test_walking_out_of_the_front_door_counts_even_if_its_sensor_misses_it</td></tr>
+<tr><td>EC-65</td><td>Virtual exit while a window is already in use</td><td>extend the window's close</td><td>§10.5</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-66</td><td>Unobserved garage inferred from its two doors (out and back)</td><td>into / out-of rules</td><td>HC-UN-1/2</td><td><span class="cov-y">✔</span> test_saturday_morning_with_an_unobserved_garage</td></tr>
+<tr><td>EC-67</td><td>Fetching something from the garage (the big door never moves)</td><td>moved in and back, no exit</td><td>HC-UN-1</td><td><span class="cov-y">✔</span> test_fetching_something_from_the_garage_is_not_leaving</td></tr>
+<tr><td>EC-68</td><td>Arriving by car: the big door first</td><td>direction "in": nobody doubted, newcomer counted</td><td>HC-UN-3</td><td><span class="cov-y">✔</span> test_coming_down_to_greet_someone_arriving_through_the_garage</td></tr>
+<tr><td>EC-69</td><td>Leaving by car: the inner door first; a blip at the door as it swings</td><td>direction "out": no new person</td><td>HC-UN-3</td><td><span class="cov-y">✔</span> test_leaving_through_the_garage_does_not_count_the_door_as_someone_new</td></tr>
+<tr><td>EC-70</td><td>Two exits on one floor used in opposite directions</td><td>direction None</td><td>§10.4</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-71</td><td>Door connections gate paths (a door link is passable only after use)</td><td>CROSS_WINDOW_S</td><td>§10.3</td><td><span class="cov-p">◐</span> garage scenarios</td></tr>
+<tr><td>EC-72</td><td>Head count sensors unknown during a window; at_least</td><td>§11.6 outputs</td><td>§11.6</td><td><span class="cov-y">✔</span> test_head_count_sensors_follow_the_front_door</td></tr>
+<tr><td>EC-73</td><td>A smart lock's contact says open after the door was locked</td><td>locked = closed; open while locked ignored; unlock re-applies the contact</td><td>§11.2</td><td><span class="cov-y">✔</span> test_a_locked_door_is_closed_whatever_its_contact_says</td></tr>
+<tr><td>EC-74</td><td>A lock configured as an outside door pulses on every change</td><td>exit window on its floor</td><td>§11.2</td><td><span class="cov-n">✘</span> (see the warning in §11.2)</td></tr>
+<tr><td>EC-75</td><td>An exit door open at start-up</td><td>fed open unless locked</td><td>§11.1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td colspan="5"><b>Head count: machines, evidence, vacuums, corrections, restarts</b></td></tr>
+<tr><td>EC-80</td><td>A fan behind a wall, after everyone left</td><td>static track: given back / not a person</td><td>§10.8</td><td><span class="cov-y">✔</span> test_a_fan_behind_the_wall_does_not_keep_someone_home, test_a_still_track_never_becomes_a_new_person</td></tr>
+<tr><td>EC-81</td><td>A seated person tracked continuously but nearly motionless for 90 s</td><td>classed static: their token goes back to its state before the track (kept, not removed). Real sitting spreads 120–500 mm RMS, so this is rare.</td><td>HC-ST-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-82</td><td>A static track starts moving</td><td>a new appearance after moving 400 mm</td><td>HC-ST-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-83</td><td>Switch by hand: moves the unseen person, never adds; does not pull from an enclosed room; someone in the doorway explains it; off moves nobody</td><td>§10.9</td><td>§10.9</td><td><span class="cov-y">✔</span> test_a_switch_puts_the_unseen_person_in_its_room_but_never_adds_one, test_a_switch_does_not_pull_someone_out_of_a_room_without_a_radar, test_someone_in_the_doorway_explains_the_switch</td></tr>
+<tr><td>EC-84</td><td>Switch used by an automation or the app; on-only list; a restored button press</td><td>ignored</td><td>§11.3</td><td><span class="cov-y">✔</span> test_switches_used_by_hand_are_evidence</td></tr>
+<tr><td>EC-85</td><td>Door contact flickering at the edge of the magnet's range</td><td>&lt; 2 s ignored</td><td>§11.3</td><td><span class="cov-y">✔</span> test_a_flickering_door_contact_is_not_evidence</td></tr>
+<tr><td>EC-86</td><td>Robot vacuum cleaning; room unknown at first; room name punctuation</td><td>ignore its room; hold + replay; name key</td><td>§11.4</td><td><span class="cov-y">✔</span> test_a_robot_vacuum_is_not_a_person</td></tr>
+<tr><td>EC-87</td><td>Vacuum never reports a room (HOLD_MAX_S); starts with a person in view</td><td>replay without knowing; tracks lost at the start</td><td>RT-VAC-2/3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-88</td><td>Phantom left over after a restart</td><td>correction removes the longest-unseen first</td><td>HC-CO-1</td><td><span class="cov-y">✔</span> test_a_correction_removes_the_phantom_first</td></tr>
+<tr><td>EC-89</td><td>Nobody home</td><td>removes all, incl. provisional and pending</td><td>HC-CO-2</td><td><span class="cov-y">✔</span> test_nobody_home_clears_everyone</td></tr>
+<tr><td>EC-90</td><td>Restart: counts restored as long-unseen tokens</td><td>seed; bootstrap off</td><td>§11.6</td><td><span class="cov-p">◐</span> seed used in many tests; the store round trip is not tested</td></tr>
+<tr><td>EC-91</td><td>Restart during an exit window</td><td>people in doubt are not saved, so they are lost on restore</td><td>§11.6</td><td><span class="cov-n">✘</span> (known limitation)</td></tr>
+<tr><td>EC-92</td><td>First hour with no saved counts</td><td>bootstrap: 20 s, not provisional</td><td>§11.6</td><td><span class="cov-p">◐</span> scenarios use bootstrap_until</td></tr>
+<tr><td>EC-93</td><td>A radar switched off for the head count</td><td>no region; still fused if aligned</td><td>§11.6</td><td><span class="cov-y">✔</span> test_head_count_leaves_out_radars_switched_off (single radar)</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2 id="invariants">15. Invariants and known limitations</h2>
+<h3>15.1 Invariants</h3>
+<div class="rule"><span class="id">INV-1</span>Counts add up: area counts sum to floor counts, and floor counts to the home count. All are derived from the same counted tokens.</div>
+<div class="rule"><span class="id">INV-2</span>The home count rises only through:
+<ul><li>an arrival during an exit window (re-established afterwards);</li><li>an arrival out of an unobserved region shortly after its exit opened;</li><li>a provisional person confirmed (walked to another region, or seen for 10 minutes);</li><li>a bootstrap person;</li><li>a restore at start-up;</li><li>a correction.</li></ul></div>
+<div class="rule"><span class="id">INV-3</span>The home count falls only through:
+<ul><li>"left" after an exit window or virtual exit;</li><li>a token created by a track that turned out static;</li><li>a correction.</li></ul>
+Between <code>SETTLE_S</code> and re-establishment, people in doubt are temporarily not counted.</div>
+<div class="rule"><span class="id">INV-4</span>Evidence never adds or removes a person. Pending tracks never count. The static filter never removes a person it did not create.</div>
+<div class="rule"><span class="id">INV-5</span>Zone presence and the head count do not influence each other. Vacuum handling, door rules and evidence affect the head count only.</div>
+<div class="rule"><span class="id">INV-6</span>The Python engines and their JavaScript ports produce identical transitions on the test vectors.</div>
+<h3>15.2 Known limitations / not used yet</h3>
+<ul>
+<li>A restart during an exit window drops the people in doubt (EC-91).</li>
+<li>Locks configured as outside doors put their floor in doubt on every lock and unlock (EC-74).</li>
+<li>Stair PIR sensors and bed or presence mats are not used as evidence of floor crossings or occupancy.</li>
+<li>Still spots are not applied automatically (<code>SPOT_APPLY = False</code>). Ghosts must be excluded via the guide.</li>
+<li>Guide answers are stored per browser, not on the server.</li>
+<li>A radar switched off for the head count still contributes tracks to its aligned group.</li>
+<li>Directions are known only for exits of unobserved regions (the garage). The front door's direction is always unknown.</li>
+</ul>
+
+<!-- ================================================================== -->
+<h2 id="verify">16. Verification assets and simplification guidance</h2>
+<table>
+<tr><th>Asset</th><th>What it protects</th></tr>
+<tr><td><code>tests/test_engine.py</code></td><td>Geometry, frame assembly, units, exclusions, delays, hysteresis, grace, holds; recorded fixtures (kitchen ghost, Screek slot lag, busy firmware cycles).</td></tr>
+<tr><td><code>tests/test_tracker.py</code></td><td>Alignment maths, groups, track continuity, merges, splits, re-finding, lost memory.</td></tr>
+<tr><td><code>tests/test_headcount.py</code></td><td>Synthetic household scenarios for the head count engine (§14 EC-40…EC-89).</td></tr>
+<tr><td><code>tests/test_integration.py</code></td><td>Config flows, entities, websocket API, passages, head count sensors, evidence, locks, vacuums, in a real HA test harness.</td></tr>
+<tr><td><code>tests/test_vectors.py</code> + <code>tests/js/*.mjs</code></td><td>The Python and JavaScript engines in lock-step (zone, group, tracked vectors); the frontend analysis (dwell spots, classification, pinpoint, cross-check, door location, registration).</td></tr>
+<tr><td><code>tools/headcount.py</code> (replay + scoring)</td><td>Replays exported history (frames, doors, locks, vacuums, evidence) through the real runtime build and engine. It scores against a ground-truth file: hours wrong, hours above daily bounds, and count changes without an exit. This is the main regression net for the ✘ rows in §14. The data and ground truth are private and not in the repository.</td></tr>
+<tr><td><code>tools/validate.py</code></td><td>Scores one radar against overlapping radars as witnesses.</td></tr>
+</table>
+<h3>16.1 Before simplifying</h3>
+<ol>
+<li><b>Keep the ✔ scenarios green.</b> They encode the behaviours that were each found by tracing a wrong count in real data.</li>
+<li><b>Write a test first for each ✘ rule you touch.</b> The highest-value missing tests:
+  <ul>
+    <li>EC-50, reflections: they removed all hours above the daily bounds.</li>
+    <li>EC-49, reused track ids: a person carried 5 m away.</li>
+    <li>EC-60, the RECENT_S gate.</li>
+    <li>EC-42, provisional confirm and expire.</li>
+    <li>EC-74, lock pulses.</li>
+    <li>EC-87, vacuum timeout.</li>
+  </ul></li>
+<li><b>Re-run the private replay and compare hours wrong before and after.</b> The rules were tuned on those same days, so also check new days.</li>
+<li><b>Candidates for simplification, with their risk:</b>
+  <ul>
+    <li><code>ESTABLISH_ON_EXIT_FLOOR</code> and <code>VIRTUAL_EXITS</code> are switches kept for experiments.</li>
+    <li><code>SPOT_APPLY</code> and the still-spot accumulation are suggestion-only.</li>
+    <li>The engine's still spots duplicate the panel's pinpoint analysis.</li>
+    <li>The <code>door_lock</code> kind versus configuring the lock as an outside door overlap (§11.2).</li>
+    <li>The three-way portal matching in §10.2 is load-bearing: without doorways the same engine was about 38 h wrong on the replayed days.</li>
+  </ul></li>
+</ol>
+
+</main>
+</body>
+</html>
