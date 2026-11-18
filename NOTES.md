@@ -466,3 +466,12 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   the counter radar). So the walk-through suggestion now asks aligned radars that see into the exclusion: < 20%
   confirmed -> a reflection, rightly excluded, no suggestion; 20-60% -> "part of it, probably an edge, is real:
   shrink it?"; >= 60% or no radar to ask -> as before.
+
+## 2026-11-17: replaying what aligned radars saw
+- A zone is evaluated on the group's fused tracks, so an aligned radar can turn it on while this radar sees nothing
+  (a 0.3 s blip from the next room's radar). The replay showed only this radar's dots and frames, so the hit was
+  invisible. Now, in replay, the other radars' targets at the cursor and their trail are drawn in their colour, the
+  frame table merges their frames (labelled by radar, in this radar's coordinates), and zone states at the cursor
+  come from the group preview at that exact time (not from this radar's last frame, which can be hours earlier).
+- Head count log: a decision made from a radar's tracks has a 📡 button that opens that space's radar (its own
+  first; `spaces[].radars` in the head count layout) replaying that moment with a one-minute window.

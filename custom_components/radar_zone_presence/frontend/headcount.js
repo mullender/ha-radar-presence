@@ -71,12 +71,14 @@ svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
 .log h3 { position: sticky; top: 0; margin: 0; padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666);
   background: var(--card-background-color, #fff); border-bottom: 1px solid var(--divider-color, #ddd); display: flex; gap: 8px; }
 .log h3 label { margin-left: auto; text-transform: none; letter-spacing: 0; display: flex; gap: 4px; align-items: center; }
-.row { display: grid; grid-template-columns: 58px 18px minmax(0, 1fr); gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--divider-color, #eee); cursor: pointer; }
+.row { display: grid; grid-template-columns: 58px 18px minmax(0, 1fr) auto; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--divider-color, #eee); cursor: pointer; }
 .row:hover { background: var(--secondary-background-color, #f4f4f4); }
 .row.at { background: rgba(3,169,244,.12); }
 .row.after { opacity: .45; }
 .row .t { color: var(--secondary-text-color, #777); font-variant-numeric: tabular-nums; }
 .row .k { text-align: center; }
+.row button.radar { border: 0; background: none; cursor: pointer; padding: 0 2px; font-size: 13px; opacity: .55; }
+.row button.radar:hover { opacity: 1; }
 .row .why { color: var(--secondary-text-color, #777); }
 .row.ignored { color: var(--secondary-text-color, #888); }
 .empty { padding: 30px; color: var(--secondary-text-color, #777); }
@@ -180,9 +182,11 @@ export class RzpHeadcount extends HTMLElement {
   _index() {
     const d = this.data;
     this.regionArea = {};
+    this.regionRadars = {}; // region -> radars that see it, its own first (to open the radar view)
     this.areas = new Map(); // area id -> {id, name, level, observed, regions}
     for (const sp of d.spaces) {
       this.regionArea[sp.id] = sp.area_id;
+      this.regionRadars[sp.id] = sp.radars || [];
       const a = this.areas.get(sp.area_id) || { id: sp.area_id, name: sp.name, level: sp.level, observed: false, regions: [] };
       a.observed ||= sp.observed;
       a.regions.push(sp.id);
@@ -400,6 +404,17 @@ export class RzpHeadcount extends HTMLElement {
     return `${who}${label} ${this._name(e.region)}${e.detail ? ` · ${name(e.detail)}` : ''}`;
   }
 
+  /** A decision made from what a radar saw: a button that opens that radar's view at that moment. */
+  _radarLink(e) {
+    if (!e.region || ['seen', 'door', 'signal', 'ignored', 'corrected', 'restored'].includes(e.kind)) return '';
+    const radar = this.regionRadars?.[e.region]?.[0];
+    if (!radar) return '';
+    return el('button', {
+      class: 'radar', title: 'Open this radar at this moment, to see the detection',
+      onclick: ev => { ev.stopPropagation(); this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: e.t } })); },
+    }, '📡');
+  }
+
   _renderLog(t) {
     const v = this.timeline.view;
     const lo = v ? v.v0 : this.start, hi = v ? v.v1 : Infinity;
@@ -410,7 +425,7 @@ export class RzpHeadcount extends HTMLElement {
       return el('div', {
         class: `row ${e.kind === 'ignored' ? 'ignored' : ''} ${i === at ? 'at' : ''} ${t !== null && e.t > t ? 'after' : ''}`,
         onclick: () => { this.cursor = e.t; this.render(); },
-      }, el('span', { class: 't' }, fmtTime(e.t)), el('span', { class: 'k' }, icon), el('span', {}, this._describe(e)));
+      }, el('span', { class: 't' }, fmtTime(e.t)), el('span', { class: 'k' }, icon), el('span', {}, this._describe(e)), this._radarLink(e));
     });
     this.logEl.replaceChildren(
       el('h3', {}, 'Decisions', el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings')),

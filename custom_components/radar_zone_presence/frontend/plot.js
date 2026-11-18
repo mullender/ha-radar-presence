@@ -554,6 +554,10 @@ export class RzpPlot extends HTMLElement {
       const o = this._s(p.origin);
       g.append(svg('path', { d: `M${o[0]},${o[1] - 6}L${o[0] + 5},${o[1] + 4}L${o[0] - 5},${o[1] + 4}Z`, fill: p.color }));
       g.append(svg('text', { class: 'zone-label', x: o[0] + 8, y: o[1] - 6, fill: p.color }, document.createTextNode(p.title)));
+      for (const t of p.trail || []) { // what it saw before the replay cursor (see the trail setting)
+        const s = this._s(t);
+        g.append(svg('circle', { cx: s[0], cy: s[1], r: 2.2, fill: p.color, 'fill-opacity': 0.45 }));
+      }
       for (const t of p.targets) {
         const s = this._s(t);
         g.append(svg('rect', { x: s[0] - 5, y: s[1] - 5, width: 10, height: 10, transform: `rotate(45 ${s[0]} ${s[1]})`, fill: 'none', stroke: p.color, 'stroke-width': 2 }));

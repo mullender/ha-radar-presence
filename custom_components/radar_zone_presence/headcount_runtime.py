@@ -92,6 +92,7 @@ class HeadCountRuntime:
         self.spaces: dict[str, SpaceInfo] = {}
         # id(group) -> (rooms splitter when its radars sit in several areas, area -> region id)
         self.region_of_group: dict[int, tuple[Rooms | None, dict[str, str]]] = {}
+        self.space_radars: dict[str, list[str]] = {}  # region id -> radars that see it (its own first), for the panel
         self.floors: dict[int, tuple[str | None, str]] = {}  # level -> (floor id, name)
         self._listeners: list[CALLBACK_TYPE] = []
         self._unsubs: list[CALLBACK_TYPE] = []
@@ -199,6 +200,11 @@ class HeadCountRuntime:
                 area_region.setdefault(area_id, region_id)
                 self._add_space(region_id, area_id, True)
                 region_of_area[area_id] = region_id
+            for area_id, rid in region_of_area.items():
+                own = [f for f, a in feed_area.items() if a == area_id]
+                zoned = [zd.radar_id for zd in group.zone_defs.values()
+                         if zd.radar_id in feed_area and (zd.zone.area_id or feed_area[zd.radar_id]) == area_id]
+                self.space_radars[rid] = list(dict.fromkeys(own + zoned)) or list(feed_area)
             rooms = None
             if len(region_of_area) > 1:
                 rooms = Rooms(
@@ -698,6 +704,7 @@ class HeadCountRuntime:
             "spaces": [
                 {"id": sp.id, "name": sp.name, "area_id": sp.area_id, "level": sp.level, "observed": sp.observed,
                  "count": self.space_count(sp.id), "exits": list(hc.regions[sp.id].exits),
+                 "radars": self.space_radars.get(sp.id, []),
                  "portals": [{"name": p.name, "to": list(p.to)} for p in hc.regions[sp.id].portals]}
                 for sp in self.spaces.values()
             ],

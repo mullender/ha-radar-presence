@@ -99,6 +99,7 @@ td input { width: 70px; text-align: right; }
 .stat b { font-variant-numeric: tabular-nums; }
 .frames { max-height: 220px; overflow: auto; background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); }
 .frames tr.cur { background: rgba(229,57,53,.12); }
+.frames tr.peer { background: rgba(126,87,194,.06); }
 .frames td.in { color: #43a047; font-weight: 600; }
 .frames td.ex { color: ${EXCLUDE_COLOR}; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #323232; color: #fff; padding: 10px 16px; border-radius: 4px; z-index: 10; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
@@ -266,8 +267,20 @@ class RadarZonePresencePanel extends HTMLElement {
     this._seek(t);
   }
 
+  /** From the head count log: this radar's view, replaying the moment `t` (a minute around it). */
+  async _openRadarAt(radarId, t, span = 60) {
+    if (!this.radars?.some(r => r.radar_id === radarId)) return;
+    await this._setTab('radars', { pick: false });
+    const range = this.rangeS;
+    this._rangeFor(String(t));
+    if (radarId !== this.radarId) await this._selectRadar(radarId);
+    else if (this.rangeS !== range || !this.hist || t < this.hist.start) { this._renderHeader(); await this._loadHistory(); }
+    this._showTime(t, span);
+    history.replaceState(null, '', `#radar=${radarId}&t=${t.toFixed(1)}&span=${span}`);
+  }
+
   /** Switch between the radar editor and the head count view. */
-  async _setTab(tab) {
+  async _setTab(tab, { pick = true } = {}) {
     if (tab === this.tab && (tab !== 'headcount' || this.hcEl._active)) return;
     this.tab = tab;
     const hc = tab === 'headcount';
@@ -280,7 +293,7 @@ class RadarZonePresencePanel extends HTMLElement {
     } else {
       this.hcEl.deactivate();
       if (this.radarId) history.replaceState(null, '', `#radar=${this.radarId}`);
-      else if (this.radars.length) await this._selectRadar(this.radars[0].radar_id);
+      else if (pick && this.radars.length) await this._selectRadar(this.radars[0].radar_id);
     }
   }
 
@@ -431,10 +444,38 @@ class RadarZonePresencePanel extends HTMLElement {
         origin: affineApply(T, [0, 0]),
         fov: map(fovPolygon(fov.max_distance_mm, fov.half_angle_deg, 16)),
         zones: peer.cfg.zones.filter(z => z.kind !== 'exclude').map(z => ({ name: z.name, kind: z.kind, polygon: map(z.polygon) })),
-        targets: this.mode === 'replay' ? [] : (peer.live || []).map(([, x, y]) => affineApply(T, [x, y])),
+        ...(this.mode === 'replay' ? this._peerReplay(id, T) : { targets: (peer.live || []).map(([, x, y]) => affineApply(T, [x, y])), trail: [] }),
       });
     }
     return out;
+  }
+
+  /** A peer's frame index at absolute time t (last frame at or before it; -1 if none), and its targets' offsets. */
+  _peerFrames(hist, t) {
+    const n = hist.frame_n.length;
+    if (hist._starts?.length !== n + 1) { // (the history grows while live)
+      const st = new Int32Array(n + 1);
+      for (let i = 0; i < n; i++) st[i + 1] = st[i] + hist.frame_n[i];
+      hist._starts = st;
+    }
+    const ft = hist.frame_t, tRel = t - hist.start;
+    let lo = 0, hi = n - 1, i = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (ft[mid] <= tRel) { i = mid; lo = mid + 1; } else hi = mid - 1; }
+    return { i, starts: hist._starts };
+  }
+
+  /** What an aligned radar saw at the replay cursor (in this radar's frame): its targets now and its trail. */
+  _peerReplay(id, T) {
+    const hist = this.peerHist?.get(id);
+    if (!hist || this.cursor == null) return { targets: [], trail: [] };
+    const { i, starts } = this._peerFrames(hist, this.cursor);
+    const at = k => affineApply(T, [hist.x[k], hist.y[k]]);
+    const targets = [], trail = [];
+    if (i >= 0 && this.cursor - hist.start - hist.frame_t[i] < 2) for (let k = starts[i]; k < starts[i + 1]; k++) targets.push(at(k));
+    for (let j = i; j >= 0 && hist.frame_t[j] >= this.cursor - hist.start - this.trailSeconds && trail.length < 4000; j--) {
+      for (let k = starts[j]; k < starts[j + 1]; k++) trail.push(at(k));
+    }
+    return { targets, trail };
   }
 
   _subscribeLive() {
@@ -772,9 +813,23 @@ class RadarZonePresencePanel extends HTMLElement {
         }
       }
       if (tRel - hist.frame_t[i] < 2) targets = this._targetsOfFrame(i);
-      if (this.preview?.perFrame) for (const [k, arr] of Object.entries(this.preview.perFrame)) states[k] = !!arr[i];
     }
+    // Zone states at the cursor, from the whole group (an aligned radar may be the one that saw someone).
+    for (const k of Object.keys(this.preview?.summary || {})) states[k] = this._zoneOnAt(k, this.cursor);
     return { trails, targets, states, frame: i };
+  }
+
+  /** Was this zone (or 'presence') on at absolute time t in the replay preview? */
+  _zoneOnAt(key, t) {
+    const iv = this.preview?.summary?.[key]?.intervals || [];
+    let lo = 0, hi = iv.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (iv[mid][1] <= t) lo = mid + 1;
+      else if (iv[mid][0] > t) hi = mid - 1;
+      else return true;
+    }
+    return false;
   }
 
   _seek(t) {
@@ -1100,6 +1155,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hcEl = document.createElement('rzp-headcount');
     this.hcEl.hass = this._hass;
     this.hcEl.style.display = 'none';
+    this.hcEl.addEventListener('open-radar', e => this._openRadarAt(e.detail.radar, e.detail.t));
     root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl));
 
     this.plot.addEventListener('zones-change', e => {
@@ -2218,29 +2274,55 @@ class RadarZonePresencePanel extends HTMLElement {
       box.replaceChildren(this.showFrames ? el('div', { class: 'help', style: { padding: '8px' } }, 'Click the timeline to replay; frames around the cursor show here.') : '');
       return;
     }
-    const tRel = this.cursor - this.hist.start;
-    const i = this._frameAt(tRel);
+    const i = this._frameAt(this.cursor - this.hist.start);
     const inc = this.zones.filter(z => z.kind !== 'exclude' && !validatePolygon(z.polygon));
     const exc = this.zones.filter(z => z.kind === 'exclude');
-    const rows = [];
-    for (let j = Math.max(0, i - 12); j <= Math.min(this.hist.frame_t.length - 1, i + 6); j++) {
-      const t = this.hist.start + this.hist.frame_t[j];
-      const tg = this._targetsOfFrame(j);
-      const states = inc.map(z => (this.preview?.perFrame?.[z.id]?.[j] ? 'on' : 'off'));
-      if (!tg.length) {
-        rows.push(el('tr', { class: j === i ? 'cur' : '', onclick: () => this._seek(t) }, el('td', {}, fmtTime(t, true, true)), el('td', {}, '—'), el('td', {}, ''), el('td', {}, ''),
-          inc.map((z, k) => el('td', {}, states[k]))));
+    // This radar's frames around the cursor, and the aligned radars' frames with someone in them (in this frame):
+    // they are fused with this radar's, so they can turn its zones on too.
+    const frames = []; // {t, own, j?, targets: [[label, color, x, y, excluded]]}
+    for (let j = Math.max(0, i - 40); j <= Math.min(this.hist.frame_t.length - 1, i + 40); j++) {
+      frames.push({ t: this.hist.start + this.hist.frame_t[j], own: true, j,
+        targets: this._targetsOfFrame(j).map(([slot, x, y]) => [`T${slot}`, slotColor(slot), x, y, exc.some(z => pointInPolygon(x, y, z.polygon))]) });
+    }
+    const overlays = this._peerOverlays();
+    [...(this.peerHist || new Map()).keys()].filter(id => this._peerTransforms().has(id)).forEach((id, n) => {
+      const hist = this.peerHist.get(id), peer = this.peers.get(id), T = this._peerTransforms().get(id);
+      if (!peer || !T) return;
+      const name = peer.title.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '');
+      const color = overlays.find(o => o.title === name)?.color || '#7e57c2';
+      const pexc = peer.cfg.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon));
+      const { i: pi, starts } = this._peerFrames(hist, this.cursor);
+      for (let j = Math.max(0, pi - 40); j <= Math.min(hist.frame_t.length - 1, pi + 40); j++) {
+        if (!hist.frame_n[j]) continue;
+        const targets = [];
+        for (let k = starts[j]; k < starts[j + 1]; k++) {
+          const [x, y] = affineApply(T, [hist.x[k], hist.y[k]]);
+          targets.push([`${name} T${hist.slot[k]}`, color, x, y, pexc.some(z => pointInPolygon(hist.x[k], hist.y[k], z.polygon))]);
+        }
+        frames.push({ t: hist.start + hist.frame_t[j], own: false, targets });
       }
-      tg.forEach(([slot, x, y], n) => {
-        const excluded = exc.some(z => pointInPolygon(x, y, z.polygon));
-        rows.push(el('tr', { class: j === i ? 'cur' : '', onclick: () => this._seek(t) },
-          el('td', {}, n === 0 ? fmtTime(t, true, true) : ''),
-          el('td', { style: { color: slotColor(slot) } }, `T${slot}${excluded ? ' (excl)' : ''}`),
+    });
+    frames.sort((p, q) => p.t - q.t || q.own - p.own);
+    let at = -1;
+    for (let k = 0; k < frames.length; k++) if (frames[k].t <= this.cursor + 1e-6) at = k;
+    const rows = [];
+    for (let k = Math.max(0, at - 12); k <= Math.min(frames.length - 1, at + 6); k++) {
+      const f = frames[k];
+      const states = inc.map(z => (this._zoneOnAt(z.id, f.t) ? 'on' : 'off'));
+      const cls = k === at ? 'cur' : f.own ? '' : 'peer';
+      if (!f.targets.length) {
+        rows.push(el('tr', { class: cls, onclick: () => this._seek(f.t) }, el('td', {}, fmtTime(f.t, true, true)), el('td', {}, '—'), el('td', {}, ''), el('td', {}, ''),
+          inc.map((z, n) => el('td', {}, states[n]))));
+      }
+      f.targets.forEach(([label, color, x, y, excluded], n) => {
+        rows.push(el('tr', { class: cls, onclick: () => this._seek(f.t) },
+          el('td', {}, n === 0 ? fmtTime(f.t, true, true) : ''),
+          el('td', { style: { color } }, `${label}${excluded ? ' (excl)' : ''}`),
           el('td', {}, this.units.fmtLong(x)),
           el('td', {}, this.units.fmtLong(y)),
-          inc.map((z, k) => {
+          inc.map((z, m) => {
             const inside = !excluded && pointInPolygon(x, y, z.polygon);
-            return el('td', { class: excluded ? 'ex' : inside ? 'in' : '' }, `${inside ? 'in' : '·'} / ${states[k]}`);
+            return el('td', { class: excluded ? 'ex' : inside ? 'in' : '' }, `${inside ? 'in' : '·'} / ${states[m]}`);
           })));
       });
     }
