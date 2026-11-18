@@ -1799,17 +1799,18 @@ class RadarZonePresencePanel extends HTMLElement {
     const key = `${z.id}:${kind}`;
     const remove = () => { this._deleteZone(z.id); this._toast(`Removed “${z.name}”: press Save to keep it that way.`); };
     const text = {
-      walked: `Trails walked into “${z.name}” ${item.walkIn} times in this range. If people really are there (not behind a wall or glass), this exclusion hides them: shrink or remove it.`,
+      walked: `Trails walked into “${z.name}” ${item.walkIn} times in this range${item.seen ? `, and ${item.seen.name} saw someone there ${Math.round(item.share * 100)}% of those times` : ''}. If people really are there (not behind a wall or glass), this exclusion hides them: shrink or remove it.`,
+      walkedPart: `Trails walked into “${z.name}” ${item.walkIn} times in this range. ${item.seen?.name} saw someone there only ${Math.round(item.share * 100)}% of those times: most of it is rightly excluded (a reflection), but part of it, probably an edge, is real people. Shrink it?`,
       empty: `Nothing was seen inside “${z.name}” in the last ${item.days} days. If what it hid is gone, it can go. (A heater off for the season is not gone.)`,
       unused: `Nobody was in “${z.name}” in the last ${item.days} days, and no automation, script or scene uses ${item.entity}.`,
     }[kind];
     return [
-      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, kind === 'walked' ? '🚶 An exclusion people walk through?' : '🧹 Still needed?', more),
+      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, kind.startsWith('walked') ? '🚶 An exclusion people walk through?' : '🧹 Still needed?', more),
       el('div', { class: 'help', style: { marginBottom: '8px' } }, text),
       el('div', { class: 'actions' },
-        kind === 'walked' ? el('button', { class: 'btn', onclick: () => this._select(z.id, null) }, 'Edit it') : '',
-        el('button', { class: 'btn', onclick: remove }, 'Remove it'),
-        el('button', { class: 'btn', title: 'Stop suggesting this', onclick: () => answer(key, 'keep') }, kind === 'walked' ? 'That is intended' : 'Keep it')),
+        kind.startsWith('walked') ? el('button', { class: 'btn', onclick: () => this._select(z.id, null) }, 'Edit it') : '',
+        kind === 'walkedPart' ? '' : el('button', { class: 'btn', onclick: remove }, 'Remove it'),
+        el('button', { class: 'btn', title: 'Stop suggesting this', onclick: () => answer(key, 'keep') }, kind.startsWith('walked') ? 'That is intended' : 'Keep it')),
     ];
   }
 
@@ -1819,10 +1820,18 @@ class RadarZonePresencePanel extends HTMLElement {
     const span = this.hist.end - this.hist.start, days = Math.floor(span / 86400 + 0.1);
     const excl = this.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon));
     const out = [];
+    const peers = this._crossPeers();
     for (const z of excl) {
-      const st = trailStats(this.hist, z.polygon, { exclusions: excl.filter(q => q !== z) });
-      if (st.walkIn >= Math.max(10, span / 7200) && st.walkOut >= st.walkIn / 2) out.push({ z, kind: 'walked', walkIn: st.walkIn });
-      else if (!st.points && days >= 6) out.push({ z, kind: 'empty', days });
+      const others = excl.filter(q => q !== z);
+      const st = trailStats(this.hist, z.polygon, { exclusions: others });
+      if (st.walkIn >= Math.max(10, span / 7200) && st.walkOut >= st.walkIn / 2) {
+        // An aligned radar that sees into it decides: trails it does not see are a reflection (rightly excluded).
+        const seen = (peers.length ? crossCheck(this.hist, z.polygon, peers, { exclusions: others }) : [])
+          .filter(c => c.visits >= 5).sort((a, b) => b.confirmed / b.visits - a.confirmed / a.visits)[0];
+        const share = seen ? seen.confirmed / seen.visits : null;
+        if (share === null || share >= 0.6) out.push({ z, kind: 'walked', walkIn: st.walkIn, seen, share });
+        else if (share >= 0.2) out.push({ z, kind: 'walkedPart', walkIn: st.walkIn, seen, share });
+      } else if (!st.points && days >= 6) out.push({ z, kind: 'empty', days });
     }
     if (days >= 6) {
       for (const z of this.zones.filter(q => q.kind === 'include')) {

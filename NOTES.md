@@ -460,3 +460,9 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   per browser (localStorage `rzp.guide.<radar>`).
 - On real data the walk-through check found an exclusion drawn for "the neighbors" whose activity followed the
   household exactly (busy when home, silent while away): it hid the residents.
+- Then the aligned radars showed it was mostly a reflection: of ~2,900 detections in the strip, 47 came while no
+  other radar saw anyone; the rest while someone stood at the counter on the other side, which the radar also saw
+  (a mirror image off a hard surface). Only the strip's edge nearest the radar was real people (58-97% confirmed by
+  the counter radar). So the walk-through suggestion now asks aligned radars that see into the exclusion: < 20%
+  confirmed -> a reflection, rightly excluded, no suggestion; 20-60% -> "part of it, probably an edge, is real:
+  shrink it?"; >= 60% or no radar to ask -> as before.
