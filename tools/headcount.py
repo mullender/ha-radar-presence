@@ -59,6 +59,7 @@ def main() -> None:
     ap.add_argument("--bootstrap-h", type=float, default=2.0, help="hours at the start where new people need no door")
     ap.add_argument("--portals", default="{}", help='JSON: area -> {exit zone name: area it leads to, or "outside"}')
     ap.add_argument("--extra-zones", default="{}", help="JSON: radar title suffix -> [zone dicts] added to its config (try zones before drawing them)")
+    ap.add_argument("--spots", type=float, metavar="MIN_S", help="at the end, list spots where tracks kept standing still this long in total (exclusion suggestions)")
     ap.add_argument("--truth", type=Path, help="ground truth JSON (exact counts, upper bounds) to score against")
     ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
     ap.add_argument("--set", nargs="*", default=[], help="override engine constants, e.g. VIRTUAL_EXITS=0 LAG_S=60")
@@ -300,6 +301,10 @@ def main() -> None:
 
     if timeline:
         timeline.append((tick if tick is not None else timeline[-1][0], *timeline[-1][1:]))
+    if a.spots is not None:
+        for region, spots in sorted(hc.still_spots(a.spots).items()):
+            for x, y, secs in sorted(spots, key=lambda sp: -sp[2]):
+                print(f"SPOT {region}  ({x:.0f}, {y:.0f})  still {secs / 60:.0f} min")
     if a.truth:
         exits_all = {e for es in exits.values() for e in es}
         door_times = [(t, s) for e, rows in doors.items() if e in exits_all for t, s in rows]

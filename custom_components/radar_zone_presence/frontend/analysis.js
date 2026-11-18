@@ -231,7 +231,9 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
     episodes: 0, startWalk: 0, startAppear: 0, endWalk: 0, endOther: 0,
     reappearIn: 0, reappearOut: 0, stillGaps: [],
     bounces: 0, edgeBounces: new Array(poly.length).fill(0), // out and back in within BOUNCE_S
+    points: 0, spread: null, // detections inside, and their RMS distance from their centre (mm)
   };
+  let sx = 0, sy = 0, sxx = 0, syy = 0;
   const lastOut = new Map(); // slot -> {t, edge}
   let prev = new Map(); // slot -> inside
   let held = 0;
@@ -244,6 +246,7 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
     for (const [slot, x, y] of targets) {
       const was = prev.get(slot);
       let ins = pointInPolygon(x, y, poly);
+      if (ins) { s.points++; sx += x; sy += y; sxx += x * x; syy += y * y; }
       if (!ins && was && hysteresis > 0) ins = signedDistance(x, y, poly) > -hysteresis;
       cur.set(slot, ins);
       if (was === undefined) {
@@ -277,14 +280,27 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
     }
     occupied = occ;
   }, window);
+  if (s.points) {
+    const mx = sx / s.points, my = sy / s.points;
+    s.spread = Math.sqrt(Math.max(0, sxx / s.points - mx * mx + syy / s.points - my * my));
+  }
   return s;
 }
+
+// A fan or heater (even behind a wall) is a fixed point: all its detections fall within radar jitter, ~6 cm RMS.
+// Someone sitting still shifts and gestures: 12-50 cm in real homes. People walking past it into its polygon
+// make the walk-in share useless there, so this decides first.
+const PINPOINT_MM = 90;
+const PINPOINT_MIN_POINTS = 1000;
 
 /**
  * Real dwell spot vs ghost. People walk into a spot before they sit still in
  * it; a ghost (plant, fan, reflection) appears and vanishes in place.
  */
 export function classify(stats) {
+  if (stats.points >= PINPOINT_MIN_POINTS && stats.spread !== null && stats.spread <= PINPOINT_MM) {
+    return { kind: 'ghost', label: 'Likely ghost', share: null, pinpoint: true };
+  }
   const starts = stats.startWalk + stats.startAppear;
   if (starts < 3) return { kind: 'unknown', label: 'Not enough activity', share: null };
   const share = stats.startWalk / starts;

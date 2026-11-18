@@ -29,7 +29,8 @@ function personTrack(visits, sitS, vanishEvery = 2) {
     for (let s = 0; s < steps; s++) {
       // Sitting still: the radar sometimes loses the target for a while.
       const lost = v % vanishEvery === 0 && s > steps / 3 && s < (2 * steps) / 3;
-      out.push(lost ? null : [-1500 + rnd() * 150, 3000 + rnd() * 150]);
+      // (A seated person spreads 12-50 cm RMS in real data: ±20 cm here.)
+      out.push(lost ? null : [-1500 + rnd() * 400, 3000 + rnd() * 400]);
     }
     walk([-1500, 3000], [2000, 500]);
     for (let s = 0; s < 60; s++) out.push(null); // out of the room
@@ -220,4 +221,24 @@ test('cross-check: a spot another radar sees into but never confirms is a ghost 
   assert.equal(crossGhost([e]), null);
   // A peer whose view does not cover the spot is skipped.
   assert.deepEqual(crossCheck(pack(own), spot, [{ ...peer, T: [[1, 0, 0], [0, 1, 9000]] }]), []);
+});
+
+/** A fan behind a wall: hours of detections within radar jitter at one point, people walking past through it. */
+test('a pinpoint spot is a ghost, even with people walking through it', () => {
+  seed = 11;
+  const fan = [];
+  for (let i = 0; i < 4000; i++) fan.push([-280 + rnd() * 150, 3170 + rnd() * 150]);
+  const passer = [];
+  for (let v = 0; v < 5; v++) {
+    for (let k = 0; k <= 20; k++) passer.push([-2000 + 200 * k, 3100]); // walks right through it
+    for (let s = 0; s < 600; s++) passer.push(null);
+  }
+  const hist = pack(framesOf([fan, passer]));
+  const [spot] = findDwellSpots(hist, { minCellS: 3 });
+  const stats = trailStats(hist, offsetConvex(spot.hull, 150));
+  assert.ok(stats.walkIn >= 5 && stats.spread < 90, JSON.stringify({ walkIn: stats.walkIn, spread: stats.spread }));
+  assert.equal(classify(stats).kind, 'ghost');
+  assert.ok(classify(stats).pinpoint);
+  // Too few detections to tell: the walk-in rule decides.
+  assert.notEqual(classify({ ...stats, points: 500 }).pinpoint, true);
 });

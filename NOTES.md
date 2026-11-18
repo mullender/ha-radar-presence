@@ -441,3 +441,14 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   room ignored. Log entries of the discarded branch are dropped (door/signal entries kept).
 - Replay tool: `--door-locks '{contact: lock}'` and `--vacuums '{vacuum: room sensor}'` (rows in --doors); for
   the vacuum it looks ahead to the room it reports next, which is what the runtime ends up with.
+
+## 2026-11-17: ghost spots by how tight they are
+- An empty house for a day and a half: the only dwell spot any radar found was a heater fan seen through a wall.
+  The walk-in rule got it wrong both ways: "not enough activity" when nobody was home (an hour-long run is one
+  episode, two runs), "dwell spot" when people were home (walking past, they step into its polygon).
+- What separates it is the point cloud. Fan: RMS spread 58-63 mm, ~77,000 detections/m². 24 real spots (desks,
+  beds, couch, kitchen) over a day: 118-481 mm, 2,200-10,700 /m². So: >= 1000 detections within 90 mm RMS is a
+  ghost, whatever the walk-ins (`classify`, from `trailStats().points/spread`). The test desk's jitter was
+  widened to real-world values (it was ±75 mm, tighter than anyone in the data).
+- Engine still_spots (only suggestions, SPOT_APPLY off) forget a spot 6 h after it was last active; the panel's
+  prompt uses the frontend analysis over the loaded history instead. `tools/headcount.py --spots MIN_S` lists them.

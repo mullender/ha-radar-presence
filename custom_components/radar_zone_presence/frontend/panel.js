@@ -1731,7 +1731,9 @@ class RadarZonePresencePanel extends HTMLElement {
     box.replaceChildren(
       el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, '💡 Something here moves, but nobody walks to it'),
       el('div', { class: 'help', style: { marginBottom: '8px' } },
-        `Spot ${sp.n}, ${this.units.fmtLong(Math.hypot(...sp.centroid))} away: the radar sees motion here for ${fmtDuration(sp.dwell)}, but it appears and vanishes in place instead of someone walking in and out. It could be a plant, a heater or fan (even behind a wall), or a reflection. Exclude it?`),
+        `Spot ${sp.n}, ${this.units.fmtLong(Math.hypot(...sp.centroid))} away: the radar sees motion here for ${fmtDuration(sp.dwell)}, but ${sp.cls.pinpoint
+          ? `all of it within ${this.units.fmtLong(sp.stats.spread)} of one point, tighter than anyone sitting still`
+          : 'it appears and vanishes in place instead of someone walking in and out'}. It could be a plant, a heater or fan (even behind a wall), or a reflection. Exclude it?`),
       el('div', { class: 'actions' },
         el('button', { class: 'btn primary', onclick: () => {
           const poly = offsetConvex(sp.hull, Math.max(this._margin(), 150));
@@ -1790,7 +1792,7 @@ class RadarZonePresencePanel extends HTMLElement {
           el('button', { class: sp.cls.kind === 'ghost' ? 'btn primary' : 'btn', onclick: () => create('exclude') }, '+ Exclusion')));
     });
     box.replaceChildren(head,
-      el('div', { class: 'help' }, `Where targets dwelt${this.brush ? ' in the trimmed range' : ''}. A real spot (desk, chair) has trails walking in and out; a ghost (plant, fan, reflection) appears and vanishes in place.`),
+      el('div', { class: 'help' }, `Where targets dwelt${this.brush ? ' in the trimmed range' : ''}. A real spot (desk, chair) has trails walking in and out; a ghost (plant, fan, reflection) appears and vanishes in place, or stays within a few centimetres of one point.`),
       el('div', { class: 'form', style: { margin: '8px 0' } },
         el('label', {}, `Margin (${u.label})`),
         this._marginInput(() => { this._computeSpots(); this._renderSpots(); this._updatePlot(); })),
