@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold, crossCheck, crossGhost,
+  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold, crossCheck, crossGhost, spotTimes,
 } from '../../custom_components/radar_zone_presence/frontend/analysis.js';
 import { polygonArea, pointInPolygon } from '../../custom_components/radar_zone_presence/frontend/engine.js';
 
@@ -241,4 +241,15 @@ test('a pinpoint spot is a ghost, even with people walking through it', () => {
   assert.ok(classify(stats).pinpoint);
   // Too few detections to tell: the walk-in rule decides.
   assert.notEqual(classify({ ...stats, points: 500 }).pinpoint, true);
+});
+
+test('spotTimes: the busiest quarter hour and how many hours of the day', () => {
+  const frames = [];
+  for (let t = 0; t < 7200; t += 2) frames.push([t, t >= 3600 && t < 4500 ? [[1, 0, 1000]] : t % 600 === 0 ? [[1, 0, 1000]] : []]);
+  const hist = { ...pack(frames), start: Date.UTC(2026, 0, 1, 12) / 1000 };
+  const square = [[-200, 800], [200, 800], [200, 1200], [-200, 1200]];
+  const { peak, hours } = spotTimes(hist, square);
+  assert.equal(peak, 3600 + 450);
+  assert.equal(hours, 2);
+  assert.equal(spotTimes(hist, [[5000, 5000], [5100, 5000], [5100, 5100]]).peak, null);
 });

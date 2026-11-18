@@ -287,6 +287,23 @@ export function trailStats(hist, poly, { exclusions = [], window, hysteresis = 1
   return s;
 }
 
+/**
+ * When targets were inside `poly`: the middle of its busiest `bin` seconds (frame time, like hist.frame_t) and
+ * in how many different hours of the day. For "show me" and for telling a morning heater from a desk.
+ */
+export function spotTimes(hist, poly, { exclusions = [], window, bin = 900 } = {}) {
+  const bins = new Map(), hours = new Set();
+  forEachFrame(hist, exclusions, (i, t, targets) => {
+    if (!targets.some(([, x, y]) => pointInPolygon(x, y, poly))) return;
+    const b = Math.floor(t / bin);
+    bins.set(b, (bins.get(b) || 0) + 1);
+    hours.add(new Date((hist.start + t) * 1000).getHours());
+  }, window);
+  let peak = null, best = 0;
+  for (const [b, n] of bins) if (n > best) { best = n; peak = (b + 0.5) * bin; }
+  return { peak, hours: hours.size };
+}
+
 // A fan or heater (even behind a wall) is a fixed point: all its detections fall within radar jitter, ~6 cm RMS.
 // Someone sitting still shifts and gestures: 12-50 cm in real homes. People walking past it into its polygon
 // make the walk-in share useless there, so this decides first.

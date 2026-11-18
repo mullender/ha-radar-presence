@@ -8,7 +8,7 @@ import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine
 import { replayGroup } from './tracker.js';
 import {
   classify, crossCheck, crossGhost, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
-  placeExit, registerRigid, suggestHold, suggestMaxHold, trailStats, viewToMatch,
+  placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
   EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, affineApply, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
@@ -69,7 +69,7 @@ rzp-plot { flex: 1; min-height: 300px; }
 .section { padding: 10px 12px; border-bottom: 1px solid var(--divider-color, #ddd); }
 .section h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666); display: flex; align-items: center; }
 .section h3 .grow { flex: 1; }
-.ghost-prompt.section { background: #fff8e1; border-left: 3px solid #f9a825; }
+.guide.section { background: #fff8e1; border-left: 3px solid #f9a825; }
 .zone-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 6px; border-radius: 6px; cursor: pointer; }
 .zone-row:hover { background: var(--secondary-background-color, #f2f2f2); }
 .zone-row.sel { background: rgba(3,169,244,.12); outline: 1px solid var(--primary-color, #03a9f4); }
@@ -1426,7 +1426,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'actions' },
         el('button', { class: 'btn', title: 'Download these zones (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
         el('button', { class: 'btn', title: 'Load zones from an exported JSON file. Zones with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
-    s.replaceChildren(el('div', { class: 'ghost-prompt' }), sensor, zonesSec, this._firmwareSection(), this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
+    s.replaceChildren(el('div', { class: 'guide' }), sensor, zonesSec, this._firmwareSection(), this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
     this._renderLiveBadges();
     this._renderSideStats();
     this._renderSpots();
@@ -1666,7 +1666,8 @@ class RadarZonePresencePanel extends HTMLElement {
       const cross = peers.length ? crossCheck(this.hist, polygon, peers, { exclusions, window }) : [];
       const ghostBy = crossGhost(cross);
       const cls = ghostBy ? { ...classify(stats), kind: 'ghost', label: 'Likely ghost' } : classify(stats);
-      return { ...sp, n: i + 1, polygon, stats, cls, hold: !ghostBy && suggestHold(stats), covered, cross, ghostBy };
+      const times = spotTimes(this.hist, polygon, { exclusions, window });
+      return { ...sp, n: i + 1, polygon, stats, cls, times, hold: !ghostBy && suggestHold(stats), covered, cross, ghostBy };
     });
   }
 
@@ -1717,40 +1718,130 @@ class RadarZonePresencePanel extends HTMLElement {
     ].filter(Boolean).join(' · ');
   }
 
-  /** Guided discovery: a spot that looks like a machine (motion, but nobody ever walks in or out) gets a question. */
-  _renderGhostPrompt() {
-    const box = this.side?.querySelector('.ghost-prompt');
+  /** A dwell spot as a zone of `kind` (include, linger, exclude), with an edge margin; holds when people go still there. */
+  _spotToZone(sp, kind) {
+    const poly = offsetConvex(sp.hull, kind === 'exclude' ? Math.max(this._margin(), 150) : this._margin());
+    if (!poly) { this._toast('Margin too negative: the spot collapses. Use a smaller inward margin.', true); return false; }
+    const hold = kind === 'include' && sp.hold;
+    this.hoverSpot = null;
+    const maxHold = suggestMaxHold(sp.stats);
+    // Edge margin: without it, position jitter at the edge reads as walking out and back in.
+    const name = { exclude: `Ghost ${sp.n}`, linger: `Linger ${sp.n}` }[kind] || `Spot ${sp.n}`;
+    this._addZone(poly, kind, name, hold ? { hold_until_exit: true, hold_max_s: maxHold, edge_margin_mm: 150 } : {});
+    if (hold) this._toast(`People go still in this spot: "Stay occupied until seen leaving" is on (max ${Math.round(maxHold / 60)} min).`);
+    else this._toast(`Added ${kind === 'exclude' ? 'an exclusion' : 'a zone'}: press Save to keep it.`);
+    return true;
+  }
+
+  _spotKey(sp) { return `${Math.round(sp.centroid[0] / 300)},${Math.round(sp.centroid[1] / 300)}`; }
+
+  /** Answers to "what is here?" for this radar's hot spots, and tidy-up suggestions waved off: {key: answer}. */
+  _guideAnswers() {
+    const store = `rzp.guide.${this.radarId}`;
+    const answers = JSON.parse(localStorage.getItem(store) || '{}');
+    for (const k of JSON.parse(localStorage.getItem(`rzp.notGhost.${this.radarId}`) || '[]')) answers[k] ??= 'people'; // (before)
+    return { answers, save: () => localStorage.setItem(store, JSON.stringify(answers)) };
+  }
+
+  /**
+   * Guided setup, one question at a time. First new hot spots (where targets dwell, not in a zone yet): the facts,
+   * and "what is here?" (we do not decide machine or person; the answer picks the zone). Then zones that may no
+   * longer be needed: exclusions people walk through, exclusions nothing was seen in for a week, zones nobody was
+   * in for a week that no automation uses.
+   */
+  _renderGuide() {
+    const box = this.side?.querySelector('.guide');
     if (!box) return;
-    const key = sp => `${Math.round(sp.centroid[0] / 300)},${Math.round(sp.centroid[1] / 300)}`;
-    const store = `rzp.notGhost.${this.radarId}`;
-    const dismissed = new Set(JSON.parse(localStorage.getItem(store) || '[]'));
-    const i = (this.spots || []).findIndex(sp => sp.cls.kind === 'ghost' && !dismissed.has(key(sp)));
-    if (i < 0) { box.replaceChildren(); box.className = 'ghost-prompt'; return; }
-    const sp = this.spots[i];
-    box.className = 'ghost-prompt section';
-    box.replaceChildren(
-      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, '💡 Something here moves, but nobody walks to it'),
-      el('div', { class: 'help', style: { marginBottom: '8px' } },
-        `Spot ${sp.n}, ${this.units.fmtLong(Math.hypot(...sp.centroid))} away: the radar sees motion here for ${fmtDuration(sp.dwell)}, but ${sp.cls.pinpoint
-          ? `all of it within ${this.units.fmtLong(sp.stats.spread)} of one point, tighter than anyone sitting still`
-          : 'it appears and vanishes in place instead of someone walking in and out'}. It could be a plant, a heater or fan (even behind a wall), or a reflection. Exclude it?`),
+    const { answers, save } = this._guideAnswers();
+    const items = [
+      ...(this.spots || []).filter(sp => !sp.covered && !answers[this._spotKey(sp)]).map(sp => ({ spot: sp })),
+      ...this._tidySuggestions().filter(s => !answers[`${s.z.id}:${s.kind}`]),
+    ];
+    if (!items.length) { box.replaceChildren(); box.className = 'guide'; return; }
+    const item = items[0];
+    const more = items.length > 1 ? el('span', { class: 'help', style: { fontWeight: 400 } }, ` · ${items.length - 1} more`) : '';
+    const answer = (key, value) => { answers[key] = value; save(); this._renderGuide(); };
+    box.className = 'guide section';
+    box.replaceChildren(...(item.spot ? this._hotSpotQuestion(item.spot, more, answer) : this._tidyQuestion(item, more, answer)));
+  }
+
+  _hotSpotQuestion(sp, more, answer) {
+    const u = this.units, st = sp.stats, i = this.spots.indexOf(sp);
+    const starts = st.startWalk + st.startAppear;
+    const times = sp.times;
+    const facts = [
+      st.spread !== null && st.spread <= 150
+        ? `All of it within ${u.fmtLong(st.spread)} of one point (someone sitting still spreads ${u.fmtLong(120)}–${u.fmtLong(500)}).`
+        : st.spread !== null ? `Spread over ${u.fmtLong(st.spread)} around its centre.` : '',
+      !starts ? '' : st.startWalk ? `A trail walked into it ${st.startWalk} of ${starts} times.` : `It appeared in place all ${starts} times: nobody walked in.`,
+      times?.peak != null ? `Busiest around ${fmtDateTime(this.hist.start + times.peak)}; seen in ${times.hours} different hour${times.hours === 1 ? '' : 's'} of the day.` : '',
+    ].filter(Boolean);
+    const show = () => {
+      this.showSpots = true; this.hoverSpot = i; this._updatePlot();
+      if (times?.peak != null) this._showTime(this.hist.start + times.peak, 1800);
+    };
+    return [
+      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, `📍 New hot spot`, more),
+      el('div', { class: 'help', style: { marginBottom: '4px' } },
+        `Spot ${sp.n}, ${u.fmtLong(Math.hypot(...sp.centroid))} away: the radar saw something here for ${fmtDuration(sp.dwell)} in this range.`),
+      ...facts.map(f => el('div', { class: 'help' }, `• ${f}`)),
+      el('div', { style: { margin: '8px 0 6px', fontWeight: 500 } }, 'What is here?'),
       el('div', { class: 'actions' },
-        el('button', { class: 'btn primary', onclick: () => {
-          const poly = offsetConvex(sp.hull, Math.max(this._margin(), 150));
-          if (poly) this._addZone(poly, 'exclude', `Ghost ${sp.n} (plant, fan?)`);
-          this._toast('Added as an exclusion zone: press Save to keep it.');
-        } }, 'Exclude it'),
-        el('button', { class: 'btn', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); },
-          onclick: () => { this.showSpots = true; this.hoverSpot = i; this._updatePlot(); } }, 'Show me'),
-        el('button', { class: 'btn', title: 'People really are there: stop asking about this spot', onclick: () => {
-          dismissed.add(key(sp));
-          localStorage.setItem(store, JSON.stringify([...dismissed]));
-          this._renderGhostPrompt();
-        } }, 'It\'s a real spot')));
+        el('button', { class: 'btn', title: 'A fan, heater, plant, curtain or machine, even behind a wall: ignore it (an exclusion)', onclick: () => this._spotToZone(sp, 'exclude') }, 'Something fixed (fan, plant)'),
+        el('button', { class: 'btn', title: 'A desk, bed, couch or chair: a zone with its own presence sensor', onclick: () => this._spotToZone(sp, 'include') }, 'A place people stay'),
+        el('button', { class: 'btn', title: 'People pass or stand here, nothing to set up: stop asking about this spot', onclick: () => answer(this._spotKey(sp), 'nothing') }, 'Nothing special'),
+        el('button', { class: 'btn', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); }, onclick: show }, 'Show me')),
+    ];
+  }
+
+  _tidyQuestion(item, more, answer) {
+    const { z, kind } = item;
+    const key = `${z.id}:${kind}`;
+    const remove = () => { this._deleteZone(z.id); this._toast(`Removed “${z.name}”: press Save to keep it that way.`); };
+    const text = {
+      walked: `Trails walked into “${z.name}” ${item.walkIn} times in this range. If people really are there (not behind a wall or glass), this exclusion hides them: shrink or remove it.`,
+      empty: `Nothing was seen inside “${z.name}” in the last ${item.days} days. If what it hid is gone, it can go. (A heater off for the season is not gone.)`,
+      unused: `Nobody was in “${z.name}” in the last ${item.days} days, and no automation, script or scene uses ${item.entity}.`,
+    }[kind];
+    return [
+      el('div', { style: { fontWeight: 500, marginBottom: '4px' } }, kind === 'walked' ? '🚶 An exclusion people walk through?' : '🧹 Still needed?', more),
+      el('div', { class: 'help', style: { marginBottom: '8px' } }, text),
+      el('div', { class: 'actions' },
+        kind === 'walked' ? el('button', { class: 'btn', onclick: () => this._select(z.id, null) }, 'Edit it') : '',
+        el('button', { class: 'btn', onclick: remove }, 'Remove it'),
+        el('button', { class: 'btn', title: 'Stop suggesting this', onclick: () => answer(key, 'keep') }, kind === 'walked' ? 'That is intended' : 'Keep it')),
+    ];
+  }
+
+  /** Zones that may no longer be needed (see _renderGuide). Only from enough history to tell. */
+  _tidySuggestions() {
+    if (!this.hist) return [];
+    const span = this.hist.end - this.hist.start, days = Math.floor(span / 86400 + 0.1);
+    const excl = this.zones.filter(z => z.kind === 'exclude' && !validatePolygon(z.polygon));
+    const out = [];
+    for (const z of excl) {
+      const st = trailStats(this.hist, z.polygon, { exclusions: excl.filter(q => q !== z) });
+      if (st.walkIn >= Math.max(10, span / 7200) && st.walkOut >= st.walkIn / 2) out.push({ z, kind: 'walked', walkIn: st.walkIn });
+      else if (!st.points && days >= 6) out.push({ z, kind: 'empty', days });
+    }
+    if (days >= 6) {
+      for (const z of this.zones.filter(q => q.kind === 'include')) {
+        const entity = this.config.zones.find(q => q.id === z.id)?.entity_id;
+        if (!entity || (this.actual[z.id] || []).length || this.hass.states[entity]?.state === 'on') continue;
+        const used = (this._zoneUse ||= new Map()).get(entity);
+        if (used === undefined) {
+          this._zoneUse.set(entity, null); // asking
+          this.hass.callWS({ type: 'search/related', item_type: 'entity', item_id: entity })
+            .then(r => { this._zoneUse.set(entity, ['automation', 'script', 'scene'].some(k => r?.[k]?.length)); this._renderGuide(); })
+            .catch(() => this._zoneUse.set(entity, true));
+        } else if (used === false) out.push({ z, kind: 'unused', days, entity });
+      }
+    }
+    return out;
   }
 
   _renderSpots() {
-    this._renderGhostPrompt();
+    this._renderGuide();
     const box = this.side?.querySelector('.spots');
     if (!box) return;
     const head = el('h3', {}, el('span', { class: 'grow' }, 'Suggested zones'),
@@ -1760,17 +1851,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const u = this.units;
     const rows = (this.spots || []).map((sp, i) => {
       const badgeColor = sp.cls.kind === 'ghost' ? EXCLUDE_COLOR : sp.cls.kind === 'spot' ? '#43a047' : '#f9a825';
-      const create = kind => {
-        const poly = offsetConvex(sp.hull, this._margin());
-        if (!poly) { this._toast('Margin too negative: the spot collapses. Use a smaller inward margin.', true); return; }
-        const hold = kind === 'include' && sp.hold;
-        this.hoverSpot = null;
-        const maxHold = suggestMaxHold(sp.stats);
-        // Edge margin: without it, position jitter at the edge reads as walking out and back in.
-        const name = { exclude: `Ghost ${sp.n}`, linger: `Linger ${sp.n}` }[kind] || `Spot ${sp.n}`;
-        this._addZone(poly, kind, name, hold ? { hold_until_exit: true, hold_max_s: maxHold, edge_margin_mm: 150 } : {});
-        if (hold) this._toast(`People go still in this spot: "Stay occupied until seen leaving" is on (max ${Math.round(maxHold / 60)} min).`);
-      };
+      const create = kind => this._spotToZone(sp, kind);
       return el('div', {
         class: 'spot-row', onmouseenter: () => { this.hoverSpot = i; this._updatePlot(); }, onmouseleave: () => { this.hoverSpot = null; this._updatePlot(); },
       },

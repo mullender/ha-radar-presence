@@ -452,3 +452,11 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   widened to real-world values (it was ±75 mm, tighter than anyone in the data).
 - Engine still_spots (only suggestions, SPOT_APPLY off) forget a spot 6 h after it was last active; the panel's
   prompt uses the frontend analysis over the loaded history instead. `tools/headcount.py --spots MIN_S` lists them.
+- The radar side panel's guide asks, one at a time: "New hot spot: what is here?" (facts only: how tight, walk-ins,
+  busiest time; answers: something fixed -> exclusion, a place people stay -> zone, nothing special -> stop asking,
+  show me -> highlight and jump to its busiest quarter hour). Then tidy-up: an exclusion trails walk into (>= 10
+  and >= one per 2 h of history: it may hide people), an exclusion with nothing inside in >= 6 days of history, a
+  zone nobody was in for >= 6 days that no automation, script or scene uses (HA `search/related`). Answers are kept
+  per browser (localStorage `rzp.guide.<radar>`).
+- On real data the walk-through check found an exclusion drawn for "the neighbors" whose activity followed the
+  household exactly (busy when home, silent while away): it hid the residents.
