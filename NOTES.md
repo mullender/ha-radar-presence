@@ -624,10 +624,9 @@ Stage 4, guide:
   on the radar → Room / Spot / Ignore / Skip. Finish saves with
   display.checked.
 
-Open: the To do card has no cropped evidence map yet (the proposal plays the
-busiest 20 s in place; today "Show me" opens the radar at the peak); no
-"use these switches as hints" question in To do (hints are suggested in
-Settings); editing a whole floor (drawing rooms without a radar on the plan);
+Open: the evidence map in a To do card is still (the proposal plays the
+busiest 20 s in place on hover; "Show me" opens the radar at the peak);
+editing a whole floor (drawing rooms without a radar on the plan);
 /presence URLs; load_report `--dev`.
 
 Later the same day: To do asks "people appear and vanish here" (analysis.

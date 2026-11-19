@@ -37,6 +37,8 @@ const css = `
 .ans button:hover { border-color: var(--primary-color, #03a9f4); }
 .ans button.rec { border-color: #0d9488; }
 .ans button .tag { font-size: 11px; color: #0d9488; border: 1px solid #0d9488; border-radius: 8px; padding: 0 6px; }
+.picks { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 10px; }
+.picks small { color: var(--secondary-text-color, #888); }
 .impact { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--secondary-background-color, #f4f4f4); font-size: 13px; line-height: 1.4; }
 .acts { display: flex; gap: 8px; margin-top: 12px; }
 .acts button { font: inherit; font-size: 13px; border: 1px solid var(--divider-color, #ccc); background: none; color: var(--primary-color, #03a9f4); border-radius: 16px; padding: 5px 12px; cursor: pointer; }
@@ -120,6 +122,7 @@ export class RzpTodo extends HTMLElement {
       items.push(...this._radarQuestions(r, cfg, hist, doorRows));
     }
     items.push(...this._layoutQuestions());
+    items.push(...await this._hintQuestions(range));
     this.items = items;
   }
 
@@ -204,6 +207,28 @@ export class RzpTodo extends HTMLElement {
     return box;
   }
 
+  /** Lights and switches used by hand (no app, automation or script behind the change) that aren't hints yet. */
+  async _hintQuestions(range) {
+    const hass = this.hass;
+    const settings = await hass.callWS({ type: `${DOMAIN}/settings` }).catch(() => null);
+    if (!settings) return [];
+    const used = new Set([...settings.evidence, ...settings.evidence_on]);
+    const areaOf = id => { const e = hass.entities?.[id]; return e?.area_id || hass.devices?.[e?.device_id]?.area_id || null; };
+    const ids = Object.keys(hass.states).filter(id => /^(light|switch)\./.test(id) && !used.has(id) && areaOf(id)
+      && !hass.entities?.[id]?.entity_category && !hass.entities?.[id]?.hidden && hass.entities?.[id]?.platform !== DOMAIN);
+    if (!ids.length) return [];
+    const events = await hass.callWS({ type: 'logbook/get_events', start_time: range.start, end_time: range.end, entity_ids: ids }).catch(() => []);
+    const byHand = new Map();
+    for (const e of events) {
+      if (!e.entity_id || !['on', 'off'].includes(e.state)) continue;
+      if (e.context_user_id || e.context_event_type || e.context_domain || e.context_service) continue;
+      byHand.set(e.entity_id, (byHand.get(e.entity_id) || 0) + 1);
+    }
+    const picks = [...byHand].filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id, n]) => ({ id, n, area: areaOf(id) }));
+    if (!picks.length) return [];
+    return [{ key: `hints:${picks.map(p => p.id).sort().join(',')}`, type: 'hints', title: 'House', picks, settings }];
+  }
+
   _layoutQuestions() {
     const out = [];
     const h = this.home;
@@ -263,11 +288,12 @@ export class RzpTodo extends HTMLElement {
   _group(i) { return i.radar ? this._room(i.radar) : i.title || 'House'; }
 
   _short(i) {
-    return { appear: 'A doorway?', blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
+    return { hints: 'Switches as hints?', appear: 'A doorway?', blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
   }
 
   _hint(i) {
     if (i.type === 'spot') return `${fmtDuration(i.sp.dwell)} in the last day, ${this._room(i.radar)}.`;
+    if (i.type === 'hints') return `${i.picks.length} switched by hand in the last day.`;
     if (i.type === 'appear') return `People appear and vanish here ${i.c.births + i.c.deaths}× a day.`;
     if (i.type === 'blips') return `Turned on for under 3 s ${i.blips}× in a day.`;
     if (i.type === 'hold') return 'Goes clear while someone sits still.';
@@ -355,6 +381,21 @@ export class RzpTodo extends HTMLElement {
           el('button', { onclick: () => this._answer(i, 'nothing') }, 'Nothing: the edge of the view')),
       ];
       if (i.peak) acts.push(show(i.radar.radar_id, i.peak));
+    } else if (i.type === 'hints') {
+      const on = new Set(i.picks.map(p => p.id));
+      const total = i.picks.reduce((s, p) => s + p.n, 0);
+      const areas = [...new Set(i.picks.map(p => this.hass.areas?.[p.area]?.name).filter(Boolean))];
+      const save = ids => () => this._saveHints(i, ids);
+      body = [
+        el('h2', {}, i.picks.length === 1 ? 'Use this switch as a hint?' : `Use these ${i.picks.length} switches as hints?`),
+        el('div', { class: 'why' }, `${areas.length ? areas.join(', ') : 'They'}: switched by hand ${total} times in the last day. Someone switching a light by hand is in that room, which keeps people who sit still counted and counts rooms without a radar.`),
+        el('div', { class: 'picks' }, i.picks.map(pk => el('label', {},
+          el('input', { type: 'checkbox', checked: true, onchange: e => { if (e.target.checked) on.add(pk.id); else on.delete(pk.id); } }),
+          ` ${this.hass.states[pk.id]?.attributes.friendly_name || pk.id}`, el('small', {}, ` · ${pk.n}× by hand`)))),
+        el('div', { class: 'ans' },
+          el('button', { class: 'rec', onclick: () => this._answer(i, 'hints', save([...on])) }, 'Use the ticked ones', el('span', { class: 'tag' }, 'likely')),
+          el('button', { onclick: () => this._answer(i, 'no') }, 'No')),
+      ];
     } else if (i.type === 'walked') {
       body = [
         el('h2', {}, glyphSvg('ignore', kindTone('exclude'), 18), `People walk through “${i.zone.name}”`),
@@ -489,6 +530,13 @@ export class RzpTodo extends HTMLElement {
     const after = edit(cfg.zones.map(z => ({ ...z })));
     await this.hass.callWS({ type: `${DOMAIN}/zones/save`, radar_id: radarId, zones: after });
     return () => this.hass.callWS({ type: `${DOMAIN}/zones/save`, radar_id: radarId, zones: before });
+  }
+
+  /** Add activity hints (Settings); returns an undo. */
+  async _saveHints(i, ids) {
+    const before = await this.hass.callWS({ type: `${DOMAIN}/settings` });
+    await this.hass.callWS({ type: `${DOMAIN}/settings/save`, evidence: [...new Set([...before.evidence, ...ids])] });
+    return () => this.hass.callWS({ type: `${DOMAIN}/settings/save`, evidence: before.evidence });
   }
 
   _addZone(radarId, zone) {
