@@ -11,7 +11,7 @@ import {
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, svg, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 import { openReportDialog } from './report.js';
@@ -136,6 +136,11 @@ td input { width: 70px; text-align: right; }
 .check input { width: auto; margin-top: 2px; }
 .trail { margin-top: 10px; }
 .plot-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
+.door-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 2px 0 4px; }
+.door-opt { min-width: 0; border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); border-radius: 8px; padding: 4px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; font: inherit; font-size: 11px; color: var(--secondary-text-color, #666); }
+.door-opt.on { border: 2px solid #d97706; color: var(--primary-text-color, #222); font-weight: 500; padding: 3px; }
+.door-opt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .bar-pop { position: fixed; z-index: 20; width: 330px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222);
   border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.25); padding: 12px 14px; font-size: 13px; }
 .bar-pop .bp-h { font-weight: 500; margin-bottom: 4px; }
@@ -2607,6 +2612,78 @@ class RadarZonePresencePanel extends HTMLElement {
     return [...connects, ...this._exitEditorRest(z)];
   }
 
+  /**
+   * The door as a picture choice, drawn in the doorway's real orientation on the map with the rooms named on either
+   * side: no door, sliding, and four hinged doors (which room it opens into × which end the hinge is on).
+   */
+  _doorPicker(z) {
+    if (validatePolygon(z.polygon) || !this.plot?._s) return '';
+    const areas = this.hass.areas || {};
+    const here = areas[this.config.device_area_id]?.name || 'This room';
+    const sides = this._doorwaySides(z);
+    const otherId = (z.leads_to || []).find(a => a !== 'outside') || sides?.find(a => a !== this.config.device_area_id);
+    const there = (z.leads_to || []).includes('outside') ? 'Outside' : areas[otherId]?.name || 'The other side';
+    const variants = [
+      [null, 'No door'], [{ swing: 'none', hinge_end: 0 }, 'Sliding / pocket'],
+      [{ swing: 'in', hinge_end: 0 }, `Into ${here}`], [{ swing: 'in', hinge_end: 1 }, `Into ${here}`],
+      [{ swing: 'out', hinge_end: 0 }, `Into ${there}`], [{ swing: 'out', hinge_end: 1 }, `Into ${there}`],
+    ];
+    const same = (a, b) => (!a && !b) || (a && b && a.swing === b.swing && (a.swing === 'none' || (a.hinge_end || 0) === (b.hinge_end || 0)));
+    const m = this.plot._mat || this.plot._matrix(); // (before the map's first draw too)
+    const S = p => [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]];
+    const base = doorGeometry(z.polygon, null);
+    const r0 = base.rect.map(S);
+    const c = r0.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4], [0, 0]);
+    const ux = r0[1][0] - r0[0][0], uy = r0[1][1] - r0[0][1], len = Math.hypot(ux, uy) || 1;
+    const vx = r0[3][0] - r0[0][0], vy = r0[3][1] - r0[0][1], th = Math.hypot(vx, vy) || 1;
+    // The side the radar is on (doorGeometry's inSign) is this room.
+    const inDir = base.inSign > 0 ? 1 : -1;
+    const W = 90, H = 72, reach = Math.max(len, th / 2 + len); // the leaf sweeps up to its width from the threshold
+    const scale = (Math.min(W, H) / 2 - 6) / reach;
+    const T = ([x, y]) => [W / 2 + (x - c[0]) * scale, H / 2 + (y - c[1]) * scale];
+    const path = (pts, close = false) => pts.map((p, i) => `${i ? 'L' : 'M'}${T(p)[0].toFixed(1)},${T(p)[1].toFixed(1)}`).join('') + (close ? 'Z' : '');
+    const tone = kindTone('exit', !!this.hass?.themes?.darkMode);
+    const sideAt = sgn => {
+      const k = (th / 2 + reach * 0.55) * sgn / th, p = T([c[0] + vx * k, c[1] + vy * k]);
+      return [Math.max(16, Math.min(W - 16, p[0])), Math.max(8, Math.min(H - 4, p[1]))];
+    };
+    const thumb = door => {
+      const g = svg('svg', { viewBox: `0 0 ${W} ${H}`, style: 'width:100%;height:auto;display:block' });
+      const wall = [[c[0] - ux / len * len * 0.85, c[1] - uy / len * len * 0.85], [c[0] + ux / len * len * 0.85, c[1] + uy / len * len * 0.85]];
+      g.append(svg('path', { d: path(wall), stroke: 'var(--secondary-text-color, #999)', 'stroke-width': 1.5, fill: 'none' }));
+      g.append(svg('path', { d: path(r0, true), fill: tone, 'fill-opacity': 0.28 }));
+      if (door?.swing === 'none') {
+        const along = (q, f) => [q[0] + ux * f, q[1] + uy * f], mid = t => [r0[0][0] + vx * t, r0[0][1] + vy * t];
+        g.append(svg('path', { d: path([mid(0.3), along(mid(0.3), 0.6)]), stroke: tone, 'stroke-width': 2.5, fill: 'none' }));
+        g.append(svg('path', { d: path([along(mid(0.7), 0.4), along(mid(0.7), 1)]), stroke: tone, 'stroke-width': 2.5, fill: 'none' }));
+      } else if (door) {
+        const dg = doorGeometry(z.polygon, door);
+        if (dg.arc) {
+          g.append(svg('path', { d: path([S(dg.hinge), S(dg.open)]), stroke: tone, 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round' }));
+          g.append(svg('path', { d: path(dg.arc.map(S)), stroke: tone, 'stroke-width': 1, fill: 'none' }));
+        }
+      }
+      const lab = (p, t) => svg('text', { x: p[0], y: p[1] + 3, 'text-anchor': 'middle', 'font-size': 8, fill: 'var(--secondary-text-color, #777)' }, document.createTextNode(t.length > 11 ? `${t.slice(0, 10)}…` : t));
+      g.append(lab(sideAt(inDir), here), lab(sideAt(-inDir), there));
+      return g;
+    };
+    const cur = variants.find(([d]) => same(d, z.door));
+    const caption = (() => {
+      const d = z.door;
+      if (!d) return 'No door: an opening or stairs.';
+      if (d.swing === 'none') return 'Sliding or pocket door (also an overhead garage door): its leaf never sweeps the floor.';
+      const dg = doorGeometry(z.polygon, d), h = S(dg.hinge), o = S(dg.closed);
+      const end = Math.abs(h[0] - o[0]) >= Math.abs(h[1] - o[1]) ? (h[0] < o[0] ? 'left' : 'right') : (h[1] < o[1] ? 'top' : 'bottom');
+      return `Opens into ${d.swing === 'in' ? here : there}, hinge at the ${end} end as drawn on the map.`;
+    })();
+    return el('div', { class: 'full' },
+      el('div', { class: 'door-picker' }, variants.map(([d, label]) => el('button', {
+        class: `door-opt${cur?.[0] === d ? ' on' : ''}`, title: label,
+        onclick: () => this._patchZone(z.id, { door: d ? { ...d } : null }, { renderSide: true }),
+      }, thumb(d), el('span', {}, label)))),
+      el('div', { class: 'help' }, caption));
+  }
+
   _exitEditorRest(z) {
     const cands = Object.keys(this.doors).length ? Object.keys(this.doors) : this._doorCandidates();
     const ranked = cands
@@ -2623,14 +2700,9 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'help full' },
         'A doorway: where people come into and leave the room. With a door sensor, its openings show on the timeline and the map. ',
         st ? `Someone was in view at ${st.hits} of the ${st.events} times this door opened or closed in the loaded range.` : ''),
-      el('label', {}, 'Door'),
-      el('select', { onchange: e => this._patchZone(z.id, { door: e.target.value ? { swing: e.target.value, hinge_end: z.door?.hinge_end || 0 } : null }, { renderSide: true }) },
-        el('option', { value: '', selected: !z.door }, 'None (open doorway, stairs)'),
-        el('option', { value: 'none', selected: z.door?.swing === 'none' }, 'Door without swing (sliding, pocket)'),
-        el('option', { value: 'in', selected: z.door?.swing === 'in' }, 'Swings into this room'),
-        el('option', { value: 'out', selected: z.door?.swing === 'out' }, 'Swings out of this room')),
+      el('label', { class: 'full' }, 'Door'),
+      this._doorPicker(z),
       z.door ? el('div', { class: 'actions full' },
-        z.door.swing !== 'none' ? el('button', { class: 'btn', title: 'Move the hinge to the other end of the threshold', onclick: () => this._patchZone(z.id, { door: { ...z.door, hinge_end: z.door.hinge_end ? 0 : 1 } }, { renderSide: true }) }, 'Flip hinge') : '',
         z.polygon.length !== 4 ? el('button', { class: 'btn', title: 'Replace the outline with its bounding rectangle along the longest edge: the threshold', onclick: () => this._patchZone(z.id, { polygon: doorGeometry(z.polygon, null).rect.map(p => [Math.round(p[0]), Math.round(p[1])]) }, { renderSide: true }) }, 'Make rectangle') : '',
         el('div', { class: 'help', style: { width: '100%' } }, 'Draw the doorway as the threshold rectangle; the leaf hinges on one end and swings over the side you pick. People pulling a door towards them stand clear of the swing; pushing it, they stand right at it.')) : '',
       z.door_entity_id && this.hist ? el('div', { class: 'actions full' },
