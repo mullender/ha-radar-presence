@@ -48,6 +48,8 @@ def summary(doc: dict) -> None:
         zones = ", ".join(f"{z['name']}" for z in c["zones"])
         print(f"  {c['title']} ({c.get('device_area_id')}): {n} readings · {zones or 'no shapes'}")
     print(f"Doors:     {', '.join(f'{d} ({len(rows)})' for d, rows in doc['doors'].items()) or 'none'}")
+    seed = start_counts(doc)
+    print(f"At start:  {', '.join(f'{a} {n}' for a, n in seed.items()) or 'nobody (or not known)'}")
     print("Activity:")
     for e in doc["activity"]:
         who = f" #{e['token']}" if e.get("token") else ""
@@ -71,10 +73,23 @@ def write_inputs(doc: dict, out: Path) -> list[str]:
         "--floors", json.dumps(doc["floors"]), "--exits", "{}", "--from-leads-to",
         "--outside-doors", json.dumps(doc.get("outside_doors", {})), "--tz", "0", "--bootstrap-h", "0.01",
     ]
+    if seed := start_counts(doc):
+        args += ["--seed", json.dumps(seed)]
     if doc.get("occupancy"):
         (out / "occupancy.json").write_text(json.dumps(doc["occupancy"]))
         args += ["--occupancy", str(out / "occupancy.json"), "--occupancy-areas", json.dumps(doc.get("occupancy_areas", {}))]
     return args
+
+
+def start_counts(doc: dict) -> dict[str, int]:
+    """Who was believed where just before the window (the last Activity entry before it): area -> people."""
+    before = doc.get("activity_before") or {}
+    area_of = {sp["id"]: sp["area_id"] for sp in doc.get("spaces", [])}
+    out: dict[str, int] = {}
+    for _id, region, *_flags in before.get("tokens") or []:
+        area = area_of.get(region, region)
+        out[area] = out.get(area, 0) + 1
+    return out
 
 
 def replay(doc: dict, extra: list[str]) -> int:

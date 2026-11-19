@@ -24,7 +24,9 @@ def no_blueprint_install(request):
         return
     from unittest.mock import patch
 
-    with patch("custom_components.radar_zone_presence._install_blueprints", return_value=[]):
+    import custom_components.radar_zone_presence as integration
+
+    with patch.object(integration, "_install_blueprints", return_value=[]):
         yield
 
 

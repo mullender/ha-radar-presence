@@ -573,8 +573,8 @@ walked) whose fixes enter edit mode; occupants card sizes; correction
 follow-up (headcount/answer stores the answer on the corrected log entries);
 Report a problem (report.py + frontend/report.js + tools/load_report.py).
 
-Open: a replayed report starts from an empty house — seed tokens from
-`activity_before` in tools/headcount.py; load_report `--dev` (load a report
+Open: load_report `--dev` (a replayed report now starts with who was believed
+where: tools/headcount.py `--seed`, filled from `activity_before`) (load a report
 into dev HA) not built; the panel URL is still /radar-zones (the proposal's
 /presence/room/... paths come with stage 3's rooms).
 

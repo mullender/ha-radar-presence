@@ -76,6 +76,7 @@ def main() -> None:
     ap.add_argument("--occupancy-steady", type=float, default=10.0, help="seconds a space's sensors must stay on / off to count (as the runtime)")
     ap.add_argument("--occupancy-dry", action="store_true", help="only print the occupancy changes and who is where then; do not apply them")
     ap.add_argument("--quiet", action="store_true", help="only print the score")
+    ap.add_argument("--seed", default="{}", help='JSON: area -> people believed there at the start (a problem report\'s state before its window)')
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
     import custom_components.radar_zone_presence.engine.headcount as hc_mod
@@ -171,6 +172,12 @@ def main() -> None:
         group_links += [[x, y, None] for i, x in enumerate(ids) for y in ids[i + 1 :]]  # one room, two trackers
     conns += [c for c in group_links if frozenset(c[:2]) not in have]
     hc = HeadCount(regions, bootstrap_until=t0 + a.bootstrap_h * 3600, connections=[tuple(c) for c in conns])
+    for area, n in json.loads(a.seed).items():
+        region = next((r.id for r in regions if r.name == area), None)
+        if region is None:
+            print(f"--seed: no region for {area}", file=sys.stderr)
+        elif n:
+            hc.seed(region, int(n), t0)
     events = [(fr.t, 0, rid, fr) for rid, fs in frames.items() if rid in region_of for fr in fs]
     events += [(t, 1, e, s) for e, rows in doors.items() for t, s in rows]
     if a.evidence:
