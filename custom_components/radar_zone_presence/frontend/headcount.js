@@ -31,6 +31,9 @@ const css = `
 .bar .home b { font-size: 20px; }
 .bar .home { display: flex; align-items: center; gap: 6px; }
 .bar .home .minus { width: 26px; padding: 3px 0; }
+.bar .home.settling b, .bar .home .settle { color: var(--warning-color, #d97706); }
+.bar .home .settle { font-size: 13px; animation: settle 2.4s ease-in-out infinite; }
+@keyframes settle { 50% { opacity: .45; } }
 .scroll { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
 :host([narrow]) .scroll { grid-template-columns: 1fr; }
 .house { position: relative; padding: 14px; min-width: 0; }
@@ -76,8 +79,19 @@ svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
 .log h3 { position: sticky; top: 0; margin: 0; padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666);
   background: var(--card-background-color, #fff); border-bottom: 1px solid var(--divider-color, #ddd); display: flex; gap: 8px; }
 .log h3 label { margin-left: auto; text-transform: none; letter-spacing: 0; display: flex; gap: 4px; align-items: center; }
-.row { display: grid; grid-template-columns: 58px 18px minmax(0, 1fr) auto; gap: 4px; padding: 4px 10px; border-bottom: 1px solid var(--divider-color, #eee); cursor: pointer; }
-.row:hover { background: var(--secondary-background-color, #f4f4f4); }
+.row { padding: 0; border-bottom: 1px solid var(--divider-color, #eee); }
+.row .line { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; line-height: 1.35; }
+.row .delta { color: var(--secondary-text-color, #777); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 12px; }
+.how { padding: 0 12px 10px 64px; font-size: 12px; color: var(--secondary-text-color, #666); }
+.how-h { font-weight: 500; color: var(--primary-text-color, #222); margin-bottom: 2px; }
+.how ul { margin: 0 0 6px; padding-left: 16px; }
+.how .links { display: flex; gap: 6px; flex-wrap: wrap; }
+.how .links button, .fchip { font: inherit; font-size: 12px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff);
+  color: var(--primary-color, #03a9f4); border-radius: 14px; padding: 3px 10px; cursor: pointer; }
+.fchip { color: var(--secondary-text-color, #666); text-transform: none; letter-spacing: 0; }
+.fchip.on { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
+.log h3 .chips { display: flex; gap: 4px; margin-left: 8px; }
+.row .line:hover { background: var(--secondary-background-color, #f4f4f4); }
 .row.at { background: rgba(3,169,244,.12); }
 .row.after { opacity: .45; }
 .row .t { color: var(--secondary-text-color, #777); font-variant-numeric: tabular-nums; }
@@ -277,7 +291,8 @@ export class RzpHeadcount extends HTMLElement {
       el('button', { class: live ? 'on' : '', title: 'Follow now', onclick: () => { this.cursor = null; this.render(); } }, live ? '● Live' : 'Go live'),
       el('span', { class: 'when' }, live ? `Now, ${fmtTime(Date.now() / 1000)}` : fmtDateTime(this.cursor)),
       this.data.log_start && this.start < this.data.log_start ? el('span', { class: 'meta' }, `(log starts ${fmtDateTime(this.data.log_start)})`) : '',
-      el('span', { class: 'home' }, 'Home ', el('b', {}, unknownFloors.size ? `≥${total}` : String(total)), doubt ? ` (+${doubt} settling)` : '',
+      el('span', { class: `home${unknownFloors.size || doubt ? ' settling' : ''}` }, 'Home ', el('b', {}, unknownFloors.size || doubt ? `${total}+` : String(total)),
+        unknownFloors.size || doubt ? el('span', { class: 'settle', title: 'A door to outside is in use: not sure yet who went out' }, 'settling') : '',
         live && total ? el('button', { class: 'minus', title: 'Correct: one person fewer home (removes whoever has gone unseen longest)', onclick: () => this._correctHome(total - 1) }, '−') : '',
         live ? el('button', { title: 'Everyone is out: set the home to 0', onclick: () => this._correctHome(0) }, 'Nobody home') : ''),
     );
@@ -449,23 +464,136 @@ export class RzpHeadcount extends HTMLElement {
     }, '📡');
   }
 
+  /** Home count in a snapshot: people who are neither settling nor unconfirmed. */
+  _total(snap) {
+    return (snap?.tokens || []).filter(([, , f]) => !f.includes('u') && !f.includes('p')).length;
+  }
+
+  _who(e) { return e.token ? `Person ${this._letter(e.token)}` : 'Someone'; }
+  _room(region) { const n = this._name(region); return n ? n.charAt(0).toLowerCase() + n.slice(1) : 'somewhere'; }
+
+  /** The door used around t (the latest door change in the `within` s before, or just after), as 'the garage door'. */
+  _doorNear(t, within = 120) {
+    let best = null;
+    for (const e of this.entries) {
+      if (e.kind !== 'door') continue;
+      if (e.t > t + 5) break;
+      if (e.t >= t - within) best = e;
+    }
+    return best ? `the ${this._doorLabel(best.entity).toLowerCase()}` : null;
+  }
+
+  /** "from <region>" in a moved entry's detail. */
+  _from(e) { return /^from (\S+)/.exec(e.detail || '')?.[1]; }
+
+  /** One Activity entry as a sentence. */
+  _sentence(e, group = [e]) {
+    const who = group.length > 1 ? group.map(g => this._letter(g.token)).join(', ') : this._who(e);
+    const room = this._room(e.region);
+    switch (e.kind) {
+      case 'arrived': { const d = this._doorNear(e.t); return `Someone came home${d ? ` through ${d}` : ` into the ${room}`}`; }
+      case 'left': { const d = this._doorNear(e.t, 600); return `${group.length > 1 ? `${group.length} people` : 'Someone'} left${d ? ` by ${d}` : ''}`; }
+      case 'unknown': { const d = this._doorNear(e.t); return `Settling: ${d ? `${d} is in use, ` : ''}not sure yet who went out`; }
+      case 'back': return group.length > 1 || /still here/.test(e.detail || '') ? `Settled: nobody left${this._doorNear(e.t, 300) ? ` when ${this._doorNear(e.t, 300)} opened` : ''}` : `${who} is still home`;
+      case 'moved': {
+        const from = this._from(e);
+        return `${who} went from the ${this._room(from)} ${/\(unseen\)/.test(e.detail || '') ? 'to' : 'into'} the ${room}`;
+      }
+      case 'unexplained': return `Something turned up in the ${room}`;
+      case 'confirmed': return `Someone turned up in the ${room} without coming through a door`;
+      case 'not a person': return `What turned up in the ${room} was not a person`;
+      case 'ghost': return `Ignored a detection in the ${room} that never moved (a fan?)`;
+      case 'corrected': return group.length > 1 ? 'You corrected the count' : `You corrected the count (${room})`;
+      case 'restored': return 'Restored after a restart';
+      case 'bootstrap': return `Counted ${who.toLowerCase() === 'someone' ? 'someone' : who} in the ${room} at the start`;
+      case 'evidence': return `${who} is in the ${room}: ${(e.detail || 'a sensor says so').replace(/\b(binary_sensor|input_boolean|switch|light)\.[a-z0-9_]+/g, x => this._entityName(x))}`;
+      case 'door': return `${this._doorLabel(e.entity)} ${this._doorWord(e.detail)}`;
+      case 'signal': return `${this._entityName(e.entity)} ${e.detail} by hand (${room})`;
+      case 'ignored': return `${this._entityName(e.entity)} ignored: ${e.detail}`;
+      default: return this._describe(e);
+    }
+  }
+
+  /** "How we know": 1–4 plain bullets from what the log recorded. */
+  _howWeKnow(e) {
+    const out = [];
+    const d = this._doorNear(e.t, e.kind === 'left' ? 600 : 120);
+    if (e.kind === 'moved') {
+      const m = /after (\d+)s/.exec(e.detail || '');
+      out.push(`Last seen in the ${this._room(this._from(e))}${m ? ` ${m[1]} s before` : ''}`);
+      out.push(/\(unseen\)/.test(e.detail || '') ? 'Not seen on the way: lost at a doorway that leads there' : `Then seen in the ${this._room(e.region)}`);
+      out.push('Nobody else could have been that person');
+    } else if (e.kind === 'arrived') {
+      if (d) out.push(`${d.charAt(0).toUpperCase() + d.slice(1)} opened just before`);
+      out.push(`A new person appeared in the ${this._room(e.region)}, by the door`);
+      out.push('Nobody already inside was near it');
+    } else if (e.kind === 'left') {
+      if (d) out.push(`${d.charAt(0).toUpperCase() + d.slice(1)} was in use`);
+      out.push('They were near it and were not seen again after it closed');
+    } else if (e.kind === 'unknown') {
+      out.push('A door to outside opened while people were on this floor');
+      out.push('Everyone near it counts as settling until they are seen again');
+    } else if (e.kind === 'back') {
+      out.push('Seen inside again after the door closed');
+    } else if (e.kind === 'confirmed') {
+      out.push('Not seen coming in through a door');
+      out.push('Walked on or stayed long enough to be a person, not a reflection');
+    } else if (e.kind === 'corrected') {
+      out.push('Set by hand from the panel or a dashboard');
+    } else if (e.kind === 'evidence' && e.detail) {
+      out.push(e.detail);
+    }
+    if (this.details) out.push(`${e.kind}${e.token ? ` #${e.token}` : ''} ${e.region || ''} ${e.detail || ''}`.trim());
+    return out;
+  }
+
   _renderLog(t) {
     const v = this.timeline.view;
     const lo = v ? v.v0 : this.start, hi = v ? v.v1 : Infinity;
     const technical = new Set(['seen', 'ghost', 'not a person', 'ignored']); // only with Details on
-    const rows = this.entries.filter(e => (this.details ? this.showSeen || e.kind !== 'seen' : !technical.has(e.kind)) && e.t >= lo && e.t <= hi).slice(-400);
-    const at = t === null ? rows.length - 1 : rows.findLastIndex(e => e.t <= t);
-    const list = rows.map((e, i) => {
-      const [icon] = KINDS[e.kind] || ['·'];
-      return el('div', {
-        class: `row ${e.kind === 'ignored' ? 'ignored' : ''} ${i === at ? 'at' : ''} ${t !== null && e.t > t ? 'after' : ''}`,
-        onclick: () => { this.cursor = e.t; this.render(); },
-      }, el('span', { class: 't' }, fmtTime(e.t)), el('span', { class: 'k' }, icon), el('span', {}, this._describe(e)), this._radarLink(e));
+    const counting = new Set(['unknown', 'back', 'corrected', 'arrived', 'left']);
+    this.filter ||= 'count';
+    // Count before each entry, to say "1 → 2" and to pick the count changes.
+    let prev = this._total(this.data.before);
+    const rows = [];
+    for (const e of this.entries) {
+      const n = e.kind === 'door' || e.kind === 'signal' ? prev : this._total(e);
+      const changed = n !== prev;
+      const before = prev;
+      prev = n;
+      if (e.t < lo || e.t > hi) continue;
+      if (technical.has(e.kind) && !(this.details && (this.showSeen || e.kind !== 'seen'))) continue;
+      if (this.filter === 'count' && !changed && !counting.has(e.kind)) continue;
+      // One line for the same thing happening to several people at once (settling, restored after a restart).
+      const last = rows[rows.length - 1];
+      if (last && last.e.kind === e.kind && Math.abs(last.e.t - e.t) < 1 && ['unknown', 'back', 'restored', 'bootstrap', 'left', 'corrected'].includes(e.kind)) {
+        last.group.push(e); last.after = n; continue;
+      }
+      rows.push({ e, group: [e], before, after: n });
+    }
+    const shown = rows.slice(-300).reverse(); // newest first
+    const at = t === null ? 0 : shown.findIndex(r => r.e.t <= t);
+    const list = shown.map((r, i) => {
+      const { e } = r;
+      const open = this._openEntry === e.t + e.kind + e.token;
+      const radar = e.region ? this.regionRadars?.[e.region]?.[0] : null;
+      const delta = r.before !== r.after ? `${r.before} → ${r.after}` : e.kind === 'moved' ? 'moved' : '';
+      return el('div', { class: `row${i === at ? ' at' : ''}${t !== null && e.t > t ? ' after' : ''}${technical.has(e.kind) ? ' ignored' : ''}` },
+        el('div', { class: 'line', onclick: () => { this._openEntry = open ? null : e.t + e.kind + e.token; this.cursor = e.t; this.render(); } },
+          el('span', { class: 't' }, fmtTime(e.t, false)), el('span', { class: 'say' }, this._sentence(e, r.group)), el('span', { class: 'delta' }, delta)),
+        open ? el('div', { class: 'how' },
+          el('div', { class: 'how-h' }, 'How we know'),
+          el('ul', {}, this._howWeKnow(e).map(b => el('li', {}, b))),
+          el('div', { class: 'links' },
+            e.token ? el('button', { onclick: () => { this.selected = e.token; this.render(); } }, `Follow person ${this._letter(e.token)}`) : '',
+            radar ? el('button', { onclick: () => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: e.t } })) }, `▶ Play in the ${this._room(e.region)}`) : '')) : '');
     });
+    const chip = (key, label) => el('button', { class: `fchip${this.filter === key ? ' on' : ''}`, onclick: () => { this.filter = key; this.render(); } }, label);
     this.logEl.replaceChildren(
-      el('h3', {}, 'Activity', this.details ? el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings') : ''),
-      ...(list.length ? list : [el('div', { class: 'empty' }, 'Nothing in this window.')]));
-    this.logEl.querySelector('.row.at')?.scrollIntoView({ block: 'nearest' });
+      el('h3', {}, 'Activity', el('span', { class: 'chips' }, chip('count', 'Count changes'), chip('all', 'All movement')),
+        this.details ? el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'sightings') : ''),
+      ...(list.length ? list : [el('div', { class: 'empty' }, this.filter === 'count' ? 'The count did not change in this window.' : 'Nothing in this window.')]));
+    if (t !== null) this.logEl.querySelector('.row.at')?.scrollIntoView({ block: 'nearest' });
   }
 
   _renderTimeline() {
