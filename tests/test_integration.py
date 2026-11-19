@@ -1149,3 +1149,36 @@ async def test_todo_answers_are_kept_on_the_server(hass: HomeAssistant, radar_de
     assert (await client.receive_json())["success"]
     await client.send_json_auto_id({"type": f"{DOMAIN}/todo/answers"})
     assert "radar1:spot:3,4" not in (await client.receive_json())["result"]["answers"]
+
+
+async def test_learning_finished_tells_once_when_a_radar_has_suggestions(hass: HomeAssistant, radar_device: str) -> None:
+    """After 3 days with 2 places where something stays (not covered by a spot or ignore area, not answered),
+    one persistent notification links to To do; places that are answered do not count."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from custom_components.radar_zone_presence import learning as lm
+
+    entry = await setup_entry(hass, radar_device, [zone("fan", "Fan", [[100, 100], [120, 100], [120, 120], [100, 120]], kind="exclude")])
+    lr = entry.runtime_data.learning
+    await move(hass, 1, 10, 50)  # frames reach the tally
+    await move(hass, 1, 10, 51)
+    assert lr.state[RADAR]["grid"]
+    st = lr.state[RADAR]
+    st["grid"], st["since"] = {}, st["since"] - 3.5 * lm.DAY
+    seat, bed, fan = (1000, 1000), (-1000, 2000), (110 * 25.4, 110 * 25.4)
+    t = 0.0
+    for _ in range(3 * 3600 // 20):  # 3 h each, one frame every 20 s
+        lr.observe(RADAR, t, tuple(SimpleNamespace(x=x, y=y) for x, y in (seat, bed, fan)))
+        t += 20
+    assert {(p["x"] // 300, p["y"] // 300) for p in lr.places(RADAR)} == {(3, 3), (-4, 6)}  # the fan is ignored already
+    lr.store.set(f"{RADAR}:spot:{round(lr.places(RADAR)[0]['x'] / 300)},{round(lr.places(RADAR)[0]['y'] / 300)}", "nothing")
+    with patch.object(lm.persistent_notification, "async_create") as create:
+        lr._check()
+        assert not create.called  # one place left: not yet (a week)
+        lr.store.answers.clear()
+        lr._check()
+        assert create.call_count == 1
+        assert "2 suggestions" in create.call_args.args[1] and lm.PANEL_URL in create.call_args.args[1]
+        lr._check()
+        assert create.call_count == 1  # once

@@ -34,6 +34,8 @@ from .devices import zone_device_identifier
 from .discovery import async_device_geometry, async_resolve_units, common_unit
 from .event import passage_unique_id
 from .home import HomeRuntime
+from .learning import Learning
+from .todo import async_get_todo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +90,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HomeConfigEntry) -> bool
     runtime.async_start()
     entry.async_on_unload(runtime.async_stop)
     await runtime.headcount.async_start()
+    runtime.learning = Learning(hass, runtime, await async_get_todo(hass))
+    runtime.learning.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _sync_zone_areas(hass, runtime)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))

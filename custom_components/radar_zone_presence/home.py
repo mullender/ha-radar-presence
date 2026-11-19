@@ -296,6 +296,7 @@ class HomeRuntime:
         self._door_unsubs: dict[str, CALLBACK_TYPE] = {}
         self._unsubs: list[CALLBACK_TYPE] = []
         self.reload_scheduled = False
+        self.learning: Any = None  # learning.Learning, set by async_setup_entry
 
     # ------------------------------------------------------------- lookups
 
@@ -379,6 +380,8 @@ class HomeRuntime:
     @callback
     def async_stop(self) -> None:
         self.headcount.async_stop()
+        if self.learning is not None:
+            self.learning.async_stop()
         for unsub in (*self._unsubs, *self._door_unsubs.values()):
             unsub()
         self._unsubs.clear()
@@ -495,6 +498,8 @@ class HomeRuntime:
         feed.flush_unsub = None
         frame = feed.assembler.build()
         feed.process(frame)
+        if self.learning is not None:
+            self.learning.observe(feed.id, frame.t, feed.kept)
         group = self.group_of[feed.id]
         for exit_id, kind in group.evaluate(frame.t):
             self._passage(group, exit_id, kind, frame.t)
