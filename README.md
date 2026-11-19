@@ -1,10 +1,10 @@
-# Radar Zone Presence
+# Radar Presence
 
 Home Assistant custom integration that turns the target coordinates of
 LD2450-style mmWave radar sensors (Everything Presence Lite / Pro, Screek
-Human Sensor 2A, other ESPHome LD2450 firmwares) into **named polygon presence
-zones** — drawn in a dedicated editor, checked against a history point cloud,
-and debuggable with a replay scrubber.
+Human Sensor 2A, other ESPHome LD2450 firmwares) into **room and spot
+occupancy** and an **occupant count** for the home, each floor and each
+room. Mostly for automating lights and climate.
 
 All logic runs in Home Assistant. The radar stays a dumb coordinate source;
 nothing is written to the device.
@@ -12,82 +12,66 @@ nothing is written to the device.
 ## Features
 
 - **One home, many radars.** The integration is set up once (the home);
-  radars and zones are added on its page (*Add radar*, *Add zone*). Adding a
-  radar lists devices with per-target X/Y sensors (with their area, floor and
-  live target count) and discovers the entities.
-- **Zones are presence devices** ("Desk Presence", "Kitchen Presence") in
-  their own area, connected via the radar, so area pages and automations see
-  them like any other occupancy sensor.
-- **Radars that overlap work together.** Align a radar with a neighbour
-  (from simultaneous detections, in the panel) and zones drawn on either are
-  evaluated by both: the same person seen by two radars counts once, and
-  walking from one radar's view into the other's is a hand-over, not someone
-  vanishing.
-- **Entry/exit points** (stairs, doorways, doors with swing and contact
-  sensor): vanishing in one means someone left, appearing in one is someone
-  new. Each exit logs *arrived* / *left* events.
-- **Radar Zones panel** (sidebar):
-  - Draw polygons or rectangles; edges snap to 45°/90°, relative to the
-    previous edge, and the closing corner squares up to the start. Vertex and
-    grid snapping; Shift draws freely.
-  - Drag vertices (snaps to both neighbouring edges), drag an edge to move it
-    parallel, insert / delete vertices, numeric vertex table, undo / redo.
-  - Live edge lengths and interior angles, a measure tool, the sensor's field
-    of view and the device's own zones as context.
-  - **Include and exclude zones.** Exclusions are sensor-wide and applied
-    before any include zone — draw one around the plant or the fan.
-- **History point cloud** (15 min … 7 days, WebGL) behind the editor, coloured
-  by target, by age, or by "inside the selected zone / excluded".
-- **Preview before saving:** how often and when the draft zone would have
-  turned on over the loaded history, with and without filters, plus a
-  clickable trigger list.
-- **Live playback** by default: the playhead follows now, with trails, zone
-  states and the frame table updating in real time; pause to scrub back.
-- **Replay scrubber:** timeline with activity, predicted vs recorded zone
-  bands and trigger markers; play / step / speed; fading trails with
-  timestamps; a frame table showing each target's position and every zone's
-  inside/state per frame — "why did the lights come on?" in a minute.
-- **Ghost filters** per zone: on delay, off delay, edge-margin hysteresis;
-  reconnect grace per sensor.
-- **People tracking:** the radar's target numbers are not identities (when it
-  drops a still person, the next target is renumbered into their slot). The
-  integration follows people by position instead: a reading only continues a
-  person if they could have walked there, and someone re-detected near where
-  they vanished keeps their identity.
-- **Stay occupied until seen leaving** (per zone): LD2450 radars lose a
-  person who sits still. With this on, someone who vanishes inside the zone
-  keeps it occupied until that person is seen again (walking out, or turning
-  up near where they vanished), or *Max hold* runs out. Other people moving
-  elsewhere in the room, or a plant's leaves, do not release it. Someone lost
-  at the side of the radar's view, in an exit or in a *transient spot*
-  (hallway, doorway) is let go after 20 s; a *lingering spot* (bed, couch)
-  always counts as still there. No long off delay needed.
-- **Suggested zones:** spots where targets dwell are found in the history and
-  classified from their trails — a real spot (desk, couch) is walked into, a
-  ghost (plant, fan, reflection) appears and vanishes in place. One click turns
-  a spot into a zone, a lingering spot or an exclusion, with a configurable outward / inward
-  margin; *Fit to points* reshapes a rough zone around where people actually
-  were. Zone edges that cut through a dwell spot are flagged.
-- **Export / import** a radar's zones as JSON (backup, or move zones from a
-  test instance to production). Import merges by name and is saved only when
-  you press Save.
+  radars are added on its page (*Add radar*). A new radar's room has presence
+  right away; spots, doorways and ignore areas are added in the panel.
+- **Rooms and spots are occupancy devices** ("Living room Occupancy", "Desk
+  Occupancy") in their own area, so area pages, dashboards and automations
+  see them like any other occupancy sensor. A spot's own sensor is optional:
+  without it a spot (bed, sofa, desk chair) still keeps its room occupied
+  while someone sits still.
+- **Occupants**: how many people are home, per floor and per room, from
+  radars, doors to outside, activity hints (switches used by hand) and
+  occupancy sensors (a bed sensor). While a door to outside is in use and it
+  is not yet sure who went out, the count says *settling* (`2+`).
+- **Radars that overlap work together.** Line a radar up with a neighbour
+  (from simultaneous detections) and they share their shapes: the same person
+  seen by two radars counts once, and walking from one view into the other is
+  a hand-over.
+- **Doorways** (doors, openings, stairs), with a door sensor and the door's
+  swing: vanishing in one means someone left, appearing in one is someone new.
+  Each doorway logs *arrived* / *left* events.
+- **Presence panel** (sidebar):
+  - **House**: floors and rooms with who is where, and **Activity** in plain
+    sentences ("Someone came home through the garage door") with *How we
+    know*, *Follow person A* and a jump to the radar at that moment.
+  - **Radars**: the map of what a radar sees (detections, trails, people) with
+    a timeline and playhead — live, or back in time. Clicking a bar explains
+    why a room was on and offers the fix (ignore that spot, turn on after
+    3 s, remember people who sit still).
+  - **Edit** (a separate mode): rooms, spots, doorways and ignore areas with
+    polygon / rectangle tools, snapping, undo, and a preview of how often the
+    edited shapes would have turned on over the loaded history.
+  - **Suggestions** from the history: places where people stay, ghosts that
+    appear in place (a plant, a fan), door sensors that line up with a radar.
+  - **Report a problem**: one window, anonymized, as a file to attach to an
+    issue (see `tools/load_report.py`).
+  - People who aren't admins get the panel read-only.
+- **Dashboard cards**: occupants (badge, tile, floors, floors + rooms, with +
+  / − to correct) and a live radar card.
+- **People tracking:** the radar's target numbers are not identities. The
+  integration follows people by position: a reading only continues a person
+  if they could have walked there.
+- **Remember people who sit still** (per room): LD2450 radars lose a person
+  who sits still. With this on, someone who vanishes inside keeps the room
+  occupied until they are seen leaving, or a hold limit runs out.
+- **Export / import** a radar's shapes as JSON.
 
 ## Entities
 
-Per zone, on its presence device (in the zone's area, or by default the
-radar's):
+Per room or spot with an occupancy sensor (device model Room or Spot, in its
+area):
 
 | Entity | |
 |---|---|
-| `binary_sensor.<zone>_presence` | Occupancy; attributes `target_count`, `held`. |
-| `sensor.<zone>_presence_targets` | Target count (disabled by default). |
-| `binary_sensor.<zone>_presence_seen_by_<radar>` | Diagnostic, only for zones that several aligned radars cover: that radar sees someone in the zone. |
+| `binary_sensor.<name>_occupancy` | Occupancy; attributes `target_count`, `held`. |
+| `sensor.<name>_targets` | Target count (disabled by default). |
+| `binary_sensor.<name>_seen_by_<radar>` | Diagnostic, only where several linked radars see the room: that radar sees someone. |
 
-Per exit, on a small device of ours linked to the radar's device:
+Entity ids made by earlier versions (`…_presence`) are kept.
 
-| Entity | |
-|---|---|
-| `event.<radar>_<exit>` | `arrived` / `left`. With a door sensor, only when the door moved within 30 s. |
+On the home device: *Occupants*, *<floor> occupants*, *<room> occupants* and
+a *Nobody home* button. Per doorway, on a small device linked to the radar:
+`event.<radar>_<doorway>` (`arrived` / `left`).
 
 The radar firmware already has its own occupancy and target count, so there
 are no radar-level entities.
@@ -121,15 +105,14 @@ Server add-on) and restart Home Assistant.
 
 Then:
 
-1. Settings → Devices & services → Add integration → *Radar Zone Presence*
-   creates the home and asks for the first radar. More radars (and zones):
-   *Add radar* / *Add zone* on the integration's page.
-2. Open **Radar Zones** in the sidebar. It opens in live playback: what the
-   radar sees right now, on top of the last 24 h. Zones exported from
-   another instance load with *Import…*.
-3. Draw or adjust zones and press **Save**; each include zone becomes a
-   presence device. With overlapping radars, *Align with* (Sensor settings)
-   lets them share zones.
+1. Settings → Devices & services → Add integration → *Radar Presence*
+   creates the home and asks for the first radar. More radars: *Add radar* on
+   the integration's page.
+2. Open **Presence** in the sidebar. It opens on the House; *Radars* shows
+   what each radar sees, live or back in time.
+3. Press **Edit** to draw rooms, spots, doorways and ignore areas, then
+   **Save**. With overlapping radars, *Line up with…* (⋮) lets them share
+   shapes.
 
 Status: early development (v0.1). See [DESIGN.md](DESIGN.md),
 [DEVELOPMENT.md](DEVELOPMENT.md) and [NOTES.md](NOTES.md).
