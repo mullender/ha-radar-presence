@@ -6,7 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
-import { el, fmtTime, fmtDateTime } from './util.js';
+import { el, fmtTime, fmtDateTime, fmtDuration } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const RANGES = [['1 hour', 3600], ['6 hours', 21600], ['24 hours', 86400], ['3 days', 259200]];
@@ -74,7 +74,7 @@ svg.links path { fill: none; stroke: var(--divider-color, #bbb); stroke-width: 2
 svg.links path.door { stroke-dasharray: 5 4; }
 svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
 .timeline-wrap { grid-column: 1 / -1; background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); padding: 2px 0; }
-.log { border-left: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); overflow-y: auto; max-height: 70vh; font-size: 12px; }
+.log { border-left: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); overflow-y: auto; height: 100%; max-height: 70vh; font-size: 12px; }
 :host([narrow]) .log { border-left: 0; max-height: 40vh; }
 .log h3 { position: sticky; top: 0; margin: 0; padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666);
   background: var(--card-background-color, #fff); border-bottom: 1px solid var(--divider-color, #ddd); display: flex; gap: 8px; }
@@ -101,8 +101,22 @@ svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
 .row .why { color: var(--secondary-text-color, #777); }
 .row.ignored { color: var(--secondary-text-color, #888); }
 .empty { padding: 30px; color: var(--secondary-text-color, #777); }
-.story { padding: 8px 10px; border-bottom: 1px solid var(--divider-color, #ddd); background: var(--secondary-background-color, #f7f7f7); }
-.story b { display: block; margin-bottom: 4px; }
+.side { position: relative; min-width: 0; }
+.sheet-wrap { position: absolute; inset: 0; background: var(--card-background-color, #fff); border-left: 1px solid var(--divider-color, #ddd);
+  box-shadow: -2px 0 8px rgba(0,0,0,.08); overflow-y: auto; z-index: 3; }
+.sheet { padding: 12px 14px; font-size: 13px; }
+.sheet-h { display: flex; align-items: center; gap: 8px; }
+.sheet-h b { font-size: 15px; font-weight: 500; }
+.sheet-h .x { margin-left: auto; border: 0; background: none; font-size: 16px; cursor: pointer; color: inherit; }
+.sheet .sum { margin: 10px 0; line-height: 1.45; }
+.route { border-left: 2px solid var(--divider-color, #ddd); margin-left: 6px; padding-left: 12px; }
+.step { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 4px 0; }
+.step .pin { position: absolute; left: -18px; top: 9px; width: 10px; height: 10px; border-radius: 50%; background: var(--primary-color, #03a9f4); }
+.step.inferred .pin { background: var(--card-background-color, #fff); border: 2px solid var(--primary-color, #03a9f4); width: 6px; height: 6px; }
+.step .st-t { color: var(--secondary-text-color, #777); font-variant-numeric: tabular-nums; }
+.step .play { border: 0; background: none; color: var(--primary-color, #03a9f4); cursor: pointer; }
+.fold summary { cursor: pointer; color: var(--secondary-text-color, #666); padding: 4px 0; }
+.help { color: var(--secondary-text-color, #777); font-size: 12px; }
 `;
 
 export class RzpHeadcount extends HTMLElement {
@@ -113,8 +127,9 @@ export class RzpHeadcount extends HTMLElement {
     this.barEl = el('div', { class: 'bar' });
     this.houseEl = el('div', { class: 'house' });
     this.logEl = el('div', { class: 'log' });
+    this.sheetEl = el('div', { class: 'sheet-wrap', style: { display: 'none' } });
     this.timeline = document.createElement('rzp-timeline');
-    root.append(this.barEl, el('div', { class: 'scroll' }, this.houseEl, this.logEl, el('div', { class: 'timeline-wrap' }, this.timeline)));
+    root.append(this.barEl, el('div', { class: 'scroll' }, this.houseEl, el('div', { class: 'side' }, this.logEl, this.sheetEl), el('div', { class: 'timeline-wrap' }, this.timeline)));
     this.rangeS = 21600;
     this.data = null;
     this.entries = [];
@@ -345,7 +360,9 @@ export class RzpHeadcount extends HTMLElement {
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     this.svg.setAttribute('class', 'links');
     this.floorsEl = el('div', { class: 'floors' }, floors);
-    this.houseEl.replaceChildren(this.svg, this.floorsEl, this._story());
+    this.houseEl.replaceChildren(this.svg, this.floorsEl);
+    this.sheetEl.replaceChildren(this._story() || '');
+    this.sheetEl.style.display = this.selected === null ? 'none' : '';
     this._hot = hot;
     requestAnimationFrame(() => this._drawLinks());
   }
@@ -392,13 +409,66 @@ export class RzpHeadcount extends HTMLElement {
     return dot;
   }
 
-  /** A person's story: every log line about them up to the cursor. */
+  /** A person's story, as a side sheet: a summary sentence, then the route (solid: seen; hollow: inferred). */
   _story() {
     if (this.selected === null) return '';
+    const id = this.selected;
     const t = this.cursor ?? Infinity;
-    const lines = this.entries.filter(e => e.token === this.selected && e.t <= t).slice(-12);
-    return el('div', { class: 'story' }, el('b', {}, `Person ${this._letter(this.selected)}`),
-      lines.length ? lines.map(e => el('div', {}, `${fmtTime(e.t)}  ${this._describe(e)}`)) : 'No changes in this range.');
+    const mine = this.entries.filter(e => e.token === id && e.t <= t && ['moved', 'arrived', 'bootstrap', 'restored', 'back', 'confirmed', 'corrected', 'evidence', 'unexplained'].includes(e.kind));
+    // Steps: a room and when they got there; a stay in the same room continues the step.
+    const steps = [];
+    for (const e of mine) {
+      const last = steps[steps.length - 1];
+      if (last && last.region === e.region) continue;
+      steps.push({ region: e.region, t: e.t, seen: e.kind !== 'moved' || !/\(unseen\)/.test(e.detail || ''), kind: e.kind });
+    }
+    const end = Math.min(t, Date.now() / 1000);
+    steps.forEach((st, i) => { st.until = steps[i + 1]?.t ?? end; });
+    // Passing through for a few seconds is not a step: fold it into the next one.
+    for (let i = steps.length - 2; i >= 0; i--) {
+      if (steps[i].until - steps[i].t < 5) { steps[i + 1].t = steps[i].t; steps.splice(i, 1); }
+    }
+    for (let i = steps.length - 1; i > 0; i--) {
+      if (steps[i].region === steps[i - 1].region) { steps[i - 1].until = steps[i].until; steps[i - 1].seen &&= steps[i].seen; steps.splice(i, 1); }
+    }
+    const close = () => { this.selected = null; this.render(); };
+    if (!steps.length) {
+      return el('div', { class: 'sheet' }, el('div', { class: 'sheet-h' }, this._dotEl(id), el('b', {}, `Person ${this._letter(id)}`), el('button', { class: 'x', onclick: close }, '✕')),
+        el('div', { class: 'help' }, 'Nothing about this person in this time range.'));
+    }
+    const rooms = [];
+    for (const st of steps) if (rooms[rooms.length - 1] !== st.region) rooms.push(st.region);
+    const lastStep = steps[steps.length - 1];
+    const named = [...new Set(rooms.slice(0, -1).reverse())].slice(0, 3).reverse().map(r => `the ${this._room(r)}`);
+    const summary = rooms.length === 1
+      ? `In the ${this._room(rooms[0])} since ${fmtTime(steps[0].t, false)}.`
+      : `Was in ${named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}` : named[0]} until ${fmtTime(lastStep.t, false)}, then went into the ${this._room(lastStep.region)}.`;
+    // Collapse back-and-forth between two rooms (3+ steps) into one expandable line.
+    const items = [];
+    for (let i = 0; i < steps.length;) {
+      let j = i;
+      while (j + 2 < steps.length && steps[j + 2].region === steps[j].region && steps[j + 1].region === steps[i + 1]?.region) j += 2;
+      if (j - i >= 4) { items.push({ fold: steps.slice(i, j + 1) }); i = j + 1; } else { items.push(steps[i]); i++; }
+    }
+    const radarOf = r => this.regionRadars?.[r]?.[0];
+    const stepEl = st => el('div', { class: `step${st.seen ? '' : ' inferred'}` },
+      el('span', { class: 'pin' }), el('span', { class: 'st-t' }, fmtTime(st.t, false)),
+      el('span', { class: 'st-r' }, `${this._name(st.region)}`, el('span', { class: 'help' }, ` · ${fmtDuration(Math.max(0, st.until - st.t))}${st.seen ? '' : ' · inferred'}`)),
+      radarOf(st.region) ? el('button', { class: 'play', title: 'Play this moment', onclick: () => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(st.region), t: st.t } })) }, '▶') : '');
+    return el('div', { class: 'sheet' },
+      el('div', { class: 'sheet-h' }, this._dotEl(id), el('b', {}, `Person ${this._letter(id)}`),
+        el('span', { class: 'help' }, `${fmtTime(steps[0].t, false)} – ${fmtTime(end, false)}`), el('button', { class: 'x', title: 'Close', onclick: close }, '✕')),
+      el('p', { class: 'sum' }, summary),
+      el('div', { class: 'route' }, items.map(it => it.fold
+        ? el('details', { class: 'fold' }, el('summary', {}, `${it.fold.length} more steps (${this._room(it.fold[0].region)} ↔ ${this._room(it.fold[1].region)}, ${fmtTime(it.fold[0].t, false)} – ${fmtTime(it.fold[it.fold.length - 1].until, false)})`), it.fold.map(stepEl))
+        : stepEl(it))),
+      el('div', { class: 'help', style: { marginTop: '8px' } }, 'Letters are given per time range: they are not identities.'));
+  }
+
+  _dotEl(id) {
+    const d = el('span', { class: 'dot v' }, this._letter(id));
+    d.style.setProperty('--c', COLORS[id % COLORS.length]);
+    return d;
   }
 
   /** Doorways someone crossed in the CROSS_S before t: "a|b" keys. */
@@ -470,7 +540,7 @@ export class RzpHeadcount extends HTMLElement {
   }
 
   _who(e) { return e.token ? `Person ${this._letter(e.token)}` : 'Someone'; }
-  _room(region) { const n = this._name(region); return n ? n.charAt(0).toLowerCase() + n.slice(1) : 'somewhere'; }
+  _room(region) { const n = this._name(region); return n ? n.toLowerCase() : 'somewhere'; }
 
   /** The door used around t (the latest door change in the `within` s before, or just after), as 'the garage door'. */
   _doorNear(t, within = 120) {
