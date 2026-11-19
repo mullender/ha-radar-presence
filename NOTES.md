@@ -506,7 +506,7 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   floor without an exclusion, but breaks the open-plan kitchen / living room: 5 -> 9 false counts while away).
   Turning the cross-check off: 11.5 h above bounds; it is worth keeping.
 
-## 2026-11-18: UI/UX proposal (stages 1–2 done 2026-11-19)
+## 2026-11-18: UI/UX proposal (stages 1–4 built 2026-11-19, not deployed)
 
 Response to the design brief, kept private next to it:
 `dev/data/design-brief/radar-presence-ux-proposal.html` (gitignored; mockups
@@ -577,3 +577,55 @@ Open: a replayed report starts from an empty house — seed tokens from
 `activity_before` in tools/headcount.py; load_report `--dev` (load a report
 into dev HA) not built; the panel URL is still /radar-zones (the proposal's
 /presence/room/... paths come with stage 3's rooms).
+
+### 2026-11-19: stages 3 and 4 built (not deployed)
+
+Stage 3, one shape per area: linked radars show as one room view (the other
+radars' shapes drawn in, snap targets, click opens them); a new radar gets a
+room the size of its view right away (named after its area); one device per
+room (model Room) with its Occupancy and Occupants; rooms without a room shape
+follow their occupants (`binary_sensor` from the head count, attribute
+`from_occupants`); doorways on the edge between two room shapes fill in where
+they lead; the door as a picture choice. Plan mode (drawing whole floors) is
+not built.
+
+Stage 4, guide:
+- **To do tab** (frontend/todo.js, admins): one question at a time, grouped by
+  room, from each radar's last 24 h and the head count's layout: places where
+  something stays (spot / ignore / nothing, with a replayed "the last day with
+  this spot" line when the place is inside a room shape), ignore areas people
+  walk through, door contacts that line up with a radar (→ doorway), rooms
+  without a radar or a doorway, radars in one area that aren't lined up. Each
+  answer makes one change through zones/save (Undo in the toast) and is kept
+  in the `radar_zone_presence.todo` store (todo/answers, todo/answer). The
+  radar view's guide uses the same store (keys "<radar>:spot:<x>,<y>",
+  "<radar>:<kind>:<zone>"; old browser-local answers are moved over once).
+- **Learning finished** (learning.py): a 30 cm grid per radar of seconds a
+  target spent in each cell, fed by every frame (the previous frame's targets
+  count until the next, at most 30 s). Hourly: after 3 days with 2+ places
+  (clusters with ≥ 15 min a day, not inside a spot or ignore area, not
+  answered), or after a week with 1+, one persistent notification per radar
+  links to To do. Kept in the To do store's meta. Its places are coarser than
+  the panel's dwell spots, so the count can differ a little from To do's.
+- **Settings tab** (frontend/settings.js, settings / settings/save): the
+  options form's fields with suggestions inline (doors and locks in rooms
+  without a radar, lights and inner doors there for hints, bed/occupancy
+  sensors, vacuums). The integration's options form still works.
+- **Blueprints** (blueprints/automation): lights follow occupancy (optional
+  lux), heat only occupied rooms, everyone left (Home occupants "0" for N min;
+  settling is unknown, so it waits). Copied to
+  `<config>/blueprints/automation/radar_presence/` on setup, never over
+  existing files.
+- **Setting up a radar** (frontend/setup.js): a card over the radar view,
+  opened by itself for a radar whose view was never saved (no display.v) and
+  from ⋮ → Mounting check. "Walk to your right" with the live dot; the way it
+  moved is highlighted; left = mirror and negate the rotation, up = −90°,
+  down = +90° (tests/js/setup.test.mjs checks every case). Then the zones saved
+  on the radar → Room / Spot / Ignore / Skip. Finish saves with
+  display.checked.
+
+Open: the To do card has no cropped evidence map yet (the proposal plays the
+busiest 20 s in place; today "Show me" opens the radar at the peak); no
+"short blips" or "use these switches as hints" questions in To do yet (blips
+are handled in the timeline popover, hints in Settings); Plan mode; /presence
+URLs; load_report `--dev`.
