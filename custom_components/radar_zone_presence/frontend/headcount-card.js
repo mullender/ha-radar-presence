@@ -1,10 +1,13 @@
-// Lovelace card: the head count as a nested list (home, floors, rooms with
-// people), with + / − on every line to correct it.
+// Lovelace card: occupants at home, in four sizes, with + / − to correct.
 //
 //   type: custom:radar-zone-presence-headcount-card
+//   size: rooms              # badge | tile | floors | rooms (default)
 //   title: Occupants         # optional
-//   show_empty_rooms: false  # optional: list rooms with nobody in them too
+//   show_empty_rooms: false  # optional (rooms): list rooms with nobody in them too
 //
+// Settling (a door to outside in use, not sure yet who went out) shows as
+// "2+ · settling" in amber with a slow pulse; never red, never an alert.
+// Badge and tile: tap for + / − on the home count.
 // + on a room adds a person there; + on a floor (or home) asks which room.
 // − on a room removes one; − on a floor removes from its only occupied room,
 // or asks which; − on home removes whoever has gone unseen longest.
@@ -21,7 +24,19 @@ ha-card { padding: 8px 0 10px; }
 .line.room .name { color: var(--primary-text-color); }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .n { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; font-size: 16px; }
-.n.doubt { color: var(--warning-color, #f9a825); }
+.n.doubt, .big.doubt, .badge .doubt { color: var(--warning-color, #d97706); }
+.settle { font-size: 12px; color: var(--warning-color, #d97706); animation: settle 2.4s ease-in-out infinite; }
+@keyframes settle { 50% { opacity: .45; } }
+ha-card.badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 18px; cursor: pointer; width: fit-content; }
+ha-card.badge .cnt { font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+ha-card.tile { padding: 12px 16px; cursor: pointer; }
+.tile .top { display: flex; align-items: baseline; gap: 10px; }
+.tile .big { font-size: 34px; font-weight: 400; line-height: 1; font-variant-numeric: tabular-nums; }
+.tile .lbl { color: var(--secondary-text-color); }
+.tile .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tile .chip { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--secondary-background-color, #f0f0f0); }
+.tile .chip b { font-weight: 500; margin-left: 4px; }
+.adjust { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 button.pm { width: 30px; height: 30px; border-radius: 15px; border: 1px solid var(--divider-color, #ccc); background: none; color: var(--primary-text-color);
   font-size: 17px; line-height: 1; cursor: pointer; padding: 0; }
 button.pm:hover { border-color: var(--primary-color); color: var(--primary-color); }
@@ -50,9 +65,22 @@ class RadarZonePresenceHeadcountCard extends HTMLElement {
     if (first) this._load();
   }
 
-  getCardSize() { return 4; }
+  getCardSize() { return { badge: 1, tile: 2, floors: 3 }[this._config?.size] || 4; }
 
-  static getStubConfig() { return { title: 'People' }; }
+  static getStubConfig() { return { size: 'tile' }; }
+
+  static getConfigForm() {
+    return {
+      schema: [
+        { name: 'size', selector: { select: { mode: 'dropdown', options: [
+          { value: 'badge', label: 'Badge: the home count' }, { value: 'tile', label: 'Tile: home count with floors' },
+          { value: 'floors', label: 'Floors, with + / −' }, { value: 'rooms', label: 'Floors and rooms, with + / −' }] } } },
+        { name: 'title', selector: { text: {} } },
+        { name: 'show_empty_rooms', selector: { boolean: {} } },
+      ],
+      computeLabel: s => ({ size: 'Size', title: 'Title', show_empty_rooms: 'Show rooms with nobody in them' }[s.name]),
+    };
+  }
 
   connectedCallback() { if (this._hass && !this._unsub) this._load(); }
 
@@ -122,11 +150,51 @@ class RadarZonePresenceHeadcountCard extends HTMLElement {
     if (this._error) card.append(this._el('div', 'err', this._error));
     const m = this._model;
     if (!m) { card.append(this._el('div', 'note', 'Loading…')); return; }
+    const settling = m.homeDoubt || m.inDoubt > 0;
+    const homeTxt = settling ? `${m.home}+` : String(m.home);
+    const size = this._config.size || 'rooms';
+    const adjust = () => {
+      const row = this._el('div', 'adjust');
+      const minus = this._el('button', 'pm', '−'); minus.disabled = !m.home; minus.title = 'One person fewer home';
+      minus.onclick = e => { e.stopPropagation(); this._correct(null, m.home - 1); };
+      const plus = this._el('button', 'pm', '+'); plus.title = 'One person more';
+      plus.onclick = e => { e.stopPropagation(); this._pick = { kind: 'plus', level: null }; this._render(); };
+      row.append(minus, plus);
+      return row;
+    };
+    if (size === 'badge') {
+      card.className = 'badge';
+      const icon = document.createElement('ha-icon'); icon.setAttribute('icon', 'mdi:account-multiple');
+      card.append(icon, this._el('span', `cnt${settling ? ' doubt' : ''}`, homeTxt));
+      if (settling) card.append(this._el('span', 'settle', 'settling'));
+      card.onclick = () => { this._open = !this._open; this._render(); };
+      if (this._open) card.append(adjust());
+      if (this._pick?.level === null) card.append(this._picker(m.floors, 0));
+      return;
+    }
+    if (size === 'tile') {
+      card.className = 'tile';
+      const top = this._el('div', 'top');
+      top.append(this._el('span', `big${settling ? ' doubt' : ''}`, homeTxt), this._el('span', 'lbl', this._config.title || 'Home'));
+      if (settling) top.append(this._el('span', 'settle', 'settling'));
+      card.append(top);
+      const chips = this._el('div', 'chips');
+      for (const f of [...m.floors].reverse()) {
+        const c = this._el('span', 'chip', f.name);
+        c.append(this._el('b', '', String(f.rooms.reduce((a, r) => a + r.n, 0)) + (f.doubt ? '+' : '')));
+        chips.append(c);
+      }
+      card.append(chips);
+      card.onclick = () => { this._open = !this._open; this._render(); };
+      if (this._open) card.append(adjust());
+      if (this._pick?.level === null) card.append(this._picker(m.floors, 0));
+      return;
+    }
 
     const line = (cls, indent, name, n, doubt, onMinus, onPlus, minusDisabled) => {
       const row = this._el('div', `line ${cls}`);
       row.style.setProperty('--indent', `${indent}px`);
-      row.append(this._el('span', 'name', name), this._el('span', `n${doubt ? ' doubt' : ''}`, doubt ? `≥${n}` : String(n)));
+      row.append(this._el('span', 'name', name), this._el('span', `n${doubt ? ' doubt' : ''}`, doubt ? `${n}+` : String(n)));
       const minus = this._el('button', 'pm', '−');
       minus.title = 'One person fewer';
       minus.disabled = minusDisabled;
@@ -138,20 +206,21 @@ class RadarZonePresenceHeadcountCard extends HTMLElement {
       return row;
     };
 
-    card.append(line('home', 0, 'Home', m.home, m.homeDoubt, () => this._correct(null, m.home - 1),
+    if (this._config.title && settling) card.querySelector('.title')?.append(' ', this._el('span', 'settle', 'settling'));
+    card.append(line('home', 0, 'Home', m.home, settling, () => this._correct(null, m.home - 1),
       () => { this._pick = this._pick?.kind === 'plus' && this._pick.level === null ? null : { kind: 'plus', level: null }; this._render(); }, !m.home));
     if (this._pick?.level === null) card.append(this._picker(m.floors, 16));
-    for (const f of m.floors) {
+    for (const f of [...m.floors].reverse()) { // upstairs first, like the House view
       const fn = f.rooms.reduce((a, r) => a + r.n, 0);
       card.append(line('floor', 16, f.name, fn, f.doubt, () => this._floorMinus(f),
         () => { this._pick = this._pick?.kind === 'plus' && this._pick.level === f.level ? null : { kind: 'plus', level: f.level }; this._render(); }, !fn));
       if (this._pick && this._pick.level === f.level) card.append(this._picker([f], 32));
-      for (const r of f.rooms) {
+      for (const r of size === 'floors' ? [] : f.rooms) {
         if (!r.n && !this._config.show_empty_rooms) continue;
         card.append(line('room', 32, r.name, r.n, false, () => this._correct(r.id, r.n - 1), () => this._correct(r.id, r.n + 1), !r.n));
       }
     }
-    if (m.inDoubt) card.append(this._el('div', 'note', `Settling: ${m.inDoubt} may have left while a door to outside was in use.`));
+    if (settling) card.append(this._el('div', 'note', 'Settling: a door to outside is in use, so it is not sure yet who went out.'));
   }
 
   /** "Which room?" for + (all rooms of these floors) or − (occupied rooms of the floor). */
