@@ -709,3 +709,68 @@ export function coverageOf(poly, cones, steps = 30) {
   }
   return { share: inside ? seen / inside : 0, radars: touched.size };
 }
+
+// ------------------------------------------------------------ doorway candidates
+
+/**
+ * Where walking trails begin and end: places where people appear and vanish, like a doorway (or the edge of the
+ * view). A trail counts once it has moved `minMove` within `withinS` of appearing (or had moved that much before
+ * vanishing), so someone lost while sitting still does not count. Events inside `skip` polygons (doorways, spots,
+ * ignore areas) are left out. Returns clusters [{points, births, deaths, centroid}] busiest first, each with at
+ * least `minEach` births and deaths.
+ */
+export function appearVanishSpots(hist, { exclusions = [], skip = [], minMove = 800, withinS = 10, cell = 400, minEach = 8, max = 4 } = {}) {
+  const trails = new Map(); // slot -> {start: [x, y, t], moved, pts: [[x, y, t]]}
+  const events = []; // [x, y, 'b' | 'd']
+  const out = (x, y) => skip.some(poly => pointInPolygon(x, y, poly));
+  const far = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) >= minMove;
+  forEachFrame(hist, exclusions, (i, t, targets, avail) => {
+    if (!avail) { trails.clear(); return; }
+    const seen = new Set();
+    for (const [slot, x, y] of targets) {
+      seen.add(slot);
+      let tr = trails.get(slot);
+      if (!tr) { tr = { start: [x, y, t], born: false, pts: [] }; trails.set(slot, tr); }
+      tr.pts.push([x, y, t]);
+      if (tr.pts.length > 50) tr.pts.shift();
+      if (!tr.born && t - tr.start[2] <= withinS && far(tr.start, [x, y])) {
+        tr.born = true;
+        if (!out(tr.start[0], tr.start[1])) events.push([tr.start[0], tr.start[1], 'b']);
+      }
+    }
+    for (const [slot, tr] of trails) {
+      if (seen.has(slot)) continue;
+      const last = tr.pts[tr.pts.length - 1];
+      const before = tr.pts.find(p => last[2] - p[2] <= withinS);
+      if (before && far(before, last) && !out(last[0], last[1])) events.push([last[0], last[1], 'd']);
+      trails.delete(slot);
+    }
+  });
+  const grid = new Map();
+  for (const e of events) {
+    const k = `${Math.floor(e[0] / cell)},${Math.floor(e[1] / cell)}`;
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push(e);
+  }
+  const seenCells = new Set(), clusters = [];
+  for (const k of grid.keys()) {
+    if (seenCells.has(k)) continue;
+    const stack = [k], cells = [];
+    seenCells.add(k);
+    while (stack.length) {
+      const c = stack.pop();
+      cells.push(c);
+      const [ci, cj] = c.split(',').map(Number);
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        const n = `${ci + di},${cj + dj}`;
+        if (grid.has(n) && !seenCells.has(n)) { seenCells.add(n); stack.push(n); }
+      }
+    }
+    const pts = cells.flatMap(c => grid.get(c));
+    const births = pts.filter(p => p[2] === 'b').length, deaths = pts.length - births;
+    if (births < minEach || deaths < minEach) continue;
+    const centroid = [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length];
+    clusters.push({ points: pts.map(p => [p[0], p[1]]), births, deaths, centroid });
+  }
+  return clusters.sort((a, b) => b.births + b.deaths - a.births - a.deaths).slice(0, max);
+}

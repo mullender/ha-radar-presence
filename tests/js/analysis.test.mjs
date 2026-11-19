@@ -271,3 +271,26 @@ test('explainOn: a fan, a blip, someone sitting still, someone walking in', () =
   assert.equal(explainOn(h, box, 60, 90, { next: 120, hold: true }).cause, 'walked');
   assert.equal(explainOn(h, box, 60, 90).cause, 'walked');
 });
+
+test('appearVanishSpots: people appear and vanish at a door, not at the seat where they are lost sitting still', async () => {
+  const { appearVanishSpots } = await import('../../custom_components/radar_zone_presence/frontend/analysis.js');
+  const door = [2000, 3000], seat = [0, 1500];
+  const frames = [];
+  let t = 0;
+  const walk = (a, b, s) => { for (let k = 0; k <= s * 2; k++) { const f = k / (s * 2); frames.push([t, [[1, a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]]]); t += 0.5; } };
+  for (let v = 0; v < 20; v++) {
+    walk(door, seat, 5);
+    for (let k = 0; k < 40; k++) { frames.push([t, [[1, seat[0] + rnd() * 100, seat[1] + rnd() * 100]]]); t += 0.5; } // sits, then is lost
+    frames.push([t, []]); t += 5;
+    walk(seat, door, 5);
+    frames.push([t, []]); t += 30;
+  }
+  const h = pack(frames);
+  const spots = appearVanishSpots(h);
+  assert.equal(spots.length, 1);
+  assert.ok(Math.hypot(spots[0].centroid[0] - door[0], spots[0].centroid[1] - door[1]) < 300, JSON.stringify(spots[0].centroid));
+  assert.equal(spots[0].births, 20);
+  assert.equal(spots[0].deaths, 20);
+  const doorway = [[1500, 2500], [2500, 2500], [2500, 3500], [1500, 3500]];
+  assert.equal(appearVanishSpots(h, { skip: [doorway] }).length, 0);
+});

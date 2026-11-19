@@ -9,7 +9,7 @@
 
 import { pointInPolygon, summarize, validatePolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
-import { classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
+import { appearVanishSpots, classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import { el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
@@ -151,6 +151,16 @@ export class RzpTodo extends HTMLElement {
         if (!z.filters?.hold_until_exit && suggestHold(st)) out.push({ key: `${r.radar_id}:hold:${z.id}`, type: 'hold', radar: r, cfg, hist, zone: z, name, stats: st, clear: base[z.id].intervals.length });
       }
     }
+    // Places where people appear and vanish (walking): a doorway not marked yet, or the edge of the view.
+    const skip = valid.filter(z => ['exit', 'linger', 'transient'].includes(z.kind) || z.spot).map(z => z.polygon);
+    for (const c of appearVanishSpots(hist, { exclusions, skip })) {
+      const polygon = placeExit(c.points);
+      if (!polygon) continue;
+      const [cx, cy] = c.centroid;
+      const times = spotTimes(hist, polygon, { exclusions });
+      out.push({ key: `${r.radar_id}:appear:${Math.round(cx / 300)},${Math.round(cy / 300)}`, type: 'appear', radar: r, cfg, hist, c, polygon,
+        peak: times?.peak != null ? hist.start + times.peak : null, room: rooms.find(z => pointInPolygon(cx, cy, z.polygon)) });
+    }
     // Ignore areas people walk through.
     for (const z of exclusions) {
       const st = trailStats(hist, z.polygon, { exclusions: exclusions.filter(q => q !== z) });
@@ -250,11 +260,12 @@ export class RzpTodo extends HTMLElement {
   _group(i) { return i.radar ? this._room(i.radar) : i.title || 'House'; }
 
   _short(i) {
-    return { blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
+    return { appear: 'A doorway?', blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
   }
 
   _hint(i) {
     if (i.type === 'spot') return `${fmtDuration(i.sp.dwell)} in the last day, ${this._room(i.radar)}.`;
+    if (i.type === 'appear') return `People appear and vanish here ${i.c.births + i.c.deaths}× a day.`;
     if (i.type === 'blips') return `Turned on for under 3 s ${i.blips}× in a day.`;
     if (i.type === 'hold') return 'Goes clear while someone sits still.';
     if (i.type === 'walked') return `${i.zone.name}: walked into ${i.walkIn}× in a day.`;
@@ -325,6 +336,22 @@ export class RzpTodo extends HTMLElement {
           return [el('b', {}, '▶ The last day remembering them: '), n < i.clear ? `the ${room} would have gone clear ${i.clear - n} time${i.clear - n === 1 ? '' : 's'} less.` : `the ${room} would have gone clear just as often.`];
         }),
       ];
+    } else if (i.type === 'appear') {
+      const where = i.room ? this._zoneName(i.room, i.radar).toLowerCase() : this._room(i.radar).toLowerCase();
+      const own = i.radar.area_id;
+      const areas = Object.values(this.hass.areas || {}).filter(a => a.area_id !== own).sort((a, b) => a.name.localeCompare(b.name));
+      const to = el('select', { onclick: e => e.stopPropagation(), title: 'Where it leads' },
+        el('option', { value: '' }, 'somewhere (pick later)'), el('option', { value: 'outside' }, 'Outside'), areas.map(a => el('option', { value: a.area_id }, a.name)));
+      body = [
+        el('h2', {}, glyphSvg('door', kindTone('exit'), 18), `People appear and vanish here`),
+        el('div', { class: 'why' }, `In the last day ${i.c.births} walks began here and ${i.c.deaths} ended here, in the ${where}. That is what a doorway looks like, or the edge of what the radar sees.`),
+        el('div', { class: 'ans' },
+          el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+            el('button', { class: 'rec', style: { flex: 1 }, onclick: () => this._answer(i, 'doorway', () => this._addZone(i.radar.radar_id, { kind: 'exit', name: to.value ? `To ${to.selectedOptions[0].textContent.toLowerCase()}` : 'Doorway', polygon: i.polygon, leads_to: to.value ? [to.value] : [] })) },
+              glyphSvg('door', kindTone('exit'), 16), 'A doorway, to', el('span', { class: 'tag' }, 'likely')), to),
+          el('button', { onclick: () => this._answer(i, 'nothing') }, 'Nothing: the edge of the view')),
+      ];
+      if (i.peak) acts.push(show(i.radar.radar_id, i.peak));
     } else if (i.type === 'walked') {
       body = [
         el('h2', {}, glyphSvg('ignore', kindTone('exclude'), 18), `People walk through “${i.zone.name}”`),
