@@ -506,7 +506,7 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   floor without an exclusion, but breaks the open-plan kitchen / living room: 5 -> 9 false counts while away).
   Turning the cross-check off: 11.5 h above bounds; it is worth keeping.
 
-## 2026-11-18: UI/UX proposal (not started)
+## 2026-11-18: UI/UX proposal (stages 1–2 done 2026-11-19)
 
 Response to the design brief, kept private next to it:
 `dev/data/design-brief/radar-presence-ux-proposal.html` (gitignored; mockups
@@ -547,3 +547,33 @@ Stages: 1 calm (renaming, review/edit, styling, spot toggle, read-only access),
 2 explain (Activity sentences, person story, card sizes, reports),
 3 one shape per area (shapes in the group frame, room devices with occupancy
 plus occupants), 4 guide (To do, setup wizard, notification, blueprints).
+
+### 2026-11-19: stages 1 and 2 built (not deployed)
+
+Stage 1, calm: renaming (devices drop the "Presence" suffix: entity
+"<name> Occupancy", models Room / Spot / Radar doorways); shape visual
+language (util.KIND_STYLE: fill carries the kind, ×2 while occupied, room fill
+×0.4 outside every view cone via an SVG clip of the cones; label pills with
+glyphs; doorways labelled by where they lead); detections in ink with a
+density slider, ignored ones hollow (point flag 2 always computed); scale bar
+instead of grid/rings; review vs edit (any change enters edit; Save/Cancel
+leave it); Details switch stored in HA user data (`frontend/set_user_data`,
+key radar_presence); 15 min default range; read-only panel for non-admins
+(panel registered without require_admin; only zones/save and report/build
+keep it). Spot occupancy sensor: a zone subentry with `spot: true` (also a
+linger spot for the tracker); a spot without a sensor stays kind linger on the
+radar; switching keeps the id.
+
+Stage 2, explain: House is the home screen (floors stacked, room click opens
+its radar at that moment); Activity sentences built client-side from the log
+(kind + detail + nearby door entries) with "How we know" bullets — they only
+restate what the log recorded; person story sheet (steps under 5 s fold into
+the next); timeline popovers (analysis.explainOn: still / blip / lost /
+walked) whose fixes enter edit mode; occupants card sizes; correction
+follow-up (headcount/answer stores the answer on the corrected log entries);
+Report a problem (report.py + frontend/report.js + tools/load_report.py).
+
+Open: a replayed report starts from an empty house — seed tokens from
+`activity_before` in tools/headcount.py; load_report `--dev` (load a report
+into dev HA) not built; the panel URL is still /radar-zones (the proposal's
+/presence/room/... paths come with stage 3's rooms).
