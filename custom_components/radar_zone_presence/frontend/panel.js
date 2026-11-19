@@ -1018,6 +1018,7 @@ class RadarZonePresencePanel extends HTMLElement {
       polygon: polygon.map(p => [Math.round(p[0] * 10) / 10, Math.round(p[1] * 10) / 10]),
       filters: { on_delay_s: 0, off_delay_s: 0, edge_margin_mm: 0, hold_until_exit: false, hold_max_s: 0, ...filters }, area_id: null,
     };
+    if (kind === 'exit') zone.leads_to = this._doorwayLeadsTo(zone) || []; // on the edge between two rooms: it connects them
     const prev = JSON.stringify(this.zones);
     this.selectedId = zone.id;
     this.selectedVertex = null;
@@ -1243,7 +1244,8 @@ class RadarZonePresencePanel extends HTMLElement {
 
     this.plot.addEventListener('zones-change', e => {
       if (e.detail.commit) {
-        this._setZones(e.detail.zones, { prev: this._dragPrev ?? JSON.stringify(this.zones) });
+        const zones = e.detail.zones.map(z => (z.kind === 'exit' && !z.leads_to?.length && z.id === this.selectedId ? { ...z, leads_to: this._doorwayLeadsTo(z) || [] } : z));
+        this._setZones(zones, { prev: this._dragPrev ?? JSON.stringify(this.zones) });
         this._dragPrev = null;
         this._renderSide();
       } else {
@@ -1948,6 +1950,31 @@ class RadarZonePresencePanel extends HTMLElement {
     return area && /^(room|polygon|zone|whole room|spot)\b/i.test(z.name.trim()) ? { name: area.name } : {};
   }
 
+  /** The rooms on either side of a doorway (own and linked room shapes): [areaA, areaB] when they differ, else null. */
+  _doorwaySides(z) {
+    if (validatePolygon(z.polygon)) return null;
+    const { rect } = doorGeometry(z.polygon, null);
+    const c = rect.reduce((a, p) => [a[0] + p[0] / 4, a[1] + p[1] / 4], [0, 0]);
+    const vx = rect[3][0] - rect[0][0], vy = rect[3][1] - rect[0][1], th = Math.hypot(vx, vy) || 1;
+    const off = th / 2 + 250, side = s => [c[0] + (vx / th) * off * s, c[1] + (vy / th) * off * s];
+    const rooms = [
+      ...this.zones.filter(q => q.kind === 'include' && !q.spot).map(q => [q.polygon, q.area_id || this.config.device_area_id]),
+      ...this._linkedShapes().filter(l => l.zone.kind === 'include' && !l.zone.spot).map(l => [l.zone.polygon, l.zone.area_id || this.peers.get(l.radarId)?.cfg.device_area_id]),
+    ];
+    const areaAt = ([x, y]) => rooms.find(([poly]) => pointInPolygon(x, y, poly))?.[1] || null;
+    const a = areaAt(side(1)), b = areaAt(side(-1));
+    return a && b && a !== b ? [a, b] : null;
+  }
+
+  /** Where a doorway on the shared edge of two room shapes leads: the room that is not this radar's. */
+  _doorwayLeadsTo(z) {
+    const sides = this._doorwaySides(z);
+    if (!sides) return null;
+    const here = this.config.device_area_id;
+    const other = sides.find(a => a !== here);
+    return sides.includes(here) && other ? [other] : null;
+  }
+
   /** Coverage of a room by this radar's and the linked radars' views: "85 % seen by 2 radars". */
   _coverageText(z) {
     const cones = this._coverage() || [];
@@ -2572,6 +2599,15 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _exitEditor(z) {
+    const sides = this._doorwaySides(z);
+    const names = sides?.map(a => this.hass.areas?.[a]?.name || a);
+    const connects = sides ? [el('label', {}, 'Connects'), el('div', { class: 'help' }, `${names[0]} ↔ ${names[1]} (from the room shapes on either side)`,
+      JSON.stringify(z.leads_to || []) !== JSON.stringify(this._doorwayLeadsTo(z) || []) && this._doorwayLeadsTo(z)
+        ? el('div', {}, el('button', { class: 'btn', onclick: () => this._patchZone(z.id, { leads_to: this._doorwayLeadsTo(z) }, { renderSide: true }) }, `Lead to ${names.find(n => n !== this.hass.areas?.[this.config.device_area_id]?.name) || ''}`)) : '')] : [];
+    return [...connects, ...this._exitEditorRest(z)];
+  }
+
+  _exitEditorRest(z) {
     const cands = Object.keys(this.doors).length ? Object.keys(this.doors) : this._doorCandidates();
     const ranked = cands
       .map(id => ({ id, st: this._doorStats(id) }))
