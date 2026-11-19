@@ -479,7 +479,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <ul class="root">
 <li><span class="n q">No preferred token, and the runtime flags the track as a one-radar reflection?</span><ul><li><span class="lbl">yes</span><span class="n w">pending (until another radar confirms it)</span></li></ul></li>
 <li><span class="n q">No preferred token, not at a portal, and within <code>SEPARATE_MM</code> = 1500 of someone visible in this region?</span><ul><li><span class="lbl">yes</span><span class="n w">pending (most likely that person's track splitting)</span></li></ul></li>
-<li><span class="n q">At a portal (within <code>PORTAL_MM</code> = 1200 of it)? Which kind?</span>
+<li><span class="n q">At a portal (within <code>PORTAL_MM</code> = 1200 of it), with or without a preferred token (EC-102)? Which kind?</span>
  <ul>
  <li><span class="lbl">to outside / unobserved only</span><span class="n a">candidate = the most recently seen unseen token in the portal's destinations (back from the garage), else in this region (lost at the door a moment ago, or seen through it)</span></li>
  <li><span class="lbl">to observed regions (stairs)</span><span class="n a">candidate = someone from where it leads, however long they sat still; else someone from this region; else anyone who could have walked here</span></li>
@@ -610,7 +610,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <div class="dt"><div class="title">hold(region, on, t, why, move): an occupancy sensor's region is held (on) or free (off)</div>
 <ul class="root">
 <li><span class="n q"><code>on</code>?</span><ul>
-  <li><span class="lbl">no</span><span class="n a">Remove the region from <code>_held</code>. If its anchor is still there and unseen: <code>last_seen = t</code>; log "evidence". They just got up, so they are the likeliest next track nearby.</span></li>
+  <li><span class="lbl">no</span><span class="n a">Remove the region from <code>_held</code>; nothing else. A bed sensor also drops to off for minutes while someone sleeps (seen in real data), so off does not mean they got up. When they do, a radar sees them, or they come out through the room's doorway.</span></li>
   <li><span class="lbl">yes</span><span class="n q">Is a counted or in-doubt token believed to be here (<code>_anchor_in</code>)?</span><ul>
     <li><span class="lbl">yes</span><span class="n a">anchor = a visible one first, then a counted one before an in-doubt one, then the most recently seen</span></li>
     <li><span class="lbl">no</span><span class="n q"><code>move</code>, and nobody visible next door at a portal leading here?</span><ul><li><span class="lbl">yes</span><span class="n a"><code>_match(region)</code>, moved here unseen</span></li><li><span class="lbl">no</span><span class="n x">held with no anchor (never adds a person)</span></li></ul></li></ul></li></ul></li>
@@ -662,7 +662,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <li><span class="n a">The region is <i>occupied</i> while <b>any</b> of its occupancy sensors is on (a bed's left, right, both and either sensors are one signal). No context filter: these sensors are not switched by hand.</span></li>
 <li><span class="n q">Same as the applied state, with no change waiting?</span><ul><li><span class="lbl">yes</span><span class="n x">nothing</span></li></ul></li>
 <li><span class="n w">Wait <code>OCCUPANCY_STEADY_S</code> = 10 s. A newer change restarts the wait.</span></li>
-<li><span class="n q">Still different from the applied state?</span><ul><li><span class="lbl">no</span><span class="n x">nothing (turning over, a bounce)</span></li><li><span class="lbl">yes</span><span class="n a">log the signal ("on: someone is there while it stays on" / "off: they got up"); <code>hold(region, on, t of the change, sensor)</code></span></li></ul></li></ul></div>
+<li><span class="n q">Still different from the applied state?</span><ul><li><span class="lbl">no</span><span class="n x">nothing (turning over, a bounce)</span></li><li><span class="lbl">yes</span><span class="n a">log the signal ("on: someone is there while it stays on" / "off: released"); <code>hold(region, on, t of the change, sensor)</code></span></li></ul></li></ul></div>
 <div class="rule"><span class="id">RT-OC-1</span>At start-up, every region with a sensor on is held with <code>move = false</code>: it anchors whoever was restored there and moves nobody in. Held state is not saved; it is read back from the sensors.</div>
 
 <h3>11.4 Robot vacuums</h3>
@@ -869,6 +869,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td>EC-99</td><td>Bed sensor on with nobody unseen who could be there</td><td>held, no anchor; never adds</td><td>§10.10</td><td><span class="cov-y">✔</span> test_occupancy_pulls_the_unseen_person_in_but_never_adds_one</td></tr>
 <tr><td>EC-100</td><td>Sitting on the bed for a moment; turning over</td><td>OCCUPANCY_STEADY_S debounce on both edges</td><td>§11.3b</td><td><span class="cov-y">✔</span> test_a_bed_sensor_holds_someone_in_the_bedroom</td></tr>
 <tr><td>EC-101</td><td>"−" on home with someone in bed and someone unseen elsewhere</td><td>the anchored one is removed last</td><td>HC-CO-1/2</td><td><span class="cov-y">✔</span> test_occupancy_a_correction_removes_the_anchored_person_last</td></tr>
+<tr><td>EC-102</td><td>The tracker revives a track id in a doorway, hours after its person was last seen there</td><td>the doorway still says who could be there (a re-found track no longer skips the portal rule)</td><td>§10.2</td><td><span class="cov-y">✔</span> test_a_refound_track_at_a_doorway_is_someone_from_where_it_leads</td></tr>
 </table>
 
 <!-- ================================================================== -->

@@ -545,7 +545,7 @@ class HeadCountRuntime:
         if self._occupied.get(region, (False, 0.0))[0] == on:
             return  # back as it was (a bounce)
         self._occupied[region] = (on, t)
-        self._log_signal(t, "signal", entity_id, "on: someone is there while it stays on" if on else "off: they got up", region)
+        self._log_signal(t, "signal", entity_id, "on: someone is there while it stays on" if on else "off: released", region)
         self._hc("hold", region, on, t, entity_id)
         self._changed()
 

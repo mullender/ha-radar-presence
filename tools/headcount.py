@@ -69,6 +69,10 @@ def main() -> None:
     ap.add_argument("--outside-doors", default="{}", help='JSON: door entity -> area, doors to outside no radar sees (with --from-leads-to)')
     ap.add_argument("--evidence", type=Path, help="logbook JSON: entity -> [[t, state, by hand, origin], ...] (switches, contacts)")
     ap.add_argument("--evidence-areas", default="{}", help='JSON: entity -> [area, only switching on counts]')
+    ap.add_argument("--occupancy", type=Path, help="history JSON: entity -> [[t, state], ...] (bed sensors: on while someone is there)")
+    ap.add_argument("--occupancy-areas", default="{}", help='JSON: occupancy sensor -> its area')
+    ap.add_argument("--occupancy-steady", type=float, default=10.0, help="seconds a space's sensors must stay on / off to count (as the runtime)")
+    ap.add_argument("--occupancy-dry", action="store_true", help="only print the occupancy changes and who is where then; do not apply them")
     ap.add_argument("--quiet", action="store_true", help="only print the score")
     a = ap.parse_args()
     tz = dt.timezone(dt.timedelta(hours=a.tz))
@@ -188,6 +192,36 @@ def main() -> None:
                 if usable and by_hand and (not ev_areas[e][1] or state == "on"):
                     off = state == "off" and e.split(".")[0] in ("light", "switch", "fan", "input_boolean")
                     events.append((t, 2, region, (e, not off)))
+    t_end = max(f[-1].t for f in frames.values() if f)
+    if a.occupancy:
+        # As the runtime: a space is held while any of its sensors is on, once that has lasted --occupancy-steady.
+        oc_areas = json.loads(a.occupancy_areas)
+        area_region = {}
+        for r in regions:
+            area_region.setdefault(r.name, r.id)
+        changes: dict[str, list[tuple[float, str, str]]] = {}
+        for e, rows in json.loads(a.occupancy.read_text()).items():
+            if e in oc_areas and (region := area_region.get(oc_areas[e])) is not None:
+                changes.setdefault(region, []).extend((t, e, st) for t, st in rows if t0 <= t <= t_end)
+        for region, rows in changes.items():
+            state: dict[str, str] = {}
+            applied, wait = False, None  # wait: (on, since, sensor)
+            rows.sort()
+            for i, (t, e, st) in enumerate(rows):
+                if st in ("unavailable", "unknown"):
+                    continue
+                state[e] = st
+                on = any(v == "on" for v in state.values())
+                if wait is None and on == applied:
+                    continue
+                if wait is not None and wait[0] != on:
+                    wait = None if on == applied else (on, t, e)
+                elif wait is None:
+                    wait = (on, t, e)
+                nxt = next((r[0] for r in rows[i + 1 :] if r[2] not in ("unavailable", "unknown")), float("inf"))
+                if wait is not None and nxt - wait[1] >= a.occupancy_steady:
+                    events.append((wait[1] + a.occupancy_steady, 3, region, (wait[0], wait[1], wait[2])))
+                    applied, wait = wait[0], None
     door_locks = json.loads(a.door_locks)
     events.sort(key=lambda e: (e[0], e[1]))
     lock_state: dict[str, str] = {}
@@ -225,6 +259,18 @@ def main() -> None:
         n_changes = len(hc.changes) if tick + 5 >= t and n_changes < len(hc.changes) and hc.changes[-1].kind == "left" else n_changes
         if kind == 2:
             hc.evidence(key, t, payload[0], move=payload[1])
+            record(timeline, hc, t)
+            continue
+        if kind == 3:
+            on, since, sensor = payload
+            n_before = len(hc.changes)
+            if not a.occupancy_dry:
+                hc.hold(key, on, since, sensor)
+            if t_from is None or t >= t_from:
+                who = [f"#{c.token}" for c in hc.changes[n_before:] if c.kind == "evidence"]
+                floor = hc.regions[key].floor
+                rooms = " ".join(f"{r}:{','.join(f'#{k.id}' for k in hc.tokens.values() if k.region == r) or '-'}" for r in hc.regions if hc.regions[r].floor == floor)
+                say(f"{fmt(since)}  OCC {key} {'held' if on else 'free'} {' '.join(who)}  anchor: {hc.held().get(key)}   [{rooms}]")
             record(timeline, hc, t)
             continue
         if kind == 1 and key in vac_watch:

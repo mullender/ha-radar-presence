@@ -268,15 +268,13 @@ class HeadCount:
         stays on. Like evidence, whoever is believed there stays (or the unseen person who could have walked there is
         moved there, ``move``); that person is anchored: not taken to explain a track in another region, nor put in
         doubt by an exit door (someone in bed did not go out), and back at once if in doubt. It never adds a person.
-        Off: they got up; they are there now, and free to be the next track nearby."""
+        Off: released, nothing more. (A bed sensor also drops to off for minutes while someone sleeps: off does not
+        say they got up. When they do, a radar sees them, or they come out through the room's doorway.)"""
         if region not in self.regions:
             return
         self._tick(t)
         if not on:
-            tok = self.tokens.get(self._held.pop(region, None) or -1)
-            if tok is not None and tok.region == region and tok.visible is None:
-                tok.last_seen = t
-                self.changes.append(Change(t, "evidence", tok.id, region, why))
+            self._held.pop(region, None)
             return
         tok = self._anchor_in(region)
         if tok is None and move and not self._in_doorway_to(region):
@@ -800,7 +798,7 @@ class HeadCount:
         return False
 
     def _appear(self, region: str, tid: int, t: float, pos: tuple[float, float], prefer: Token | None = None) -> None:
-        portal = None if prefer is not None else self._portal_at(region, pos)
+        portal = self._portal_at(region, pos)  # (a re-found track at a doorway too: the doorway says who could be there)
         if prefer is None and tid in self._unconfirmed.get(region, ()):
             self._pending[(region, tid)] = _Pending(region, tid, t)  # one radar's reflection, until another sees it
             return

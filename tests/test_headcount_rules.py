@@ -378,3 +378,19 @@ def test_occupancy_a_correction_removes_the_anchored_person_last() -> None:
     hc.correct_home(1, 60.0)
     assert list(hc.tokens) == [anchor]
 
+
+
+def test_a_refound_track_at_a_doorway_is_someone_from_where_it_leads() -> None:
+    """The tracker revives a track id last used by the child, in the doorway of their room without a radar, hours
+    later. Whoever was seen most recently elsewhere (the parent, in bed) is not it: the doorway says who."""
+    kids_door = Portal("Kid's door", ((200, 3200), (1300, 3200), (1300, 6200), (200, 6200)), ("kids_room",))
+    regions = [Region("hall", 3, portals=(kids_door,)), Region("kids_room", 3, observed=False), Region("bedroom", 3)]
+    hc = HeadCount(regions, connections=[("hall", "kids_room", None), ("hall", "bedroom", None)])
+    hc.seed("hall", 1, 0.0)
+    walk(hc, "hall", 1, 10.0, [(-1000.0, 2000.0), (0.0, 3500.0), (700.0, 4800.0)])  # to bed: vanishes in the doorway
+    kid = hc._binding[("hall", 1)]
+    assert hc.tokens[kid].region == "kids_room"
+    hc.seed("bedroom", 1, 0.0)
+    walk(hc, "bedroom", 5, 3000.0, [(500.0, 1000.0), (900.0, 1200.0), (1300.0, 1000.0)])  # the parent, seen later
+    hc.frame("hall", {1: (1050.0, 4950.0)}, 8000.0)  # track 1 again, in the kid's doorway
+    assert bound(hc, "hall", 1) == kid

@@ -1006,4 +1006,4 @@ async def test_a_bed_sensor_holds_someone_in_the_bedroom(hass: HomeAssistant, ra
     await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
     assert rt.hc.held() == {} and rt.hc.count() == 1
     details = [e["detail"] for e in rt.log if e["kind"] == "signal"]
-    assert details.count("on: someone is there while it stays on") == 1 and details.count("off: they got up") == 1
+    assert details.count("on: someone is there while it stays on") == 1 and details.count("off: released") == 1
