@@ -24,10 +24,15 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_DEVICE_ID,
     CONF_DISPLAY,
+    CONF_EVIDENCE,
+    CONF_EVIDENCE_ON,
     CONF_HEADCOUNT,
+    CONF_OCCUPANCY,
+    CONF_OUTSIDE_DOORS,
     CONF_PROFILE,
     CONF_RADAR,
     CONF_RECONNECT_GRACE,
+    CONF_VACUUMS,
     CONF_ZONES,
     DOMAIN,
     FOV_HALF_ANGLE_DEG,
@@ -60,6 +65,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_report_build,
         ws_todo_answers,
         ws_todo_answer,
+        ws_settings,
+        ws_settings_save,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -383,6 +390,62 @@ async def ws_todo_answer(hass: HomeAssistant, connection, msg) -> None:
 
     todo = await async_get_todo(hass)
     todo.set(msg["key"], msg["answer"])
+    connection.send_result(msg["id"])
+
+
+SETTING_DOMAINS = {
+    CONF_OUTSIDE_DOORS: ("binary_sensor", "cover", "lock"),
+    CONF_EVIDENCE: ("binary_sensor", "switch", "light", "fan", "event", "input_boolean"),
+    CONF_EVIDENCE_ON: ("binary_sensor", "switch", "light", "fan", "event", "input_boolean"),
+    CONF_OCCUPANCY: ("binary_sensor", "input_boolean"),
+    CONF_VACUUMS: ("vacuum",),
+}
+
+
+def _entity_list(domains: tuple[str, ...]):
+    def check(value: Any) -> list[str]:
+        ids = vol.Schema([vol.All(str, vol.Length(max=255))])(value)
+        for e in ids:
+            if e.split(".", 1)[0] not in domains:
+                raise vol.Invalid(f"{e}: not one of {', '.join(domains)}")
+        return list(dict.fromkeys(ids))
+
+    return check
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings"})
+@callback
+def ws_settings(hass: HomeAssistant, connection, msg) -> None:
+    """The home's settings (the options form's fields)."""
+    entry = _home(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No home")
+        return
+    o = entry.options
+    connection.send_result(
+        msg["id"],
+        {CONF_RECONNECT_GRACE: o.get(CONF_RECONNECT_GRACE, 0), **{k: list(o.get(k, [])) for k in SETTING_DOMAINS}},
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/settings/save",
+        vol.Optional(CONF_RECONNECT_GRACE): vol.All(vol.Coerce(float), vol.Range(min=0, max=600)),
+        **{vol.Optional(k): _entity_list(d) for k, d in SETTING_DOMAINS.items()},
+    }
+)
+@callback
+def ws_settings_save(hass: HomeAssistant, connection, msg) -> None:
+    """Change some of the home's settings; the home reloads."""
+    entry = _home(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "No home")
+        return
+    changes = {k: v for k, v in msg.items() if k in SETTING_DOMAINS or k == CONF_RECONNECT_GRACE}
+    hass.config_entries.async_update_entry(entry, options={**entry.options, **changes})
     connection.send_result(msg["id"])
 
 

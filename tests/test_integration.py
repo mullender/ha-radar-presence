@@ -1182,3 +1182,18 @@ async def test_learning_finished_tells_once_when_a_radar_has_suggestions(hass: H
         assert "2 suggestions" in create.call_args.args[1] and lm.PANEL_URL in create.call_args.args[1]
         lr._check()
         assert create.call_count == 1  # once
+
+
+async def test_settings_are_read_and_saved_from_the_panel(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    """The panel's Settings page: the options form's fields, validated by domain; a save reloads the home."""
+    entry = await setup_entry(hass, radar_device, [])
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/settings/save", "vacuums": ["vacuum.robot"], "occupancy": ["binary_sensor.bed"]})
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    await client.send_json_auto_id({"type": f"{DOMAIN}/settings"})
+    res = (await client.receive_json())["result"]
+    assert res["vacuums"] == ["vacuum.robot"] and res["occupancy"] == ["binary_sensor.bed"] and res["outside_doors"] == []
+    assert entry.options["reconnect_grace_s"] == 0  # kept
+    await client.send_json_auto_id({"type": f"{DOMAIN}/settings/save", "vacuums": ["light.kitchen"]})
+    assert not (await client.receive_json())["success"]

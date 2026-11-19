@@ -5,6 +5,7 @@ import './plot.js';
 import './timeline.js';
 import './headcount.js';
 import './todo.js';
+import './settings.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
@@ -40,7 +41,7 @@ header .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; background: rgba(255,255,255,.12); border-radius: 6px; padding: 2px; }
 .tabs .tab { background: none; border: 0; color: inherit; padding: 5px 12px; border-radius: 4px; cursor: pointer; opacity: .8; }
 .tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }
-.app > rzp-headcount, .app > rzp-todo { min-height: 0; }
+.app > rzp-headcount, .app > rzp-todo, .app > rzp-settings { min-height: 0; }
 .tabs .tab .badge { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 5px; border-radius: 8px; background: #d97706; color: #fff; font-size: 11px; line-height: 16px; text-align: center; font-weight: 500; }
 header .dirty { font-size: 12px; opacity: .9; }
 header.edit { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
@@ -217,7 +218,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hoverSpot = null;
     this.showSpots = true;
     this.fitPreview = null; // polygon previewed by hovering 'Fit to points'
-    this.tab = 'radars'; // 'radars' | 'headcount' | 'todo'
+    this.tab = 'radars'; // 'radars' | 'headcount' | 'todo' | 'settings'
     this.editing = false; // review (default) or edit: tools, property panel, undo, Save / Cancel
   }
 
@@ -225,6 +226,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this._hass = hass;
     if (this.hcEl) this.hcEl.hass = hass;
     if (this.todoEl) this.todoEl.hass = hass;
+    if (this.settingsEl) this.settingsEl.hass = hass;
     if (!this._started) { this._started = true; this._start(); }
     else if (this.config) { this._refreshLiveBadges(); this._updateDoorStates(); }
   }
@@ -270,6 +272,7 @@ class RadarZonePresencePanel extends HTMLElement {
     await this._loadTodoAnswers();
     const q0 = new URLSearchParams(location.hash.slice(1));
     if (q0.get('view') === 'todo' && this.admin) { await this._setTab('todo'); return; }
+    if (q0.get('view') === 'settings' && this.admin) { await this._setTab('settings'); return; }
     if (q0.get('view') === 'headcount') {
       await this._setTab('headcount');
       if (q0.get('t')) this.hcEl.showTime(+q0.get('t'), +q0.get('span') || 600);
@@ -292,6 +295,7 @@ class RadarZonePresencePanel extends HTMLElement {
   async _applyHash() {
     const q = new URLSearchParams(location.hash.slice(1));
     if (q.get('view') === 'todo' && this.admin) { await this._setTab('todo'); return; }
+    if (q.get('view') === 'settings' && this.admin) { await this._setTab('settings'); return; }
     if (q.get('view') === 'headcount') {
       await this._setTab('headcount');
       if (q.get('t')) this.hcEl.showTime(+q.get('t'), +q.get('span') || 600);
@@ -343,6 +347,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.bodyEl.style.display = tab === 'radars' ? '' : 'none';
     this.hcEl.style.display = hc ? '' : 'none';
     this.todoEl.style.display = tab === 'todo' ? '' : 'none';
+    this.settingsEl.style.display = tab === 'settings' ? '' : 'none';
     this._renderHeader();
     if (hc) {
       history.replaceState(null, '', '#view=headcount');
@@ -352,6 +357,10 @@ class RadarZonePresencePanel extends HTMLElement {
       history.replaceState(null, '', '#view=todo');
       await this.todoEl.activate();
       this.todoAnswers = this.todoEl.answers;
+    } else if (tab === 'settings') {
+      this.hcEl.deactivate();
+      history.replaceState(null, '', '#view=settings');
+      await this.settingsEl.activate();
     } else {
       this.hcEl.deactivate();
       if (this.radarId) history.replaceState(null, '', `#radar=${this.radarId}`);
@@ -1287,7 +1296,10 @@ class RadarZonePresencePanel extends HTMLElement {
     this.todoEl.addEventListener('line-up', e => this._todoLineUp(e.detail.radar));
     this.todoEl.addEventListener('mark-doorway', e => this._todoMarkDoorway(e.detail.area));
     this.todoCount = localStorage.getItem('rzp.todo.count') ? +localStorage.getItem('rzp.todo.count') : null;
-    root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl, this.todoEl));
+    this.settingsEl = document.createElement('rzp-settings');
+    this.settingsEl.hass = this._hass;
+    this.settingsEl.style.display = 'none';
+    root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl, this.todoEl, this.settingsEl));
 
     this.plot.addEventListener('zones-change', e => {
       if (e.detail.commit) {
@@ -1367,13 +1379,14 @@ class RadarZonePresencePanel extends HTMLElement {
       el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'),
       el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
       !this.admin || !this.radars.length ? '' : el('button', { class: `tab${this.tab === 'todo' ? ' on' : ''}`, onclick: () => this._setTab('todo') }, 'To do',
-        this.todoCount ? el('span', { class: 'badge' }, String(this.todoCount)) : ''));
+        this.todoCount ? el('span', { class: 'badge' }, String(this.todoCount)) : ''),
+      !this.admin || !this.home ? '' : el('button', { class: `tab${this.tab === 'settings' ? ' on' : ''}`, onclick: () => this._setTab('settings') }, 'Settings'));
     h.classList.toggle('edit', this.editing && this.tab === 'radars');
-    if (this.tab === 'todo') {
+    if (this.tab === 'todo' || this.tab === 'settings') {
       h.replaceChildren(
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
         el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
-        el('button', { class: 'ibtn', title: 'Look again', onclick: () => this.todoEl.activate({ rebuild: true }) }, '⟳'));
+        this.tab === 'todo' ? el('button', { class: 'ibtn', title: 'Look again', onclick: () => this.todoEl.activate({ rebuild: true }) }, '⟳') : '');
       return;
     }
     if (this.tab === 'headcount') {
