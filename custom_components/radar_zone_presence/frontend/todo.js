@@ -65,7 +65,12 @@ export class RzpTodo extends HTMLElement {
   get count() { return this.items ? this.items.filter(i => !this._done(i)).length : null; }
 
   async activate({ rebuild = false } = {}) {
-    if (this.items && !rebuild) { this.render(); return; }
+    if (this.items && !rebuild) {
+      try { this.answers = (await this.hass.callWS({ type: `${DOMAIN}/todo/answers` })).answers; } catch { /* keep what we had */ }
+      this.render();
+      this._emitCount();
+      return;
+    }
     if (this._building) return;
     this._building = true;
     this.wrap.replaceChildren(el('div', { class: 'empty' }, 'Looking at the last day of every radar…'));

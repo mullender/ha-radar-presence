@@ -267,6 +267,7 @@ class RadarZonePresencePanel extends HTMLElement {
       .then(r => { if (r?.value && 'details' in r.value && !!r.value.details !== this.details) this._setDetails(!!r.value.details, false); })
       .catch(() => {});
     await this._loadRadars();
+    await this._loadTodoAnswers();
     const q0 = new URLSearchParams(location.hash.slice(1));
     if (q0.get('view') === 'todo' && this.admin) { await this._setTab('todo'); return; }
     if (q0.get('view') === 'headcount') {
@@ -350,6 +351,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this.hcEl.deactivate();
       history.replaceState(null, '', '#view=todo');
       await this.todoEl.activate();
+      this.todoAnswers = this.todoEl.answers;
     } else {
       this.hcEl.deactivate();
       if (this.radarId) history.replaceState(null, '', `#radar=${this.radarId}`);
@@ -2266,12 +2268,40 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _spotKey(sp) { return `${Math.round(sp.centroid[0] / 300)},${Math.round(sp.centroid[1] / 300)}`; }
 
-  /** Answers to "what is here?" for this radar's hot spots, and tidy-up suggestions waved off: {key: answer}. */
+  /**
+   * Answers to "what is here?" for this radar's hot spots, and tidy-up suggestions waved off: {key: answer}.
+   * Kept on the server with the To do tab's (same keys: "<radar>:spot:<x>,<y>", "<radar>:<kind>:<zone>").
+   */
   _guideAnswers() {
-    const store = `rzp.guide.${this.radarId}`;
-    const answers = JSON.parse(localStorage.getItem(store) || '{}');
-    for (const k of JSON.parse(localStorage.getItem(`rzp.notGhost.${this.radarId}`) || '[]')) answers[k] ??= 'people'; // (before)
-    return { answers, save: () => localStorage.setItem(store, JSON.stringify(answers)) };
+    const all = this.todoAnswers || {};
+    const sk = key => (/^-?\d+,-?\d+$/.test(key) ? `${this.radarId}:spot:${key}` : `${this.radarId}:${key.split(':')[1]}:${key.split(':')[0]}`);
+    const answers = new Proxy({}, { get: (_, key) => (typeof key === 'string' ? all[sk(key)]?.answer : undefined) });
+    const set = (key, value) => {
+      all[sk(key)] = { answer: value, t: Date.now() / 1000 };
+      this.hass.callWS({ type: `${DOMAIN}/todo/answer`, key: sk(key), answer: value }).catch(err => this._toast(`Could not save the answer: ${err.message || err.code}`, true));
+    };
+    return { answers, set };
+  }
+
+  /** The To do answers (shared with the radar view's guide); moves answers once kept in this browser to the server. */
+  async _loadTodoAnswers() {
+    if (!this.admin) return;
+    try {
+      this.todoAnswers = (await this.hass.callWS({ type: `${DOMAIN}/todo/answers` })).answers;
+    } catch { this.todoAnswers = {}; return; }
+    for (const k of Object.keys(localStorage)) {
+      const m = k.match(/^rzp\.(guide|notGhost)\.(.+)$/);
+      if (!m) continue;
+      const radarId = m[2], old = JSON.parse(localStorage.getItem(k) || (m[1] === 'guide' ? '{}' : '[]'));
+      const entries = m[1] === 'guide' ? Object.entries(old) : old.map(key => [key, 'people']);
+      for (const [key, answer] of entries) {
+        const sk = /^-?\d+,-?\d+$/.test(key) ? `${radarId}:spot:${key}` : `${radarId}:${key.split(':')[1]}:${key.split(':')[0]}`;
+        if (this.todoAnswers[sk]) continue;
+        this.todoAnswers[sk] = { answer, t: Date.now() / 1000 };
+        await this.hass.callWS({ type: `${DOMAIN}/todo/answer`, key: sk, answer }).catch(() => {});
+      }
+      localStorage.removeItem(k);
+    }
   }
 
   /**
@@ -2284,7 +2314,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const box = this.side?.querySelector('.guide');
     if (!box) return;
     if (!this.admin) { box.replaceChildren(); box.className = 'guide'; return; }
-    const { answers, save } = this._guideAnswers();
+    const { answers, set } = this._guideAnswers();
     const items = [
       ...(this.spots || []).filter(sp => !sp.covered && !answers[this._spotKey(sp)]).map(sp => ({ spot: sp })),
       ...this._tidySuggestions().filter(s => !answers[`${s.z.id}:${s.kind}`]),
@@ -2292,7 +2322,7 @@ class RadarZonePresencePanel extends HTMLElement {
     if (!items.length) { box.replaceChildren(); box.className = 'guide'; return; }
     const item = items[0];
     const more = items.length > 1 ? el('span', { class: 'help', style: { fontWeight: 400 } }, ` · ${items.length - 1} more`) : '';
-    const answer = (key, value) => { answers[key] = value; save(); this._renderGuide(); };
+    const answer = (key, value) => { set(key, value); this._renderGuide(); };
     box.className = 'guide section';
     box.replaceChildren(...(item.spot ? this._hotSpotQuestion(item.spot, more, answer) : this._tidyQuestion(item, more, answer)));
   }
