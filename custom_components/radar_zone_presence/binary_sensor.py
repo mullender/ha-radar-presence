@@ -28,7 +28,7 @@ async def async_setup_entry(
 
 class ZonePresenceSensor(ZoneEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # Detected / Clear (presence means home / away)
-    _attr_name = None  # the device's main feature: "Desk Presence"
+    _attr_translation_key = "occupancy"  # "Desk Occupancy"
 
     def __init__(self, runtime: HomeRuntime, zd: ZoneDef) -> None:
         super().__init__(runtime, zd)

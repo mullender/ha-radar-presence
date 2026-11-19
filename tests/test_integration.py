@@ -121,7 +121,7 @@ async def test_config_flow_imports_legacy_polygons(hass: HomeAssistant, radar_de
     assert z.data["polygon"][2] == pytest.approx([1016.0, 3556.0])
     radar = next(s for s in entry.subentries.values() if s.subentry_type == "radar")
     assert z.data["radar"] == radar.subentry_id and "import_zones" not in radar.data
-    assert hass.states.get(eid(hass, z.data["id"])).attributes["friendly_name"] == "Polygon 1 Presence"
+    assert hass.states.get(eid(hass, z.data["id"])).attributes["friendly_name"] == "Polygon 1 Occupancy"
     # The radar cannot be added twice.
     result = await start_radar_flow(hass)
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_devices"
@@ -141,7 +141,7 @@ async def test_zone_subentry_flow(hass: HomeAssistant, radar_device: str) -> Non
     await hass.async_block_till_done()
     (sub,) = [s for s in entry.subentries.values() if s.subentry_type == "zone"]
     desk = eid(hass, sub.data["id"])
-    assert hass.states.get(desk).attributes["friendly_name"] == "Desk Presence"
+    assert hass.states.get(desk).attributes["friendly_name"] == "Desk Occupancy"
     # Rename from the integration page.
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, "zone"), context={"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": sub.subentry_id}
@@ -150,7 +150,7 @@ async def test_zone_subentry_flow(hass: HomeAssistant, radar_device: str) -> Non
     assert result["type"] is FlowResultType.ABORT
     await hass.async_block_till_done()
     assert entry.subentries[sub.subentry_id].title == "Standing desk"
-    assert dr.async_get(hass).async_get(er.async_get(hass).async_get(desk).device_id).name == "Standing desk Presence"
+    assert dr.async_get(hass).async_get(er.async_get(hass).async_get(desk).device_id).name == "Standing desk"
 
 
 async def test_config_flow_labels_show_area_floor_and_live_targets(hass: HomeAssistant, radar_device: str) -> None:
@@ -206,9 +206,9 @@ async def test_zone_presence_and_exclusion(hass: HomeAssistant, radar_device: st
     # The zone is its own presence device, connected via the radar, named "<zone> Presence".
     device = dr.async_get(hass).async_get(ent_reg.async_get(chair).device_id)
     assert device.id != radar_device and device.via_device_id == radar_device
-    assert device.name == "Reading chair Presence" and device.manufacturer == "Radar Zone Presence"
+    assert device.name == "Reading chair" and device.manufacturer == "Radar Presence"
     assert device.configuration_url == "homeassistant://radar-zones#radar=radar1&zone=chair"
-    assert hass.states.get(chair).attributes["friendly_name"] == "Reading chair Presence"
+    assert hass.states.get(chair).attributes["friendly_name"] == "Reading chair Occupancy"
 
     await move(hass, 1, 20, 120)
     assert hass.states.get(chair).state == "on"
@@ -357,7 +357,7 @@ async def test_exit_zone_keeps_door_and_creates_no_zone_device(hass: HomeAssista
     assert entry.subentries[RADAR].data["zones"][0]["id"] == "zdoor"  # exits live on the radar
     # No presence device for an exit, only a passage event on the radar's (linked) device.
     (device,) = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
-    assert device.model == "Radar exits"
+    assert device.model == "Radar doorways"
     assert [e.domain for e in er.async_entries_for_config_entry(ent_reg, entry.entry_id)] == ["event"]
     await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
     cfg = (await client.receive_json())["result"]
@@ -460,7 +460,7 @@ async def test_aligned_radars_share_zones(hass: HomeAssistant, radar_device: str
     seen1, seen2 = eid(hass, f"chair_seen_{RADAR}"), eid(hass, "chair_seen_radar2")
     assert seen1 and seen2
     assert er.async_get(hass).async_get(seen2).entity_category == "diagnostic"
-    assert hass.states.get(seen2).attributes["friendly_name"] == "Reading chair Presence Seen by Kitchen radar"
+    assert hass.states.get(seen2).attributes["friendly_name"] == "Reading chair Seen by Kitchen radar"
 
     # Only radar 2 sees them: (20, 120) in radar 1's frame is (-80, 120) in radar 2's.
     await move(hass, 1, -80, 120, slug=SLUG2)
@@ -579,9 +579,9 @@ async def test_head_count_sensors_follow_the_front_door(hass: HomeAssistant, rad
     floor_eid = ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people_floor_0")
     space_eid = ent_reg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_people_{area.id}")
     assert hass.states.get(home_eid).state == "0"
-    assert hass.states.get(home_eid).attributes["friendly_name"] == "Home People home"
-    assert hass.states.get(floor_eid).attributes["friendly_name"] == "Home People on Ground floor"
-    assert hass.states.get(space_eid).attributes["friendly_name"] == "Home People in Entry"
+    assert hass.states.get(home_eid).attributes["friendly_name"] == "Home Occupants"
+    assert hass.states.get(floor_eid).attributes["friendly_name"] == "Home Ground floor occupants"
+    assert hass.states.get(space_eid).attributes["friendly_name"] == "Home Entry occupants"
 
     for k in range(8):  # someone in the room for a while (no door: counted while the home starts up)
         await move(hass, 1, -40 + k, 120)

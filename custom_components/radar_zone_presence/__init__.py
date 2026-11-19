@@ -1,4 +1,4 @@
-"""Radar Zone Presence: polygon presence zones for LD2450-style radar sensors."""
+"""Radar Presence: room and spot occupancy and occupant counts for LD2450-style radar sensors."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass,
         frontend_url_path=PANEL_URL,
         webcomponent_name=PANEL_COMPONENT,
-        sidebar_title="Radar Zones",
+        sidebar_title="Presence",
         sidebar_icon="mdi:radar",
         module_url=f"{base}/panel.js",
         require_admin=True,

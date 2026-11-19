@@ -202,7 +202,7 @@ def _zone_schema(hass, radars: dict[str, str], current: dict[str, Any] | None = 
 
 
 class ZoneSubentryFlow(ConfigSubentryFlow):
-    """Add or rename a zone. Its shape is drawn in the Radar Zones panel."""
+    """Add or rename a zone. Its shape is drawn in the Presence panel."""
 
     def _radars(self) -> dict[str, str]:
         entry = self._get_entry()
@@ -244,7 +244,7 @@ EVIDENCE_DOMAINS = ["binary_sensor", "switch", "light", "fan", "event", "input_b
 
 
 class RadarZonePresenceOptionsFlow(OptionsFlow):
-    """Engine-wide settings. Zones are edited in the Radar Zones panel."""
+    """Engine-wide settings. Shapes are edited in the Presence panel."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:

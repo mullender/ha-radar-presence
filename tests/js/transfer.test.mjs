@@ -20,7 +20,7 @@ test('export → import round trip keeps zones, filters and settings', () => {
 
 test('import rejects foreign files and bad zones', () => {
   assert.throws(() => parseImport('nope'), /Not a JSON file/);
-  assert.throws(() => parseImport('{"zones": []}'), /Not a Radar Zone Presence/);
+  assert.throws(() => parseImport('{"zones": []}'), /Not a Radar Presence export/);
   const base = { format: 'radar_zone_presence/zones', version: 1 };
   assert.throws(() => parseImport({ ...base, version: 99, zones: [] }), /newer/);
   assert.throws(() => parseImport({ ...base, zones: [{ name: 'X', kind: 'include', polygon: [[0, 0], [1, 1]] }] }), /zone 1 \(X\): polygon needs at least 3/);

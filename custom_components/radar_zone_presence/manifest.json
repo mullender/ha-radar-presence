@@ -1,6 +1,6 @@
 {
   "domain": "radar_zone_presence",
-  "name": "Radar Zone Presence",
+  "name": "Radar Presence",
   "after_dependencies": [
     "esphome",
     "recorder"

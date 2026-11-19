@@ -149,8 +149,8 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some(c => c.type === 'radar-zone-presence-card')) {
   window.customCards.push({
     type: 'radar-zone-presence-card',
-    name: 'Radar Zone Presence',
-    description: 'Live radar targets and presence zones',
+    name: 'Radar Presence',
+    description: 'Live radar detections, rooms and spots',
     preview: false,
   });
 }

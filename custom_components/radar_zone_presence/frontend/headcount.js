@@ -1,6 +1,6 @@
-// <rzp-headcount>: the head count's view in the Radar Zones panel. The floors
+// <rzp-headcount>: the occupants view (House) in the Presence panel. The floors
 // side by side, each tracked space a box with the people believed in it (solid:
-// a radar sees them; hollow: unseen; dashed: in doubt while an exit door is in
+// a radar sees them; hollow: unseen; dashed: settling while an outside door is in
 // use; faint: not confirmed yet). Under it the scrubber: people per space, doors
 // open, evidence; and the decision log, each change with what caused it. Built
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
@@ -12,7 +12,7 @@ const DOMAIN = 'radar_zone_presence';
 const RANGES = [['1 hour', 3600], ['6 hours', 21600], ['24 hours', 86400], ['3 days', 259200]];
 const COLORS = ['#1e88e5', '#43a047', '#8e24aa', '#f4511e', '#00897b', '#6d4c41', '#3949ab', '#c0ca33', '#d81b60'];
 const KINDS = {
-  moved: ['→', 'moved'], arrived: ['⇥', 'arrived'], left: ['⇤', 'left'], unknown: ['?', 'in doubt'], back: ['✓', 'back'],
+  moved: ['→', 'moved'], arrived: ['⇥', 'arrived'], left: ['⇤', 'left'], unknown: ['?', 'settling'], back: ['✓', 'back'],
   unexplained: ['+', 'appeared'], confirmed: ['✓', 'confirmed'], 'not a person': ['✕', 'not a person'], ghost: ['·', 'ghost track'],
   restored: ['↺', 'restored'], corrected: ['✎', 'corrected by hand'], bootstrap: ['+', 'counted at start'], evidence: ['☞', 'evidence'], door: ['🚪', 'door'],
   signal: ['☞', 'used by hand'], ignored: ['∅', 'ignored'],
@@ -151,11 +151,12 @@ export class RzpHeadcount extends HTMLElement {
       this.data = await this.hass.callWS({ type: `${DOMAIN}/headcount/history`, start });
     } catch (err) {
       this.data = null;
-      this.houseEl.replaceChildren(el('div', { class: 'empty' }, `No head count: ${err.message || err.code}`));
+      this.houseEl.replaceChildren(el('div', { class: 'empty' }, `No occupant count: ${err.message || err.code}`));
       return;
     }
     this.start = start;
     this.entries = this.data.log;
+    this._letters = new Map(); // tokens get letters A, B, C… in the order they show up in this range
     this._index();
     this._subscribe();
     this.timeline.set({ range: { start, end: Date.now() / 1000 }, resetView: true });
@@ -261,7 +262,7 @@ export class RzpHeadcount extends HTMLElement {
       el('button', { class: live ? 'on' : '', title: 'Follow now', onclick: () => { this.cursor = null; this.render(); } }, live ? '● Live' : 'Go live'),
       el('span', { class: 'when' }, live ? `Now, ${fmtTime(Date.now() / 1000)}` : fmtDateTime(this.cursor)),
       this.data.log_start && this.start < this.data.log_start ? el('span', { class: 'meta' }, `(log starts ${fmtDateTime(this.data.log_start)})`) : '',
-      el('span', { class: 'home' }, 'Home ', el('b', {}, unknownFloors.size ? `≥${total}` : String(total)), doubt ? ` (+${doubt} in doubt)` : '',
+      el('span', { class: 'home' }, 'Home ', el('b', {}, unknownFloors.size ? `≥${total}` : String(total)), doubt ? ` (+${doubt} settling)` : '',
         live && total ? el('button', { class: 'minus', title: 'Correct: one person fewer home (removes whoever has gone unseen longest)', onclick: () => this._correctHome(total - 1) }, '−') : '',
         live ? el('button', { title: 'Everyone is out: set the home to 0', onclick: () => this._correctHome(0) }, 'Nobody home') : ''),
     );
@@ -284,7 +285,7 @@ export class RzpHeadcount extends HTMLElement {
       const doubt = unknownFloors.has(f.level);
       const n = f.areas.reduce((x, a) => x + (per.get(a.id) || 0), 0);
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
-        el('h2', {}, f.name, el('span', { class: 'n', title: doubt ? 'An exit door is in use: unknown who left' : '' }, doubt ? `≥${n}` : String(n))),
+        el('h2', {}, f.name, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `≥${n}` : String(n))),
         f.areas.map(a => {
           const doors = Object.entries(this.data.doors).filter(([, rs]) => rs.some(r => this.regionArea[r] === a.id));
           const box = el('div', { class: `space${a.observed ? '' : ' blind'}${hit.has(a.id) ? ' hit' : ''}` },
@@ -331,15 +332,26 @@ export class RzpHeadcount extends HTMLElement {
     }
   }
 
+  /** Person A, B, C…: lettered per loaded range, so they never read as identities. */
+  _letter(id) {
+    const m = (this._letters ||= new Map());
+    if (!m.has(id)) {
+      let n = m.size, s = '';
+      do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
+      m.set(id, s);
+    }
+    return m.get(id);
+  }
+
   _dot(id, flags) {
     const tips = [flags.includes('v') ? 'seen by a radar' : 'unseen, believed here'];
-    if (flags.includes('u')) tips.push('in doubt: an exit door is in use');
+    if (flags.includes('u')) tips.push('settling: a door to outside is in use');
     if (flags.includes('p')) tips.push('not confirmed yet');
     const dot = el('span', {
       class: `dot ${flags.split('').join(' ')}${this.selected === id ? ' sel' : ''}`,
-      title: `#${id}: ${tips.join(', ')}. Click for its story.`,
+      title: `Person ${this._letter(id)}: ${tips.join(', ')}. Click to follow.`,
       onclick: () => { this.selected = this.selected === id ? null : id; this.render(); },
-    }, `#${id}`);
+    }, this._letter(id));
     dot.style.setProperty('--c', COLORS[id % COLORS.length]);
     return dot;
   }
@@ -349,7 +361,7 @@ export class RzpHeadcount extends HTMLElement {
     if (this.selected === null) return '';
     const t = this.cursor ?? Infinity;
     const lines = this.entries.filter(e => e.token === this.selected && e.t <= t).slice(-12);
-    return el('div', { class: 'story' }, el('b', {}, `#${this.selected}`),
+    return el('div', { class: 'story' }, el('b', {}, `Person ${this._letter(this.selected)}`),
       lines.length ? lines.map(e => el('div', {}, `${fmtTime(e.t)}  ${this._describe(e)}`)) : 'No changes in this range.');
   }
 
@@ -400,7 +412,7 @@ export class RzpHeadcount extends HTMLElement {
     if (e.kind === 'door') return `${this._entityName(e.entity)}: ${e.detail}`;
     if (e.kind === 'signal') return `${this._entityName(e.entity)}: ${e.detail} by hand (${this._name(e.region)})`;
     if (e.kind === 'ignored') return `${this._entityName(e.entity)} ignored: ${e.detail}`;
-    const who = e.token ? `#${e.token} ` : '';
+    const who = e.token ? `${this._letter(e.token)} ` : '';
     return `${who}${label} ${this._name(e.region)}${e.detail ? ` · ${name(e.detail)}` : ''}`;
   }
 
@@ -428,7 +440,7 @@ export class RzpHeadcount extends HTMLElement {
       }, el('span', { class: 't' }, fmtTime(e.t)), el('span', { class: 'k' }, icon), el('span', {}, this._describe(e)), this._radarLink(e));
     });
     this.logEl.replaceChildren(
-      el('h3', {}, 'Decisions', el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings')),
+      el('h3', {}, 'Activity', el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings')),
       ...(list.length ? list : [el('div', { class: 'empty' }, 'Nothing in this window.')]));
     this.logEl.querySelector('.row.at')?.scrollIntoView({ block: 'nearest' });
   }

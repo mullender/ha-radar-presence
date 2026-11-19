@@ -1,4 +1,4 @@
-"""Constants for Radar Zone Presence."""
+"""Constants for Radar Presence (domain radar_zone_presence)."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from pathlib import Path
 DOMAIN = "radar_zone_presence"
 VERSION: str = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
 
-MANUFACTURER = "Radar Zone Presence"
-ZONE_MODEL = "Presence zone"
-RADAR_MODEL = "Radar exits"
+MANUFACTURER = "Radar Presence"
+ZONE_MODEL = "Occupancy"
+RADAR_MODEL = "Radar doorways"
 
 CONF_DEVICE_ID = "device_id"
 CONF_PROFILE = "profile"

@@ -19,9 +19,8 @@ def zone_device_identifier(zone_id: str) -> tuple[str, str]:
 
 
 def zone_device_name(name: str) -> str:
-    """'Desk' -> 'Desk Presence' (avoids ambiguity with the area / other devices)."""
-    name = name.strip()
-    return name if name.lower().endswith("presence") else f"{name} Presence"
+    """The room or spot's own name; its entity adds "Occupancy" ("Desk Occupancy")."""
+    return name.strip()
 
 
 def zone_device_info(zone: Zone, radar_id: str, radar_device_id: str | None) -> DeviceInfo:

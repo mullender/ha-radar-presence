@@ -1,5 +1,5 @@
 {
-  "name": "Radar Zone Presence",
+  "name": "Radar Presence",
   "render_readme": true,
   "homeassistant": "2026.10.0",
   "content_in_root": false

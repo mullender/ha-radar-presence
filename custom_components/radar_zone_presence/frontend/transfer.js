@@ -51,7 +51,7 @@ function cleanFilters(raw = {}) {
 export function parseImport(text) {
   let doc;
   try { doc = typeof text === 'string' ? JSON.parse(text) : text; } catch { throw new Error('Not a JSON file'); }
-  if (!doc || doc.format !== FORMAT) throw new Error('Not a Radar Zone Presence zones export');
+  if (!doc || doc.format !== FORMAT) throw new Error('Not a Radar Presence export');
   if (doc.version > VERSION) throw new Error(`Export version ${doc.version} is newer than this integration understands`);
   if (!Array.isArray(doc.zones)) throw new Error('Export has no zones');
   const zones = doc.zones.map((z, i) => {

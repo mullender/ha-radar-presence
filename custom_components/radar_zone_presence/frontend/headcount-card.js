@@ -2,7 +2,7 @@
 // people), with + / − on every line to correct it.
 //
 //   type: custom:radar-zone-presence-headcount-card
-//   title: People            # optional
+//   title: Occupants         # optional
 //   show_empty_rooms: false  # optional: list rooms with nobody in them too
 //
 // + on a room adds a person there; + on a floor (or home) asks which room.
@@ -151,7 +151,7 @@ class RadarZonePresenceHeadcountCard extends HTMLElement {
         card.append(line('room', 32, r.name, r.n, false, () => this._correct(r.id, r.n - 1), () => this._correct(r.id, r.n + 1), !r.n));
       }
     }
-    if (m.inDoubt) card.append(this._el('div', 'note', `${m.inDoubt} in doubt while an exit door is in use.`));
+    if (m.inDoubt) card.append(this._el('div', 'note', `Settling: ${m.inDoubt} may have left while a door to outside was in use.`));
   }
 
   /** "Which room?" for + (all rooms of these floors) or − (occupied rooms of the floor). */
@@ -190,7 +190,7 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some(c => c.type === 'radar-zone-presence-headcount-card')) {
   window.customCards.push({
     type: 'radar-zone-presence-headcount-card',
-    name: 'Radar Zone Presence: people',
-    description: 'How many people are home, per floor and room, with + / − to correct it.',
+    name: 'Radar Presence: occupants',
+    description: 'Occupants at home, per floor and room, with + / − to correct the count.',
   });
 }

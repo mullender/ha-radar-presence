@@ -2,12 +2,12 @@
   "config": {
     "step": {
       "user": {
-        "title": "Radar Zone Presence",
-        "description": "Sets up your home. Radars and zones are then added as parts of it: the first radar right away, more with Add radar on the integration page."
+        "title": "Radar Presence",
+        "description": "Sets up your home. Radars are then added as parts of it: the first one right away, more with Add radar on the integration page. Rooms, spots and doorways are drawn in the Presence panel."
       }
     },
     "abort": {
-      "single_instance_allowed": "Radar Zone Presence is already set up. Add radars and zones from its integration page."
+      "single_instance_allowed": "Radar Presence is already set up. Add radars from its integration page."
     }
   },
   "config_subentries": {
@@ -19,14 +19,14 @@
       "step": {
         "user": {
           "title": "Pick a radar sensor",
-          "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). Zones are drawn afterwards in the Radar Zones panel.",
+          "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). The room gets presence right away; spots, doorways and ignore areas are drawn afterwards in the Presence panel.",
           "data": {
             "device_id": "Radar sensor"
           }
         },
         "import_legacy": {
           "title": "Import existing polygons",
-          "description": "Found {count} polygon helper(s) (input_text.…_zone_polygon_N) for this sensor. Import them as zones? The helpers are not changed or removed.",
+          "description": "Found {count} polygon helper(s) (input_text.…_zone_polygon_N) for this sensor. Import them as rooms? The helpers are not changed or removed.",
           "data": {
             "import": "Import polygons"
           }
@@ -37,14 +37,14 @@
       }
     },
     "zone": {
-      "entry_type": "Zone",
+      "entry_type": "Room or spot",
       "initiate_flow": {
-        "user": "Add zone"
+        "user": "Add room or spot"
       },
       "step": {
         "user": {
-          "title": "Add a presence zone",
-          "description": "Creates a presence device for a spot or room. It starts as a 1 × 1 m square in front of the radar; draw its real shape in the Radar Zones panel.",
+          "title": "Add a room or spot",
+          "description": "Creates an occupancy device for a room or a spot (a desk, a sofa). It starts as a 1 × 1 m square in front of the radar; draw its real shape in the Presence panel.",
           "data": {
             "name": "Name",
             "radar": "Radar that sees it",
@@ -55,8 +55,8 @@
           }
         },
         "reconfigure": {
-          "title": "Zone",
-          "description": "Shape, filters and hold settings are edited in the Radar Zones panel.",
+          "title": "Room or spot",
+          "description": "Shape and behaviour are edited in the Presence panel.",
           "data": {
             "name": "Name",
             "area_id": "Area"
@@ -75,22 +75,22 @@
     "step": {
       "init": {
         "title": "Settings",
-        "description": "Zones, exclusions, exits and per-zone filters are edited in the Radar Zones panel in the sidebar.",
+        "description": "Rooms, spots, doorways and ignore areas are edited in the Presence panel in the sidebar.",
         "data": {
-          "reconnect_grace_s": "Ignore targets after reconnect",
-          "outside_doors": "Doors to outside no radar sees",
-          "evidence": "Signs of someone there",
-          "evidence_on": "Signs of someone there (switched on only)",
-          "occupancy": "Occupancy sensors (a bed sensor)",
+          "reconnect_grace_s": "Ignore after reconnect",
+          "outside_doors": "Outside doors",
+          "evidence": "Activity hints",
+          "evidence_on": "Activity hints (switched on only)",
+          "occupancy": "Occupancy sensors",
           "vacuums": "Robot vacuums"
         },
         "data_description": {
           "reconnect_grace_s": "Seconds to ignore a radar's detections after it comes back from unavailable. Ghost targets often appear right after a reconnect.",
-          "outside_doors": "Doors, garage doors and locks to outside that no radar watches (a garage door: its area becomes a space without a radar). Used by the head count; doors on exit zones are picked up from the zones.",
-          "evidence": "Switches, lights, buttons and door contacts (closets, inner doors) that mean someone is in their area when used. Only changes made by hand count: not by automations, scripts or the app. Used by the head count, for rooms without a radar and for people who sit still.",
+          "outside_doors": "Doors, garage doors and locks to outside that no radar watches (a garage door: its area is counted at its doors). Doors on radar doorways are picked up from the doorways.",
+          "evidence": "Switches, lights, buttons and door contacts (closets, inner doors) that mean someone is in their area when used. Only changes made by hand count: not by automations, scripts or the app. Used to count occupants, for rooms without a radar and for people who sit still.",
           "evidence_on": "Like the above, but only switching on counts: for things a timer or the device itself turns off (a fan on a timer).",
-          "occupancy": "Sensors that stay on while someone is there, like a bed sensor. While any of them in a room is on, at least one person is there: they are not taken for someone seen elsewhere, and an exit door does not put them in doubt. A bed's two sides are one sign of at least one person, not one each.",
-          "vacuums": "A robot vacuum moves like a person to a radar. While one is cleaning, the head count ignores the radars in the room it reports (its current room sensor, matched to an area by name)."
+          "occupancy": "Sensors that stay on while someone is there, like a bed sensor. While any of them in a room is on, at least one person is there: they are not taken for someone seen elsewhere, and a door does not put them in doubt. A bed's two sides are one sign of at least one person, not one each.",
+          "vacuums": "A robot vacuum moves like a person to a radar. While one is cleaning, the occupant count ignores the radars in the room it reports (its current room sensor, matched to an area by name)."
         }
       }
     }
@@ -99,6 +99,9 @@
     "binary_sensor": {
       "seen_by": {
         "name": "Seen by {radar}"
+      },
+      "occupancy": {
+        "name": "Occupancy"
       }
     },
     "sensor": {
@@ -106,13 +109,13 @@
         "name": "Targets"
       },
       "people_home": {
-        "name": "People home"
+        "name": "Occupants"
       },
       "people_floor": {
-        "name": "People on {floor}"
+        "name": "{floor} occupants"
       },
       "people_space": {
-        "name": "People in {space}"
+        "name": "{space} occupants"
       }
     },
     "event": {

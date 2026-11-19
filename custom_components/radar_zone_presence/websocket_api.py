@@ -1,4 +1,4 @@
-"""Websocket API used by the Radar Zones panel."""
+"""Websocket API used by the Presence panel."""
 
 from __future__ import annotations
 
