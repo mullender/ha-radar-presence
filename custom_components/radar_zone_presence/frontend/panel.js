@@ -40,6 +40,27 @@ header .spacer { flex: 1; }
 .tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }
 .app > rzp-headcount { min-height: 0; }
 header .dirty { font-size: 12px; opacity: .9; }
+header.edit { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+header.edit h1 { font-size: 18px; }
+header.edit h1 b { font-weight: 500; }
+header .ibtn { background: none; border: 0; color: inherit; font-size: 20px; cursor: pointer; padding: 4px 8px; border-radius: 50%; }
+header .ibtn:disabled { opacity: .4; cursor: default; }
+header .ibtn:hover:not(:disabled) { background: rgba(127,127,127,.15); }
+header .pill-btn { border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff); color: var(--primary-color, #03a9f4);
+  border-radius: 18px; padding: 5px 14px; cursor: pointer; font: inherit; font-weight: 500; }
+header.edit .text-btn { background: none; border: 0; color: inherit; font: inherit; font-weight: 500; padding: 6px 12px; cursor: pointer; }
+header.edit .save-btn { background: #fff; color: var(--primary-color, #03a9f4); border: 0; border-radius: 18px; padding: 6px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+header.edit .save-btn:disabled { opacity: .6; cursor: default; }
+.menu-pop { position: fixed; z-index: 20; min-width: 220px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222);
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.25); padding: 6px 0; }
+.menu-pop button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 9px 16px; font: inherit; color: inherit; cursor: pointer; }
+.menu-pop button:hover { background: var(--secondary-background-color, #f0f0f0); }
+.at-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.at-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-row .st { color: var(--secondary-text-color, #777); font-size: 12px; }
+.at-row .st.on { color: var(--primary-text-color, #222); font-weight: 500; }
+.fit-btn { position: absolute; right: 12px; top: 10px; border: 0; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 16px;
+  background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .menu { background: none; border: 0; color: inherit; font-size: 22px; cursor: pointer; padding: 4px 8px; display: none; }
 :host([narrow]) .menu { display: block; }
 button.hbtn { background: rgba(255,255,255,.18); color: inherit; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
@@ -181,6 +202,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.showSpots = true;
     this.fitPreview = null; // polygon previewed by hovering 'Fit to points'
     this.tab = 'radars'; // 'radars' | 'headcount'
+    this.editing = false; // review (default) or edit: tools, property panel, undo, Save / Cancel
   }
 
   set hass(hass) {
@@ -939,6 +961,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _setZones(zones, { commit = true, prev = null } = {}) {
+    if (!this.editing) this._enterEdit(); // a change (a suggestion taken, a fix) is reviewed and saved in edit mode
     if (commit) this._pushUndo(prev ?? JSON.stringify(this.zones));
     this.zones = zones;
     this._updatePlot();
@@ -1042,6 +1065,11 @@ class RadarZonePresencePanel extends HTMLElement {
       this.saved = JSON.stringify(this.zones);
       this.savedSettings = JSON.stringify(this.settings);
       this._toast('Saved');
+      this.editing = false;
+      this.tool = 'select';
+      this._renderToolbar();
+      this._updatePlot();
+      this._renderStatus();
       this._renderHeader();
       this._renderSide();
       await this._loadRadars();
@@ -1086,6 +1114,29 @@ class RadarZonePresencePanel extends HTMLElement {
     this._toast(`Imported ${added} new and ${replaced} replaced shape(s). Review, then Save.`);
   }
 
+  _enterEdit() {
+    if (this.editing || !this.config) return;
+    this.editing = true;
+    this._renderHeader();
+    this._renderToolbar();
+    this._renderSide();
+    this._renderStatus();
+    this._updatePlot();
+  }
+
+  /** Cancel: back to review, dropping unsaved changes (after asking). */
+  _cancelEdit() {
+    if (this._dirty()) { this._revert(); if (this._dirty()) return; }
+    this.editing = false;
+    this.tool = 'select';
+    this.plot.cancelDraft();
+    this._renderHeader();
+    this._renderToolbar();
+    this._renderSide();
+    this._renderStatus();
+    this._updatePlot();
+  }
+
   _revert() {
     if (!confirm('Discard all unsaved changes?')) return;
     this.zones = JSON.parse(this.saved);
@@ -1114,14 +1165,16 @@ class RadarZonePresencePanel extends HTMLElement {
       this._seek((this.cursor ?? (this.brush ? this.brush.t1 : this.hist.end)) + dir * (e.shiftKey ? 60 : 10));
       return;
     }
-    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? this._redo() : this._undo(); return; }
-    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); this._redo(); return; }
+    if (mod && e.key.toLowerCase() === 'z' && this.editing) { e.preventDefault(); e.shiftKey ? this._redo() : this._undo(); return; }
+    if (mod && e.key.toLowerCase() === 'y' && this.editing) { e.preventDefault(); this._redo(); return; }
     if (mod) return;
     const k = e.key.toLowerCase();
-    if (k === 'v') this._setTool('select');
-    else if (k === 'd') this._setTool('draw');
-    else if (k === 'r') this._setTool('rect');
-    else if (k === 'm') this._setTool('measure');
+    if (this.tab !== 'radars') return;
+    if (k === 'e' && !this.editing) this._enterEdit();
+    else if (this.editing && k === 'v') this._setTool('select');
+    else if (this.editing && k === 'd') this._setTool('draw');
+    else if (this.editing && k === 'r') this._setTool('rect');
+    else if (this.editing && k === 'm') this._setTool('measure');
     else if (k === ' ') { e.preventDefault(); this._togglePlay(); }
     else if (k === ',' ) this._stepFrame(-1);
     else if (k === '.') this._stepFrame(1);
@@ -1154,7 +1207,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.side = el('div', { class: 'side' });
     const main = el('div', { class: 'main' },
       this.toolbar,
-      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl),
+      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl, el('button', { class: 'fit-btn', title: 'Fit the view (F)', onclick: () => this.plot.fit() }, '⤢')),
       this.transport,
       el('div', { class: 'timeline-wrap' }, this.timeline),
       this.framesEl,
@@ -1240,11 +1293,23 @@ class RadarZonePresencePanel extends HTMLElement {
     const tabs = el('div', { class: 'tabs' },
       el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
       el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'));
+    h.classList.toggle('edit', this.editing && this.tab !== 'headcount');
     if (this.tab === 'headcount') {
       h.replaceChildren(
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
         el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
-        el('button', { class: 'hbtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗 Link'));
+        el('button', { class: 'ibtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗'));
+      return;
+    }
+    if (this.editing) {
+      h.replaceChildren(
+        el('h1', {}, 'Editing ', el('b', {}, this.config?.title || '')),
+        el('div', { class: 'spacer' }),
+        dirty ? el('span', { class: 'dirty' }, 'Unsaved changes') : '',
+        el('button', { class: 'ibtn', title: 'Undo (Ctrl+Z)', disabled: !this.undoStack.length, onclick: () => this._undo() }, '↶'),
+        el('button', { class: 'ibtn', title: 'Redo (Ctrl+Shift+Z)', disabled: !this.redoStack.length, onclick: () => this._redo() }, '↷'),
+        el('button', { class: 'text-btn', onclick: () => this._cancelEdit() }, 'Cancel'),
+        el('button', { class: 'save-btn', disabled: !dirty, onclick: () => this._save(), title: 'Save (Ctrl+S)' }, 'Save'));
       return;
     }
     h.replaceChildren(
@@ -1253,12 +1318,28 @@ class RadarZonePresencePanel extends HTMLElement {
       tabs,
       this.radars.length ? sel : '',
       this.radars.length ? range : '',
-      this.radars.length ? el('button', { class: 'hbtn', title: 'Reload history', onclick: () => this._loadHistory() }, '⟳') : '',
+      this.radars.length ? el('button', { class: 'ibtn', title: 'Reload history', onclick: () => this._loadHistory() }, '⟳') : '',
       el('div', { class: 'spacer' }),
-      dirty ? el('span', { class: 'dirty' }, 'Unsaved changes') : '',
-      el('button', { class: 'hbtn', disabled: !dirty, onclick: () => this._revert() }, 'Revert'),
-      el('button', { class: 'hbtn primary', disabled: !dirty, onclick: () => this._save(), title: 'Save (Ctrl+S)' }, 'Save'),
+      this.config ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎ Edit') : '',
+      this.config ? el('button', { class: 'ibtn', title: 'More', onclick: e => this._openMenu(e.currentTarget) }, '⋮') : '',
     );
+  }
+
+  /** The ⋮ menu of the radar view. */
+  _openMenu(anchor) {
+    this._menu?.remove();
+    const r = anchor.getBoundingClientRect();
+    const item = (label, fn, disabled = false) => el('button', { disabled, onclick: () => { close(); fn(); } }, label);
+    const menu = el('div', { class: 'menu-pop', style: { top: `${r.bottom + 4}px`, right: `${Math.max(8, innerWidth - r.right)}px` } },
+      item('Copy a link to this moment', () => this._copyLink(), !this.hist),
+      item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
+      item('Export shapes…', () => this._exportZones(), !this.zones.length),
+      item('Import shapes…', () => this._importZones()));
+    const close = () => { menu.remove(); this._menu = null; removeEventListener('pointerdown', away, true); };
+    const away = e => { if (!e.composedPath().includes(menu)) close(); };
+    addEventListener('pointerdown', away, true);
+    this.shadowRoot.append(menu);
+    this._menu = menu;
   }
 
   _tb(label, on, onclick, title, disabled = false) {
@@ -1267,6 +1348,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   _renderToolbar() {
     const t = this.toolbar;
+    t.style.display = this.editing ? '' : 'none'; // review mode has no tools
     const s = this.snap;
     const gridOpts = this.units.snapSteps.map(v => el('option', { value: v, selected: Math.abs(v - s.gridStep) < 0.01 }, this.units.fmtLong(v)));
     t.replaceChildren(
@@ -1402,7 +1484,8 @@ class RadarZonePresencePanel extends HTMLElement {
       dark: !!this.hass?.themes?.darkMode,
       labels: this._shapeLabels(),
       coverage: this._coverage(),
-      showGrid: this.snap.grid,
+      showGrid: this.editing && this.snap.grid,
+      editing: this.editing,
       opacity: this.detOpacity,
       units: this.units,
       fov: this.config.fov,
@@ -1430,6 +1513,7 @@ class RadarZonePresencePanel extends HTMLElement {
       peers: this._peerOverlays(),
     });
     this._renderLegend();
+    if (!this.editing) this._renderAt();
   }
 
   /** Doorway pills say where they lead: "→ Kitchen", "↑ Bedroom" (another floor), "Outside". */
@@ -1491,7 +1575,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.statusEl.replaceChildren(
       el('span', { class: 'pointer' }),
       h ? el('span', {}, `${h.frame_t.length.toLocaleString()} frames · ${h.x.length.toLocaleString()} points`) : '',
-      el('span', { class: 'hint' }, hints[this.tool]),
+      this.editing ? el('span', { class: 'hint' }, hints[this.tool]) : '',
     );
     this._renderPointer();
   }
@@ -1541,10 +1625,58 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'actions' },
         el('button', { class: 'btn', title: 'Download these shapes (as saved, plus unsaved edits) as a JSON file', disabled: !this.zones.length, onclick: () => this._exportZones() }, 'Export…'),
         el('button', { class: 'btn', title: 'Load shapes from an exported JSON file. Shapes with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
-    s.replaceChildren(el('div', { class: 'guide' }), sensor, zonesSec, this._firmwareSection(), this._zoneEditor() || '', el('div', { class: 'section spots' }), this._doorsSection(), this._settingsSection());
+    if (!this.editing) {
+      // Review: what is on at the playhead, the selected shape's preview, then suggestions.
+      s.replaceChildren(el('div', { class: 'guide' }), el('div', { class: 'section at' }), this._shapeSummary() || '', el('div', { class: 'section spots' }), this._doorsSection());
+      this._atKey = null;
+      this._renderAt();
+    } else {
+      const z = this.zones.find(q => q.id === this.selectedId);
+      s.replaceChildren(el('div', { class: 'guide' }), zonesSec, z ? this._zoneEditor() : [sensor, this._settingsSection(), this._firmwareSection()], el('div', { class: 'section spots' }), this._doorsSection());
+    }
     this._renderLiveBadges();
     this._renderSideStats();
     this._renderSpots();
+  }
+
+  /** Review: the selected shape in words, with its preview and recorded history. */
+  _shapeSummary() {
+    const z = this.zones.find(q => q.id === this.selectedId);
+    if (!z) return null;
+    const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+    const saved = this.config.zones.find(q => q.id === z.id);
+    return el('div', { class: 'section' },
+      el('h3', {}, glyphSvg(st.glyph, this._zoneColor(z), 14), el('span', { class: 'grow', style: { marginLeft: '6px' } }, z.name),
+        el('button', { class: 'btn', title: 'Edit this shape', onclick: () => this._enterEdit() }, '✎ Edit')),
+      el('div', { class: 'help' }, `${st.label}${saved?.device_id ? ' · ' : ''}`,
+        saved?.device_id ? el('a', { href: `/config/devices/device/${saved.device_id}` }, 'its device ↗') : ''),
+      el('div', { class: 'trail' }),
+      el('div', { class: 'zone-stats' }));
+  }
+
+  /** Review: the state of each room, spot and door at the playhead (or now), in words. */
+  _renderAt() {
+    const box = this.side?.querySelector('.section.at');
+    if (!box || !this.config) return;
+    const replay = this.mode === 'replay' && this.hist;
+    const states = replay ? this._replayState().states : this.liveStates;
+    const at = replay || this.mode === 'live' ? this.cursor : null;
+    const rows = [];
+    for (const z of this.zones) {
+      if (z.kind === 'include') rows.push([z, states[z.id] ? 'Occupied' : states[z.id] === undefined ? 'not saved yet' : 'Clear', !!states[z.id]]);
+      else if (z.kind === 'exit' && z.door_entity_id) { const o = this._doorOpenAt(z.door_entity_id, replay ? this.cursor : null); rows.push([z, o ? 'Open' : 'Closed', o]); }
+    }
+    const anyone = replay ? this._zoneOnAt('presence', this.cursor) : this.livePresence;
+    const key = JSON.stringify([at == null ? null : Math.floor(at), rows.map(r => r[1]), anyone, this.selectedId]);
+    if (key === this._atKey) return;
+    this._atKey = key;
+    box.replaceChildren(
+      el('h3', {}, at == null ? 'Now' : `${this.mode === 'live' ? 'Live' : 'At'} ${fmtTime(at)}`),
+      ...rows.map(([z, label, on]) => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: () => this._select(z.id, null) },
+        glyphSvg((KIND_STYLE[z.kind] || KIND_STYLE.include).glyph, this._zoneColor(z), 14),
+        el('span', { class: 'nm' }, z.name), el('span', { class: `st${on ? ' on' : ''}` }, label))),
+      el('div', { class: 'at-row' }, el('span', { class: 'nm help' }, 'Anyone in view (not ignored)'), el('span', { class: `st${anyone ? ' on' : ''}` }, anyone ? 'Yes' : 'No')),
+      rows.length ? '' : el('div', { class: 'help' }, 'No rooms on this radar yet. Press Edit to draw one.'));
   }
 
   _zoneEditor() {
@@ -2020,6 +2152,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _setDisplay(patch) {
+    if (!this.editing) this._enterEdit();
     this.settings = { ...this.settings, display: normalizeDisplay({ ...this.settings.display, ...patch }) };
     this._updatePlot();
     this.plot.fit();
@@ -2065,7 +2198,7 @@ class RadarZonePresencePanel extends HTMLElement {
         + `${saved.offset_mm ? `, about ${(Math.hypot(...saved.offset_mm) / 1000).toFixed(1)} m away` : ''}.`;
     }
     return [
-      el('label', {}, 'Line up with'),
+      el('label', { class: 'align-anchor' }, 'Line up with'),
       el('div', { style: { display: 'flex', gap: '6px' } },
         el('select', { style: { flex: 1, minWidth: 0 }, onchange: e => { this._alignRef = e.target.value; } },
           others.map(r => el('option', { value: r.radar_id, selected: r.radar_id === this._alignRef }, r.title))),

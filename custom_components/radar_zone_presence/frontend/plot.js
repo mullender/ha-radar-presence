@@ -369,7 +369,7 @@ export class RzpPlot extends HTMLElement {
       this.selectedId = id;
       this.selectedVertex = null;
       this._emit('select', { zoneId: id, vertex: null });
-      this._drag = wasSelected
+      this._drag = wasSelected && this.editing
         ? { kind: 'move', zoneId: id, start: w, orig: this._zone(id).polygon.map(p => [...p]), moved: false }
         : { kind: 'pan', start: [e.clientX, e.clientY], pan: [...this.pan], click: true };
       this.requestRender();
@@ -782,7 +782,7 @@ export class RzpPlot extends HTMLElement {
       if (isSel) selected.push([z, color]);
     }
     g.append(this._pills(pills));
-    for (const [z, color] of selected) if (!this.readonly) g.append(this._handles(z, color));
+    for (const [z, color] of selected) if (!this.readonly && this.editing) g.append(this._handles(z, color));
     return g;
   }
 
