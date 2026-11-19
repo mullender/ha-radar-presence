@@ -917,8 +917,8 @@ export class RzpPlot extends HTMLElement {
     for (const [slot, x, y] of this.targets) {
       const s = this._s([x, y]);
       const tg = svg('g', { class: 'target' });
-      tg.append(svg('circle', { cx: s[0], cy: s[1], r: 9, fill: slotColor(slot), stroke: '#fff', 'stroke-width': 2 }));
-      tg.append(svg('text', { x: s[0], y: s[1] + 3.5, 'text-anchor': 'middle' }, document.createTextNode(String(slot))));
+      tg.append(svg('circle', { cx: s[0], cy: s[1], r: this.trackNumbers !== false ? 9 : 7, fill: slotColor(slot), stroke: '#fff', 'stroke-width': 2 }));
+      if (this.trackNumbers !== false) tg.append(svg('text', { x: s[0], y: s[1] + 3.5, 'text-anchor': 'middle' }, document.createTextNode(String(slot))));
       g.append(tg);
     }
     return g;

@@ -430,7 +430,8 @@ export class RzpHeadcount extends HTMLElement {
   _renderLog(t) {
     const v = this.timeline.view;
     const lo = v ? v.v0 : this.start, hi = v ? v.v1 : Infinity;
-    const rows = this.entries.filter(e => (this.showSeen || e.kind !== 'seen') && e.t >= lo && e.t <= hi).slice(-400);
+    const technical = new Set(['seen', 'ghost', 'not a person', 'ignored']); // only with Details on
+    const rows = this.entries.filter(e => (this.details ? this.showSeen || e.kind !== 'seen' : !technical.has(e.kind)) && e.t >= lo && e.t <= hi).slice(-400);
     const at = t === null ? rows.length - 1 : rows.findLastIndex(e => e.t <= t);
     const list = rows.map((e, i) => {
       const [icon] = KINDS[e.kind] || ['·'];
@@ -440,7 +441,7 @@ export class RzpHeadcount extends HTMLElement {
       }, el('span', { class: 't' }, fmtTime(e.t)), el('span', { class: 'k' }, icon), el('span', {}, this._describe(e)), this._radarLink(e));
     });
     this.logEl.replaceChildren(
-      el('h3', {}, 'Activity', el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings')),
+      el('h3', {}, 'Activity', this.details ? el('label', {}, el('input', { type: 'checkbox', checked: this.showSeen, onchange: e => { this.showSeen = e.target.checked; this.render(); } }), 'radar sightings') : ''),
       ...(list.length ? list : [el('div', { class: 'empty' }, 'Nothing in this window.')]));
     this.logEl.querySelector('.row.at')?.scrollIntoView({ block: 'nearest' });
   }

@@ -167,7 +167,8 @@ class RadarZonePresencePanel extends HTMLElement {
     this.showMeasurements = true;
     this.colorMode = 3; // 3: detections in ink, ignored ones hollow; 0 by track, 1 selected shape, 2 by age
     this.detOpacity = Number(localStorage.getItem('rzp.detOpacity')) || 1;
-    this.rangeS = 86400;
+    this.rangeS = 900; // the room view opens on the last 15 minutes
+    this.details = localStorage.getItem('rzp.details') === '1'; // per user (HA user data); technical detail, off by default
     this.hist = null;
     this.frameIdx = null;
     this.actual = {};
@@ -242,6 +243,9 @@ class RadarZonePresencePanel extends HTMLElement {
 
   async _start() {
     this._buildShell();
+    this.hass.callWS({ type: 'frontend/get_user_data', key: 'radar_presence' })
+      .then(r => { if (r?.value && 'details' in r.value && !!r.value.details !== this.details) this._setDetails(!!r.value.details, false); })
+      .catch(() => {});
     await this._loadRadars();
     const q0 = new URLSearchParams(location.hash.slice(1));
     if (q0.get('view') === 'headcount') {
@@ -1215,6 +1219,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.bodyEl = el('div', { class: 'body' }, main, this.side);
     this.hcEl = document.createElement('rzp-headcount');
     this.hcEl.hass = this._hass;
+    this.hcEl.details = this.details;
     this.hcEl.style.display = 'none';
     this.hcEl.addEventListener('open-radar', e => this._openRadarAt(e.detail.radar, e.detail.t));
     root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl));
@@ -1298,7 +1303,8 @@ class RadarZonePresencePanel extends HTMLElement {
       h.replaceChildren(
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
         el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
-        el('button', { class: 'ibtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗'));
+        el('button', { class: 'ibtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗'),
+        el('button', { class: 'ibtn', title: this.details ? 'Hide details' : 'Show details: radar sightings, ignored tracks', onclick: () => { this._setDetails(!this.details); this._renderHeader(); } }, this.details ? '◉' : '◎'));
       return;
     }
     if (this.editing) {
@@ -1325,6 +1331,17 @@ class RadarZonePresencePanel extends HTMLElement {
     );
   }
 
+  /** Details: coordinates, track numbers, raw readings, technical Activity. A per-user switch. */
+  _setDetails(on, persist = true) {
+    this.details = on;
+    localStorage.setItem('rzp.details', on ? '1' : '0');
+    if (persist) this.hass.callWS({ type: 'frontend/set_user_data', key: 'radar_presence', value: { details: on } }).catch(() => {});
+    if (!on) { this.showFrames = false; this.trailLabels = false; if (this.colorMode !== 3) { this.colorMode = 3; this._updateFlags(); } }
+    if (this.hcEl) { this.hcEl.details = on; if (this.hcEl._active) this.hcEl.render(); }
+    if (this.config) this._renderAll();
+    this._renderFrames();
+  }
+
   /** The ⋮ menu of the radar view. */
   _openMenu(anchor) {
     this._menu?.remove();
@@ -1334,7 +1351,8 @@ class RadarZonePresencePanel extends HTMLElement {
       item('Copy a link to this moment', () => this._copyLink(), !this.hist),
       item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
       item('Export shapes…', () => this._exportZones(), !this.zones.length),
-      item('Import shapes…', () => this._importZones()));
+      item('Import shapes…', () => this._importZones()),
+      item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)));
     const close = () => { menu.remove(); this._menu = null; removeEventListener('pointerdown', away, true); };
     const away = e => { if (!e.composedPath().includes(menu)) close(); };
     addEventListener('pointerdown', away, true);
@@ -1362,14 +1380,14 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Ignore', this.drawKind === 'exclude', () => { this.drawKind = 'exclude'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are ignore areas (a fan, a plant, a reflection)'),
         this._tb('Doorway', this.drawKind === 'exit', () => { this.drawKind = 'exit'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are doorways (a door, an opening, the top of the stairs)'),
         this._tb('Spot', this.drawKind === 'linger', () => { this.drawKind = 'linger'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are spots, places people stay (bed, sofa, desk chair): someone the radar loses here is still there'),
-        this._tb('Walkway', this.drawKind === 'transient', () => { this.drawKind = 'transient'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are walkways, where people only pass through: someone the radar loses here has moved on')),
+        this._tb(this.drawKind === 'transient' ? 'Walkway' : '⋯', this.drawKind === 'transient', () => { this.drawKind = 'transient'; this._updatePlot(); this._renderToolbar(); }, 'More: walkway, where people only pass through (someone the radar loses here has moved on)')),
       el('div', { class: 'group' },
         this._tb('∠ Angles', s.angle, () => { s.angle = !s.angle; this._updatePlot(); this._renderToolbar(); }, 'Snap edges to 45°/90°, relative to the previous edge (hold Shift to disable)'),
         this._tb('◦ Vertices', s.vertex, () => { s.vertex = !s.vertex; this._updatePlot(); this._renderToolbar(); }, 'Snap to existing vertices'),
         this._tb('# Grid', s.grid, () => { s.grid = !s.grid; this._updatePlot(); this._renderToolbar(); }, 'Snap to grid'),
         el('select', { onchange: e => { s.gridStep = +e.target.value; this._updatePlot(); }, title: 'Grid step' }, gridOpts),
         this._tb('📏', this.showMeasurements, () => { this.showMeasurements = !this.showMeasurements; this._updatePlot(); this._renderToolbar(); }, 'Show edge lengths and angles')),
-      el('div', { class: 'group' },
+      !this.details ? '' : el('div', { class: 'group' },
         el('label', {}, 'Colour',
           el('select', { onchange: e => { this.colorMode = +e.target.value; this._updateFlags(); this._updatePlot(); } },
             el('option', { value: 3, selected: this.colorMode === 3 }, 'detections'),
@@ -1410,8 +1428,8 @@ class RadarZonePresencePanel extends HTMLElement {
         this._tb('Detections', this.showContext, () => { this.showContext = !this.showContext; this._updatePlot(); this._renderTransport(); }, 'Keep all detections in the range visible, faded, behind the trail'),
         el('input', { type: 'range', class: 'density', min: 0.2, max: 3, step: 0.1, value: this.detOpacity, title: 'Detection density: how strongly detections are drawn',
           oninput: e => { this.detOpacity = +e.target.value; localStorage.setItem('rzp.detOpacity', this.detOpacity); this._updatePlot(); } }),
-        this._tb('Timestamps', this.trailLabels, () => { this.trailLabels = !this.trailLabels; this._updatePlot(); this._renderTransport(); }, 'Label trail points with their time'),
-        this._tb('Raw readings', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the raw readings around the playhead')),
+        !this.details ? '' : this._tb('Timestamps', this.trailLabels, () => { this.trailLabels = !this.trailLabels; this._updatePlot(); this._renderTransport(); }, 'Label trail points with their time'),
+        !this.details ? '' : this._tb('Raw readings', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the raw readings around the playhead')),
       el('div', { class: 'group' },
         replay
           ? el('span', { class: `replay-label${live ? ' live' : ''}`, style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
@@ -1506,6 +1524,7 @@ class RadarZonePresencePanel extends HTMLElement {
       targets,
       trails,
       trailLabels: this.trailLabels,
+      trackNumbers: this.details,
       showContext: this.showContext,
       suggestions: this._suggestionOverlays(),
       edgeWarnings: this.selectedId ? this.edgeWarnings || [] : [],
@@ -1572,9 +1591,10 @@ class RadarZonePresencePanel extends HTMLElement {
       measure: 'Drag to measure distance and angle',
     };
     const h = this.hist;
+    this.statusEl.style.display = this.details || this.editing ? '' : 'none';
     this.statusEl.replaceChildren(
-      el('span', { class: 'pointer' }),
-      h ? el('span', {}, `${h.frame_t.length.toLocaleString()} frames · ${h.x.length.toLocaleString()} points`) : '',
+      this.details ? el('span', { class: 'pointer' }) : '',
+      this.details && h ? el('span', {}, `${h.frame_t.length.toLocaleString()} readings · ${h.x.length.toLocaleString()} detections`) : '',
       this.editing ? el('span', { class: 'hint' }, hints[this.tool]) : '',
     );
     this._renderPointer();
@@ -1607,7 +1627,7 @@ class RadarZonePresencePanel extends HTMLElement {
             : z.kind === 'exit' ? `doorway${z.door_entity_id ? ` · ${this._doorName(z.door_entity_id)}` : ''}`
               : z.kind === 'linger' ? 'spot · people stay here'
                 : z.kind === 'transient' ? 'walkway · people pass through'
-                  : (eid || 'new: saving creates its occupancy entity'))),
+                  : eid ? (this.details ? eid : 'room · has an occupancy entity') : 'new: saving creates its occupancy entity')),
         el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'ignore' : z.kind === 'linger' ? 'spot' : z.kind === 'transient' ? 'walkway' : '—'));
     });
     const sensor = el('div', { class: 'section' },
@@ -1759,7 +1779,7 @@ class RadarZonePresencePanel extends HTMLElement {
         this._marginInput(() => this._renderSide())) : '',
       el('div', { class: 'trail' }),
       el('div', { class: 'zone-stats' }),
-      el('details', { open: z.polygon.length <= 8 },
+      !this.details ? '' : el('details', { open: z.polygon.length <= 8 },
         el('summary', { class: 'help', style: { cursor: 'pointer', marginTop: '8px' } }, `Vertices (${z.polygon.length}) — ${u.label}`),
         el('div', { class: 'vwrap' })),
     );
@@ -1821,6 +1841,7 @@ class RadarZonePresencePanel extends HTMLElement {
     if (flaps.length) notes.push(`${edgeStats.bounces} times a target crossed out and back in within 3 s (red edges). An edge runs through a spot where people stay: move it, use Fit to points, or add an edge margin.`);
     if (JSON.stringify(this.edgeWarnings) !== prevWarn) queueMicrotask(() => this._updatePlot());
     const exitsUnseen = st.endOther;
+    if (!this.details) { box.replaceChildren(...notes.map(n => el('div', { class: 'help', style: { color: 'var(--warning-color, #e65100)', marginTop: '4px' } }, n))); return; }
     box.replaceChildren(
       el('h3', {}, `Trails · ${cls.label}`),
       row('Visits', `${st.startWalk + st.startAppear}`),
@@ -2100,6 +2121,8 @@ class RadarZonePresencePanel extends HTMLElement {
     this._renderGuide();
     const box = this.side?.querySelector('.spots');
     if (!box) return;
+    const none = !this.hist || !(this.spots || []).length;
+    box.style.display = none && !this.editing ? 'none' : ''; // review: only when there is something to suggest
     const head = el('h3', {}, el('span', { class: 'grow' }, 'Suggestions'),
       el('label', { class: 'help', style: { textTransform: 'none', letterSpacing: 0, display: 'flex', gap: '4px', alignItems: 'center' } },
         el('input', { type: 'checkbox', checked: this.showSpots, onchange: e => { this.showSpots = e.target.checked; this._updatePlot(); } }), 'on map'));
@@ -2116,7 +2139,7 @@ class RadarZonePresencePanel extends HTMLElement {
           el('span', { class: 'help' }, `${fmtDuration(sp.dwell)} · ${u.fmtLong(Math.hypot(...sp.centroid))} away`),
           el('span', { class: 'badge', style: { background: badgeColor, color: '#fff' }, title: sp.cls.share === null ? '' : `${Math.round(sp.cls.share * 100)}% of visits began with a trail walking in` }, sp.cls.label)),
         el('div', { class: 'help' }, this._trailSummary(sp.stats)),
-        ...sp.cross.map(c => el('div', { class: 'help', title: 'Visits to this spot that the other radar also saw (a target within 60 cm at the same time), and how often it sees people here by itself' },
+        ...(this.details ? sp.cross : []).map(c => el('div', { class: 'help', title: 'Visits to this spot that the other radar also saw (a target within 60 cm at the same time), and how often it sees people here by itself' },
           `${c.name} saw ${c.confirmed} of ${c.visits} visits (sees ${c.peerVisits} of its own here)${sp.ghostBy === c ? ' — this radar\'s ghost' : ''}`)),
         sp.covered ? el('div', { class: 'help' }, `inside “${sp.covered.name}”`) : '',
         el('div', { class: 'actions', style: { marginTop: '4px' } },
@@ -2130,7 +2153,7 @@ class RadarZonePresencePanel extends HTMLElement {
     });
     box.replaceChildren(head,
       el('div', { class: 'help' }, `Where detections stayed${this.brush ? ' in the trimmed range' : ''}. A real place (desk, chair) has trails walking in and out; a ghost (plant, fan, reflection) appears and vanishes in place, or stays within a few centimetres of one point.`),
-      el('div', { class: 'form', style: { margin: '8px 0' } },
+      !(this.editing || this.details) ? '' : el('div', { class: 'form', style: { margin: '8px 0' } },
         el('label', {}, `Margin (${u.label})`),
         this._marginInput(() => { this._computeSpots(); this._renderSpots(); this._updatePlot(); })),
       ...(rows.length ? rows : [el('div', { class: 'help' }, 'No dwell spots in this range.')]));
