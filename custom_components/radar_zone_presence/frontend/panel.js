@@ -39,6 +39,9 @@ header select, header button { font: inherit; }
 header select { background: rgba(255,255,255,.15); color: inherit; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; padding: 5px 6px; max-width: 280px; }
 header select option { color: #222; }
 header .spacer { flex: 1; }
+header .tabs { flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+header .tabs .tab { white-space: nowrap; }
+@media (max-width: 600px) { header h1 { display: none; } header { gap: 6px; padding: 0 6px; } header .tabs .tab { padding: 5px 8px; } }
 .tabs { display: flex; gap: 2px; background: rgba(255,255,255,.12); border-radius: 6px; padding: 2px; }
 .tabs .tab { background: none; border: 0; color: inherit; padding: 5px 12px; border-radius: 4px; cursor: pointer; opacity: .8; }
 .tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }

@@ -28,9 +28,9 @@ const css = `
 .card h2 { margin: 0 0 6px; font-size: 17px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .card .why { color: var(--secondary-text-color, #666); line-height: 1.45; margin-bottom: 12px; }
 .card .q { font-weight: 500; margin: 10px 0 8px; }
-.cols { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: start; }
+.cols { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: start; }
 .ev { width: 150px; height: 150px; border-radius: 10px; background: var(--secondary-background-color, #f3f4f6); color: var(--primary-text-color, #222); }
-@media (max-width: 560px) { .cols { grid-template-columns: 1fr; } .ev { width: 100%; height: auto; max-width: 240px; } }
+@media (max-width: 560px) { .wrap { padding: 12px 10px 30px; } .cols { grid-template-columns: minmax(0, 1fr); } .ev { width: 100%; height: auto; max-width: 240px; } }
 .ans { display: flex; flex-direction: column; gap: 8px; }
 .ans button { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; padding: 10px 12px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }

@@ -626,9 +626,23 @@ Stage 4, guide:
 
 Open: the To do card has no cropped evidence map yet (the proposal plays the
 busiest 20 s in place; today "Show me" opens the radar at the peak); no
-"people appear and vanish here → doorway" or "use these switches as hints"
-questions in To do yet (hints are suggested in Settings); Plan mode; /presence
-URLs; load_report `--dev`.
+"use these switches as hints" question in To do (hints are suggested in
+Settings); editing a whole floor (drawing rooms without a radar on the plan);
+/presence URLs; load_report `--dev`.
+
+Later the same day: To do asks "people appear and vanish here" (analysis.
+appearVanishSpots: where walking trails begin and end, outside doorways,
+spots and ignore areas → a doorway with where it leads, via placeExit), and
+each card shows its evidence as a cropped map (the day's detections, the
+shapes, in the radar view's orientation). **Plan mode** (frontend/plan.js,
+read-only): a floor whose rooms are on one linked map (at least two of them)
+can show as a Plan instead of the Diagram (per floor, remembered; Diagram by
+default under 700 px). Room shapes are drawn in the map's frame, tinted by
+occupants, with doorways, spots, the cones as a wash and the radars as dots;
+the room tiles sit on the rooms as small labels (count, people, ±); rooms not
+on that map stay tiles below ("not on this map"). The proposal's rule (every
+area on the floor drawn) is relaxed because rooms without a radar can't be
+drawn yet.
 
 To do also asks per room: short blips (5+ turn-ons under 3 s in a day → turn
 on after 2 s) and people who sit still (analysis.suggestHold → remember them,
