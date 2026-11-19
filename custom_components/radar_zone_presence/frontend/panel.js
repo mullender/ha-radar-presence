@@ -11,7 +11,7 @@ import {
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, ZONE_COLORS, affineApply, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
@@ -114,6 +114,11 @@ td input { width: 70px; text-align: right; }
 .check input { width: auto; margin-top: 2px; }
 .trail { margin-top: 10px; }
 .plot-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
+.legend { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 10px; padding: 4px 10px; border-radius: 14px; font-size: 12px;
+  background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0,0,0,.15); color: var(--primary-text-color, #222); pointer-events: none; }
+.legend .chip { display: flex; align-items: center; gap: 4px; }
+.legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+input.density { width: 80px; vertical-align: middle; }
 `;
 
 class RadarZonePresencePanel extends HTMLElement {
@@ -139,7 +144,8 @@ class RadarZonePresencePanel extends HTMLElement {
     this.drawKind = 'include';
     this.snap = { angle: true, grid: false, vertex: true, gridStep: 50.8 };
     this.showMeasurements = true;
-    this.colorMode = 0;
+    this.colorMode = 3; // 3: detections in ink, ignored ones hollow; 0 by track, 1 selected shape, 2 by age
+    this.detOpacity = Number(localStorage.getItem('rzp.detOpacity')) || 1;
     this.rangeS = 86400;
     this.hist = null;
     this.frameIdx = null;
@@ -159,7 +165,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.liveStates = {};
     this.doors = {}; // door contact entity -> {rows: [[t, state]], events, pos}
     this.peers = new Map(); // other radars: radar_id -> {title, cfg, live}
-    this.showPeers = true;
+    this.showPeers = false; // other radars' views: dashed outlines, for lining up (their coverage always lightens the room fill)
     this._peerUnsubs = [];
     this.livePresence = false;
     this.preferLive = true; // open in live playback; false once the user picks the plain point cloud
@@ -727,6 +733,7 @@ class RadarZonePresencePanel extends HTMLElement {
     frameStart[nF] = k;
     this.frameIdx = { frameStart, frameT: hist.frame_t };
     this.plot.setHistory({ pos, t, slot });
+    this._updateFlags();
     this._renderStatus();
   }
 
@@ -779,7 +786,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _updateFlags() {
     const sel = this.zones.find(z => z.id === this.selectedId);
     const excl = this.zones.filter(z => z.kind === 'exclude');
-    if (this.colorMode === 1) this.plot.updateFlags(sel && sel.kind !== 'exclude' ? sel : null, excl);
+    this.plot.updateFlags(this.colorMode === 1 && sel && sel.kind !== 'exclude' ? sel : null, excl); // ignored detections are drawn hollow
   }
 
   // -------------------------------------------------------------- replay
@@ -1139,6 +1146,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.toolbar = el('div', { class: 'toolbar' });
     this.plot = document.createElement('rzp-plot');
     this.loadingEl = el('div', { class: 'loading', style: { display: 'none' } }, 'Loading history…');
+    this.legendEl = el('div', { class: 'legend', style: { display: 'none' } });
     this.transport = el('div', { class: 'transport' });
     this.timeline = document.createElement('rzp-timeline');
     this.framesEl = el('div', { class: 'frames', style: { display: 'none' } });
@@ -1146,7 +1154,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.side = el('div', { class: 'side' });
     const main = el('div', { class: 'main' },
       this.toolbar,
-      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl),
+      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl),
       this.transport,
       el('div', { class: 'timeline-wrap' }, this.timeline),
       this.framesEl,
@@ -1282,7 +1290,8 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'group' },
         el('label', {}, 'Colour',
           el('select', { onchange: e => { this.colorMode = +e.target.value; this._updateFlags(); this._updatePlot(); } },
-            el('option', { value: 0, selected: this.colorMode === 0 }, 'by target'),
+            el('option', { value: 3, selected: this.colorMode === 3 }, 'detections'),
+            el('option', { value: 0, selected: this.colorMode === 0 }, 'by track'),
             el('option', { value: 1, selected: this.colorMode === 1 }, 'selected shape'),
             el('option', { value: 2, selected: this.colorMode === 2 }, 'by age')))),
       el('div', { class: 'group' },
@@ -1317,6 +1326,8 @@ class RadarZonePresencePanel extends HTMLElement {
           el('select', { onchange: e => { this.trailSeconds = +e.target.value; this._updatePlot(); } },
             [5, 10, 20, 30, 60, 120, 300].map(s => el('option', { value: s, selected: s === this.trailSeconds }, `${s} s`)))),
         this._tb('Detections', this.showContext, () => { this.showContext = !this.showContext; this._updatePlot(); this._renderTransport(); }, 'Keep all detections in the range visible, faded, behind the trail'),
+        el('input', { type: 'range', class: 'density', min: 0.2, max: 3, step: 0.1, value: this.detOpacity, title: 'Detection density: how strongly detections are drawn',
+          oninput: e => { this.detOpacity = +e.target.value; localStorage.setItem('rzp.detOpacity', this.detOpacity); this._updatePlot(); } }),
         this._tb('Timestamps', this.trailLabels, () => { this.trailLabels = !this.trailLabels; this._updatePlot(); this._renderTransport(); }, 'Label trail points with their time'),
         this._tb('Raw readings', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the raw readings around the playhead')),
       el('div', { class: 'group' },
@@ -1344,7 +1355,7 @@ class RadarZonePresencePanel extends HTMLElement {
         rows.push({ id: z.id, name: `🚪 ${z.name}`, color: EXIT_COLOR, predicted: [], actual: iv, triggers: [], actualTriggers: iv.map(v => v[0]) });
         return;
       }
-      rows.push({ id: z.id, name: z.name, color: ZONE_COLORS[i % ZONE_COLORS.length], predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
+      rows.push({ id: z.id, name: z.name, color: kindTone(z.kind), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
     });
     rows.push({ id: 'presence', name: 'Anyone (not ignored)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
     this.timeline.set({
@@ -1388,6 +1399,11 @@ class RadarZonePresencePanel extends HTMLElement {
       for (const z of exits) states[z.id] = this._doorOpenAt(z.door_entity_id, at);
     }
     this.plot.set({
+      dark: !!this.hass?.themes?.darkMode,
+      labels: this._shapeLabels(),
+      coverage: this._coverage(),
+      showGrid: this.snap.grid,
+      opacity: this.detOpacity,
       units: this.units,
       fov: this.config.fov,
       deviceZones: this.config.device_zones,
@@ -1413,6 +1429,50 @@ class RadarZonePresencePanel extends HTMLElement {
       markers: this._doorMarkers(),
       peers: this._peerOverlays(),
     });
+    this._renderLegend();
+  }
+
+  /** Doorway pills say where they lead: "→ Kitchen", "↑ Bedroom" (another floor), "Outside". */
+  _shapeLabels() {
+    const out = {};
+    const floors = this.hass?.floors || {}, areas = this.hass?.areas || {};
+    const level = id => floors[areas[id]?.floor_id]?.level;
+    const here = level(this.config?.device_area_id);
+    for (const z of this.zones) {
+      if (z.kind !== 'exit' || !z.leads_to?.length) continue;
+      if (z.leads_to.includes('outside')) { out[z.id] = { glyph: 'outside', text: 'Outside' }; continue; }
+      const names = z.leads_to.map(id => areas[id]?.name || id).join(', ');
+      const lv = level(z.leads_to[0]);
+      const arrow = here == null || lv == null || lv === here ? '→' : lv > here ? '↑' : '↓';
+      out[z.id] = { glyph: arrow === '→' ? 'door' : 'stairs', text: `${arrow} ${names}` };
+    }
+    return out;
+  }
+
+  /** What the radars see, in this radar's frame (its view and linked radars'): rooms are lighter outside it. */
+  _coverage() {
+    if (!this.config) return null;
+    const out = [fovPolygon(this.config.fov.max_distance_mm, this.config.fov.half_angle_deg, 32)];
+    for (const [id, T] of this._peerTransforms()) {
+      const fov = this.peers.get(id)?.cfg?.fov;
+      if (fov) out.push(fovPolygon(fov.max_distance_mm, fov.half_angle_deg, 32).map(p => affineApply(T, p)));
+    }
+    return out;
+  }
+
+  /** The legend: one chip per kind on the map (fill swatch + glyph). */
+  _renderLegend() {
+    if (!this.legendEl) return;
+    const kinds = ['include', 'linger', 'transient', 'exit', 'exclude'].filter(k => this.zones.some(z => z.kind === k));
+    const dark = !!this.hass?.themes?.darkMode;
+    const key = `${kinds}|${dark}`;
+    if (key === this._legendKey) return;
+    this._legendKey = key;
+    this.legendEl.style.display = kinds.length ? '' : 'none';
+    this.legendEl.replaceChildren(...kinds.map(k => {
+      const st = KIND_STYLE[k], c = dark ? st.dark : st.light;
+      return el('span', { class: 'chip' }, el('span', { class: 'sw', style: { background: c, opacity: Math.max(0.35, st.fill * 2.5) } }), glyphSvg(st.glyph, c, 12), st.label);
+    }));
   }
 
   _renderLoading() {
@@ -1445,8 +1505,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _zoneColor(z) {
-    const i = this.zones.indexOf(z);
-    return kindColor(z.kind) || ZONE_COLORS[i % ZONE_COLORS.length];
+    return kindTone(z.kind, !!this.hass?.themes?.darkMode);
   }
 
   _renderSide() {

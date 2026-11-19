@@ -2,14 +2,48 @@
 
 export const SLOT_COLORS = ['#1e88e5', '#43a047', '#f4511e', '#8e24aa', '#00acc1', '#fdd835'];
 export const ZONE_COLORS = ['#3f51b5', '#009688', '#ff9800', '#9c27b0', '#e91e63', '#4caf50', '#795548', '#00bcd4'];
-export const EXCLUDE_COLOR = '#757575';
-export const EXIT_COLOR = '#8d6e63';
-export const LINGER_COLOR = '#5c6bc0';
-export const TRANSIENT_COLOR = '#ffa726';
-/** Colour of a non-include zone kind, else null. */
-export const kindColor = kind => ({ exclude: EXCLUDE_COLOR, exit: EXIT_COLOR, linger: LINGER_COLOR, transient: TRANSIENT_COLOR }[kind] || null);
-/** Dash pattern per kind (include: solid). */
-export const kindDash = kind => ({ exclude: '6 3', exit: '2 3', linger: '1 3', transient: '8 2 1 2' }[kind] || null);
+
+/**
+ * The shape visual language: fill carries the kind (no outlines at rest), the
+ * fill doubles while occupied, and every kind has a glyph in its label pill.
+ * kind (engine id) -> {label, light, dark, fill, on, glyph}.
+ */
+export const KIND_STYLE = {
+  include: { label: 'Room', light: '#3b82f6', dark: '#60a5fa', fill: 0.06, on: 0.12, glyph: 'room' },
+  linger: { label: 'Spot', light: '#0d9488', dark: '#2dd4bf', fill: 0.18, on: 0.36, glyph: 'spot' },
+  transient: { label: 'Walkway', light: '#8b5cf6', dark: '#a78bfa', fill: 0.10, on: 0.10, glyph: 'walk' },
+  exit: { label: 'Doorway', light: '#d97706', dark: '#fbbf24', fill: 0.28, on: 0.45, glyph: 'door' },
+  exclude: { label: 'Ignored', light: '#64748b', dark: '#94a3b8', fill: 0.16, on: 0.16, glyph: 'ignore' },
+};
+/** Colour of a kind in the current theme. */
+export const kindTone = (kind, dark = false) => (KIND_STYLE[kind] || KIND_STYLE.include)[dark ? 'dark' : 'light'];
+
+/** Glyphs drawn in a 12 × 12 box with a 1.3 px stroke, no fill (label pills, legend, lists). */
+export const GLYPHS = {
+  room: 'M2 6.5L6 2.5L10 6.5M3.2 5.3V10H8.8V5.3',
+  spot: 'M4 2V10M4 7H9V10',
+  walk: 'M2.5 3L5.5 6L2.5 9M6.5 3L9.5 6L6.5 9',
+  door: 'M3 10.5V1.5H9V10.5M1.8 10.5H10.2M7.2 6.2V6.3',
+  stairs: 'M1.5 10.5H4V7.5H6.5V4.5H9V1.5H10.5',
+  outside: 'M5 2H2V10H5M4.5 6H10.5M8 3.5L10.5 6L8 8.5',
+  ignore: 'M1.5 6C3 3.4 9 3.4 10.5 6C9 8.6 3 8.6 1.5 6ZM7.2 6A1.2 1.2 0 1 1 4.8 6A1.2 1.2 0 1 1 7.2 6M2 2L10 10',
+};
+/** A glyph as an inline <svg> element for HTML (legend, lists). */
+export function glyphSvg(name, color = 'currentColor', size = 14) {
+  const s = svg('svg', { viewBox: '0 0 12 12', width: size, height: size, style: 'flex:none;vertical-align:-2px' });
+  s.append(svg('path', { d: GLYPHS[name] || GLYPHS.room, fill: 'none', stroke: color, 'stroke-width': 1.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  return s;
+}
+
+export const EXCLUDE_COLOR = KIND_STYLE.exclude.light;
+export const EXIT_COLOR = KIND_STYLE.exit.light;
+export const LINGER_COLOR = KIND_STYLE.linger.light;
+export const TRANSIENT_COLOR = KIND_STYLE.transient.light;
+export const ROOM_COLOR = KIND_STYLE.include.light;
+/** Colour of a zone kind (light theme). */
+export const kindColor = kind => kindTone(kind);
+/** Dashes are reserved for "not part of this view" (other radars, guides): shapes have none. */
+export const kindDash = () => null;
 /** Spots only guide the tracker; they have no state and no entity. */
 export const isSpot = kind => kind === 'linger' || kind === 'transient';
 

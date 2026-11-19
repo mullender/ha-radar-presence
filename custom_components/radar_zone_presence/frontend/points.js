@@ -8,17 +8,21 @@ const VS = `#version 300 es
 in vec2 a_pos;      // mm, sensor frame
 in float a_t;       // seconds since history start
 in float a_slot;
-in float a_flag;    // 1 = inside highlighted polygon, 2 = excluded
+in float a_flag;    // 1 = inside highlighted polygon, 2 = in an ignore area (drawn hollow)
 uniform mat3 u_view;      // mm -> clip space
 uniform vec2 u_window;    // visible [t0, t1]
 uniform float u_cursor;   // replay cursor (s); < 0 disables fading
 uniform float u_trail;    // seconds of trail shown behind the cursor
 uniform float u_context;  // 1 = keep the rest of the windowed cloud, faded, during replay
 uniform float u_size;
-uniform int u_colorMode;  // 0 slot, 1 highlight, 2 age
+uniform int u_colorMode;  // 0 slot, 1 highlight, 2 age, 3 ink
+uniform float u_opacity;  // density control: scales every point's alpha
+uniform vec3 u_ink;
 uniform vec3 u_slotColors[6];
 out vec4 v_color;
+out float v_hollow;
 void main() {
+  v_hollow = a_flag > 1.5 ? 1.0 : 0.0;
   if (a_t < u_window.x || a_t > u_window.y) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
   vec3 p = u_view * vec3(a_pos, 1.0);
   gl_Position = vec4(p.xy, 0.0, 1.0);
@@ -30,15 +34,19 @@ void main() {
   } else if (u_colorMode == 2) {
     float k = clamp((a_t - u_window.x) / max(1.0, u_window.y - u_window.x), 0.0, 1.0);
     c = mix(vec3(0.2, 0.4, 0.9), vec3(0.95, 0.3, 0.1), k);
+  } else if (u_colorMode == 3) {
+    c = u_ink;
+    alpha = 0.45;
   }
   float size = u_size;
+  if (v_hollow > 0.5 && u_colorMode != 1) { c = vec3(0.55, 0.58, 0.62); size += 2.0; }
   if (u_cursor >= 0.0) {
     float age = u_cursor - a_t;
     if (age < 0.0 || age > u_trail) {
       if (u_context < 0.5) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
       // Context: the rest of the cloud stays visible, faded and desaturated.
-      c = mix(c, vec3(0.5), 0.35);
-      alpha = u_colorMode == 1 ? alpha * 0.7 : 0.22;
+      if (u_colorMode != 3) c = mix(c, vec3(0.5), 0.35);
+      alpha = u_colorMode == 1 ? alpha * 0.7 : u_colorMode == 3 ? 0.32 : 0.22;
     } else {
       float k = 1.0 - age / u_trail;
       alpha = 0.15 + 0.85 * k;
@@ -46,17 +54,23 @@ void main() {
     }
   }
   gl_PointSize = size;
-  v_color = vec4(c, alpha);
+  v_color = vec4(c, clamp(alpha * u_opacity, 0.0, 1.0));
 }`;
 
 const FS = `#version 300 es
 precision mediump float;
 in vec4 v_color;
+in float v_hollow;
 out vec4 outColor;
 void main() {
   vec2 d = gl_PointCoord - vec2(0.5);
   float r = dot(d, d);
   if (r > 0.25) discard;
+  if (v_hollow > 0.5) { // a ring: the detection was ignored
+    if (r < 0.07) discard;
+    outColor = vec4(v_color.rgb, min(1.0, v_color.a * 1.6) * smoothstep(0.25, 0.18, r));
+    return;
+  }
   outColor = vec4(v_color.rgb, v_color.a * smoothstep(0.25, 0.12, r));
 }`;
 
@@ -81,7 +95,7 @@ export class PointLayer {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
     this.prog = prog;
     this.loc = Object.fromEntries(
-      ['u_view', 'u_window', 'u_cursor', 'u_trail', 'u_context', 'u_size', 'u_colorMode', 'u_slotColors'].map(n => [n, gl.getUniformLocation(prog, n)]),
+      ['u_view', 'u_window', 'u_cursor', 'u_trail', 'u_context', 'u_size', 'u_colorMode', 'u_slotColors', 'u_opacity', 'u_ink'].map(n => [n, gl.getUniformLocation(prog, n)]),
     );
     this.vao = gl.createVertexArray();
     this.buffers = {};
@@ -125,7 +139,7 @@ export class PointLayer {
   }
 
   /** view: column-major mat3 (Float32Array 9) mapping mm to clip space. */
-  draw({ view, window, cursor = -1, trail = 30, size = 2.5, colorMode = 0, context = true }) {
+  draw({ view, window, cursor = -1, trail = 30, size = 2.5, colorMode = 0, context = true, opacity = 1, ink = [0.13, 0.15, 0.2] }) {
     if (!this.ok) return;
     const gl = this.gl;
     const dpr = window?.dpr || devicePixelRatio || 1;
@@ -145,6 +159,8 @@ export class PointLayer {
     gl.uniform1f(this.loc.u_context, context ? 1 : 0);
     gl.uniform1f(this.loc.u_size, size * (devicePixelRatio || 1));
     gl.uniform1i(this.loc.u_colorMode, colorMode);
+    gl.uniform1f(this.loc.u_opacity, opacity);
+    gl.uniform3fv(this.loc.u_ink, ink);
     gl.uniform3fv(this.loc.u_slotColors, this.slotColors);
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.POINTS, 0, this.count);

@@ -6,7 +6,7 @@
 // changes stored geometry.
 
 import { PointLayer } from './points.js';
-import { EXCLUDE_COLOR, doorGeometry, ZONE_COLORS, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime, kindColor, kindDash } from './util.js';
+import { EXCLUDE_COLOR, GLYPHS, KIND_STYLE, doorGeometry, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
 const HANDLE_R = 6;
@@ -28,12 +28,17 @@ svg { overflow: hidden; }
 .flip-popover .close { position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 18px; cursor: pointer; color: inherit; }
 .flip-info circle { fill: var(--card-background-color, #fff); stroke: var(--primary-color, #03a9f4); stroke-width: 1.5; }
 .flip-info text { fill: var(--primary-color, #03a9f4); font: italic bold 11px serif; pointer-events: none; }
-.fov { fill: var(--primary-color, #03a9f4); fill-opacity: .03; stroke: var(--secondary-text-color, #888); stroke-dasharray: 4 4; stroke-opacity: .6; }
-.ring circle { fill: none; stroke: var(--secondary-text-color, #999); stroke-opacity: .25; stroke-dasharray: 2 4; }
+.fov { fill: var(--primary-text-color, #222); fill-opacity: .045; stroke: none; }
+.scale line { stroke: var(--secondary-text-color, #666); stroke-width: 1.2; }
+.scale text { fill: var(--secondary-text-color, #666); font: 11px Roboto, sans-serif; }
 .devzone { fill: none; stroke: var(--secondary-text-color, #888); stroke-dasharray: 6 4; stroke-opacity: .8; }
 .devzone-label { fill: var(--secondary-text-color, #888); font: 10px sans-serif; }
-.zone { cursor: pointer; }
+.zone { cursor: pointer; transition: stroke-opacity .12s; }
+.zone:hover { stroke-opacity: 1; }
 .zone-label { font: 600 12px sans-serif; paint-order: stroke; stroke: var(--card-background-color, #fff); stroke-width: 3px; pointer-events: none; }
+.pill rect { fill: var(--card-background-color, #fff); fill-opacity: .94; }
+.pill text { font: 500 11px Roboto, sans-serif; fill: var(--primary-text-color, #222); }
+.pill { pointer-events: none; }
 .vertex { fill: var(--card-background-color, #fff); stroke-width: 2; cursor: grab; }
 .vertex.sel { fill: currentColor; }
 .edge-hit { stroke: transparent; stroke-width: 12; cursor: move; }
@@ -97,6 +102,13 @@ export class RzpPlot extends HTMLElement {
     this.edgeWarnings = []; // [{a, b, label}] zone edges that targets flap across
     this.markers = []; // [{x, y, color}] small dots, e.g. where people stood at door events
     this.peers = []; // other aligned radars in this frame: [{title, color, origin, fov, zones, targets}]
+    this.dark = false; // theme: kind colours and detection ink
+    this.labels = {}; // zone id -> {glyph, text}: label pill overrides (doorways: where they lead)
+    this.coverage = null; // view cones (this radar's and linked ones'), in this frame: room fill is lighter outside them
+    this.showGrid = false; // the grid only shows while grid snapping is on
+    this.showDeviceZones = false; // zones saved on the radar: only while importing them
+    this.opacity = 1; // detection density control
+    this.editing = false; // edit mode: handles, and other shapes recede while one is selected
 
     // View
     this.scale = 0.08; // px per mm
@@ -527,14 +539,16 @@ export class RzpPlot extends HTMLElement {
     const w = this.clientWidth, h = this.clientHeight;
     if (!w || !h) return;
     this._mat = this._matrix();
-    this.points.draw({ view: this._viewMatrixGL(), window: this.window, cursor: this.cursor, trail: this.trailSeconds, colorMode: this.colorMode, context: this.showContext });
+    this.points.draw({ view: this._viewMatrixGL(), window: this.window, cursor: this.cursor, trail: this.trailSeconds, colorMode: this.colorMode, context: this.showContext,
+      opacity: this.opacity, ink: this.dark ? [0.93, 0.94, 0.96] : [0.13, 0.15, 0.2], size: this.colorMode === 3 ? 2.8 : 2.5 });
 
     const root = this.svgEl;
     root.replaceChildren();
     root.append(this._defs());
-    root.append(this._grid(w, h));
+    if (this.showGrid) root.append(this._grid(w, h));
+    else if (this._flipPopover) this._toggleFlipInfo(false);
     root.append(this._fovLayer());
-    root.append(this._deviceZoneLayer());
+    if (this.showDeviceZones) root.append(this._deviceZoneLayer());
     root.append(this._peerLayer());
     root.append(this._suggestionLayer());
     root.append(this._markerLayer());
@@ -542,15 +556,27 @@ export class RzpPlot extends HTMLElement {
     root.append(this._trailLayer());
     root.append(this._sensor());
     root.append(this._toolLayer());
+    root.append(this._scaleBar(w, h));
+  }
+
+  /** A scale bar instead of the grid: a round length about 80–140 px long, bottom left. */
+  _scaleBar(w, h) {
+    const g = svg('g', { class: 'scale', 'pointer-events': 'none' });
+    if (!this.units) return g;
+    const nice = this.units.imperial ? [152.4, 304.8, 609.6, 1524, 3048, 6096] : [100, 200, 500, 1000, 2000, 5000, 10000];
+    const L = nice.find(v => v * this.scale >= 80) || nice[nice.length - 1];
+    const px = L * this.scale, x = 16, y = h - 16;
+    g.append(svg('line', { x1: x, y1: y, x2: x + px, y2: y }), svg('line', { x1: x, y1: y - 4, x2: x, y2: y }), svg('line', { x1: x + px, y1: y - 4, x2: x + px, y2: y }));
+    const label = this.units.imperial ? `${Math.round(L / 304.8 * 10) / 10} ft` : L >= 1000 ? `${L / 1000} m` : `${L / 10} cm`;
+    g.append(svg('text', { x: x + px + 6, y: y + 3 }, document.createTextNode(label)));
+    return g;
   }
 
   _peerLayer() {
     const g = svg('g', { 'pointer-events': 'none' });
     for (const p of this.peers || []) {
-      g.append(svg('path', { d: this._path(p.fov), fill: p.color, 'fill-opacity': 0.04, stroke: p.color, 'stroke-opacity': 0.6, 'stroke-dasharray': '3 4', 'stroke-width': 1 }));
-      for (const z of p.zones) {
-        g.append(svg('path', { d: this._path(z.polygon), fill: 'none', stroke: p.color, 'stroke-opacity': 0.7, 'stroke-width': 1, 'stroke-dasharray': kindDash(z.kind) || '6 3' }));
-      }
+      // Another radar's view: one dashed outline (dashes mean "not part of this view").
+      g.append(svg('path', { d: this._path(p.fov), fill: 'none', stroke: p.color, 'stroke-opacity': 0.6, 'stroke-dasharray': '4 4', 'stroke-width': 1 }));
       const o = this._s(p.origin);
       g.append(svg('path', { d: `M${o[0]},${o[1] - 6}L${o[0] + 5},${o[1] + 4}L${o[0] - 5},${o[1] + 4}Z`, fill: p.color }));
       g.append(svg('text', { class: 'zone-label', x: o[0] + 8, y: o[1] - 6, fill: p.color }, document.createTextNode(p.title)));
@@ -670,16 +696,8 @@ export class RzpPlot extends HTMLElement {
 
   _fovLayer() {
     const g = svg('g');
+    // The view cone: a soft wash behind everything (no rings: the scale bar gives distances).
     g.append(svg('path', { class: 'fov', d: this._path(fovPolygon(this.fov.max_distance_mm, this.fov.half_angle_deg, 48)) }));
-    const rings = svg('g', { class: 'ring' });
-    const step = this.units?.imperial ? 1219.2 : 1000; // 4 ft / 1 m
-    const o = this._s([0, 0]);
-    for (let r = step; r <= this.fov.max_distance_mm + 1; r += step) {
-      rings.append(svg('circle', { cx: o[0], cy: o[1], r: r * this.scale }));
-      const lp = this._s([0, r]);
-      rings.append(svg('text', { x: lp[0] + 3, y: lp[1] - 3 }, document.createTextNode(this.units ? this.units.fmtLong(r) : `${r}`)));
-    }
-    g.append(rings);
     return g;
   }
 
@@ -716,40 +734,112 @@ export class RzpPlot extends HTMLElement {
     return g;
   }
 
-  _zoneColor(z, i) {
-    return kindColor(z.kind) || ZONE_COLORS[i % ZONE_COLORS.length];
+  _zoneColor(z) {
+    const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+    return this.dark ? st.dark : st.light;
   }
 
+  /**
+   * Shapes: fill carries the kind, no outline at rest (rooms keep a faint wall
+   * line), 1 px on hover, 2 px when selected. The fill doubles while occupied.
+   * A room's fill is lighter (× 0.4) where no radar sees.
+   */
   _zoneLayer() {
     const g = svg('g');
+    let clipId = null;
+    if (this.coverage?.length) {
+      clipId = `cov-${this._uid ||= Math.random().toString(36).slice(2, 8)}`;
+      const cp = svg('clipPath', { id: clipId });
+      for (const poly of this.coverage) cp.append(svg('path', { d: this._path(poly) }));
+      g.append(svg('defs', {}, cp));
+    }
+    const order = ['include', 'exclude', 'transient', 'linger', 'exit'];
+    const zones = this.zones.map((z, i) => [z, i]).sort((a, b) => order.indexOf(a[0].kind) - order.indexOf(b[0].kind) || a[1] - b[1]);
     const selected = [];
-    this.zones.forEach((z, i) => {
-      const color = this._zoneColor(z, i);
+    const pills = [];
+    const dim = this.editing && this.selectedId;
+    for (const [z] of zones) {
+      const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+      const color = this._zoneColor(z);
       const on = !!this.zoneStates[z.id];
       const isSel = z.id === this.selectedId;
-      const attrs = {
-        class: 'zone', d: this._path(z.polygon), 'data-role': 'zone', 'data-zone': z.id,
-        stroke: color, 'stroke-width': isSel ? 2.5 : 1.5,
-        fill: z.kind === 'exclude' ? 'url(#hatch)' : color,
-        'fill-opacity': z.kind === 'exclude' ? 1 : on ? 0.35 : 0.1,
-        'stroke-dasharray': kindDash(z.kind),
-      };
-      g.append(svg('path', attrs));
-      if (z.kind === 'exit' && z.door && z.door.swing !== 'none') {
-        const dg = doorGeometry(z.polygon, z.door);
-        if (dg.arc) {
-          g.append(svg('path', { d: this._path([dg.hinge, dg.open], false), stroke: color, 'stroke-width': 2.5, fill: 'none', 'pointer-events': 'none' }));
-          g.append(svg('path', { d: this._path(dg.arc, false), stroke: color, 'stroke-width': 1.2, 'stroke-dasharray': '4 3', fill: 'none', 'pointer-events': 'none' }));
-        }
+      const fill = on ? st.on : st.fill;
+      const d = this._path(z.polygon);
+      const grp = svg('g', dim && !isSel ? { opacity: 0.5 } : {});
+      const room = z.kind === 'include';
+      if (room && clipId) {
+        grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.4, 'pointer-events': 'none' }));
+        grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.6, 'clip-path': `url(#${clipId})`, 'pointer-events': 'none' }));
       }
-      // Label at the centroid of the vertices.
-      const c = z.polygon.reduce((a, p) => [a[0] + p[0] / z.polygon.length, a[1] + p[1] / z.polygon.length], [0, 0]);
-      const s = this._s(c);
-      g.append(svg('text', { class: 'zone-label', x: s[0], y: s[1], 'text-anchor': 'middle', fill: color },
-        document.createTextNode(z.kind === 'exit' ? `🚪 ${z.name}${on ? ' · open' : ''}` : `${z.name}${z.kind === 'include' && on ? ' ●' : ''}`)));
+      grp.append(svg('path', {
+        class: 'zone', d, 'data-role': 'zone', 'data-zone': z.id,
+        fill: room && clipId ? 'transparent' : color, 'fill-opacity': room && clipId ? 0 : fill,
+        stroke: color, 'stroke-width': isSel ? 2 : 1, 'stroke-opacity': isSel ? 1 : room ? 0.25 : 0,
+      }));
+      if (z.kind === 'exit') grp.append(this._doorSymbol(z, color, on));
+      g.append(grp);
+      pills.push([z, color, on, isSel]);
       if (isSel) selected.push([z, color]);
-    });
-    for (const [z, color] of selected) g.append(this._handles(z, color));
+    }
+    g.append(this._pills(pills));
+    for (const [z, color] of selected) if (!this.readonly) g.append(this._handles(z, color));
+    return g;
+  }
+
+  /** Floor-plan door symbols: a hinged leaf with its swing, or two offset sliding leaves. With a sensor the leaf follows it. */
+  _doorSymbol(z, color, open) {
+    const g = svg('g', { 'pointer-events': 'none' });
+    if (!z.door) return g;
+    const dg = doorGeometry(z.polygon, z.door);
+    if (z.door.swing === 'none') {
+      const [p0, p1, p2, p3] = dg.rect; // p0→p1 along the threshold
+      const mid = t => [p0[0] + (p3[0] - p0[0]) * t, p0[1] + (p3[1] - p0[1]) * t];
+      const along = (q, f) => [q[0] + (p1[0] - p0[0]) * f, q[1] + (p1[1] - p0[1]) * f];
+      const a = mid(0.35), b = mid(0.65);
+      g.append(svg('path', { d: this._path([a, along(a, 0.6)], false), stroke: color, 'stroke-width': 2.5, fill: 'none' }));
+      g.append(svg('path', { d: this._path([along(b, 0.4), along(b, 1)], false), stroke: color, 'stroke-width': 2.5, fill: 'none' }));
+      void p2;
+      return g;
+    }
+    if (!dg.arc) return g;
+    const sensed = z.door_entity_id && this.zoneStates[z.id] !== undefined;
+    const leafEnd = sensed && !open ? dg.closed : dg.open;
+    g.append(svg('path', { d: this._path([dg.hinge, leafEnd], false), stroke: color, 'stroke-width': 2.5, fill: 'none', 'stroke-linecap': 'round' }));
+    g.append(svg('path', { d: this._path(dg.arc, false), stroke: color, 'stroke-width': 1, 'stroke-opacity': sensed && !open ? 0.5 : 1, 'stroke-dasharray': sensed && !open ? '2 3' : null, fill: 'none' }));
+    return g;
+  }
+
+  _textWidth(text) {
+    const c = (this._measureCtx ||= document.createElement('canvas').getContext('2d'));
+    c.font = '500 11px Roboto, sans-serif';
+    return c.measureText(text).width;
+  }
+
+  /** Label pills at each shape's top-left inside corner, nudged apart; zoomed out, only rooms and the selection. */
+  _pills(items) {
+    const g = svg('g');
+    const placed = [];
+    const far = this.scale < 0.035;
+    for (const [z, color, on, isSel] of items) {
+      if (far && z.kind !== 'include' && !isSel) continue;
+      const lab = this.labels?.[z.id] || {};
+      const glyph = lab.glyph || (KIND_STYLE[z.kind] || KIND_STYLE.include).glyph;
+      const occupied = on && (z.kind === 'include' || z.kind === 'linger');
+      const text = `${lab.text || z.name}${occupied ? ' · Occupied' : z.kind === 'exit' && on && z.door_entity_id ? ' · open' : ''}`;
+      const pts = z.polygon.map(p => this._s(p));
+      let tl = pts[0];
+      for (const p of pts) if (p[0] + p[1] < tl[0] + tl[1]) tl = p;
+      const w = 26 + this._textWidth(text) + (occupied ? 10 : 0), h = 18;
+      let x = tl[0] + 5, y = tl[1] + 5;
+      for (let k = 0; k < 6 && placed.some(r => x < r.x + r.w && r.x < x + w && y < r.y + r.h && r.y < y + h); k++) y += h + 3;
+      placed.push({ x, y, w, h });
+      const pill = svg('g', { class: 'pill', transform: `translate(${x.toFixed(1)},${y.toFixed(1)})` });
+      pill.append(svg('rect', { width: w, height: h, rx: 9, stroke: color, 'stroke-opacity': isSel ? 0.9 : 0.45, 'stroke-width': 1 }));
+      pill.append(svg('path', { d: GLYPHS[glyph] || GLYPHS.room, transform: 'translate(6,3)', fill: 'none', stroke: color, 'stroke-width': 1.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+      pill.append(svg('text', { x: 21, y: 12.5 }, document.createTextNode(text)));
+      if (occupied) pill.append(svg('circle', { cx: w - 8, cy: 9, r: 3, fill: color }));
+      g.append(pill);
+    }
     return g;
   }
 
