@@ -853,3 +853,157 @@ async def test_a_robot_vacuum_is_not_a_person(hass: HomeAssistant, radar_device:
         await move(hass, 1, -40 + 4 * (k % 20), 100 + 2 * (k % 7))
         await _tick(hass, freezer, 4)
     assert [c.kind for c in rt.hc.changes] == ["unexplained"]  # (a person once seen for a while)
+
+
+async def _entry_with_front_door(
+    hass: HomeAssistant, radar_device: str, contact: str, extra_options: dict | None = None, in_area: tuple[str, ...] = ()
+):
+    """An entry room with a front door exit zone (door: `contact`); `in_area`: entities put in the room too."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    for entity_id in in_area:  # (a device's entities take its area)
+        dr.async_get(hass).async_update_device(er.async_get(hass).async_get(entity_id).device_id, area_id=area.id)
+    door = {
+        **zone("door", "Front door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"),
+        "door_entity_id": contact,
+        "leads_to": ["outside"],
+    }
+    entry = await setup_entry(hass, radar_device, [door])
+    if extra_options:
+        hass.config_entries.async_update_entry(entry, options={**entry.options, **extra_options})
+        await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    rt.hc._bootstrap_until = float("-inf")
+    return entry, rt, area
+
+
+async def test_ec74_a_lock_alone_as_an_outside_door_pulses(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """EC-74: a lock without a door contact of its own, listed as an outside door: locking or unlocking is the door
+    being used (opened and closed at once), so whoever is on its floor is in doubt for a while."""
+    hass.states.async_set("binary_sensor.front_door", "off")
+    entry, rt, area = await _entry_with_front_door(hass, radar_device, "binary_sensor.front_door")
+    ent = er.async_get(hass).async_get_or_create("lock", "test", "back_door", suggested_object_id="back_door")
+    er.async_get(hass).async_update_entity(ent.entity_id, area_id=area.id)
+    hass.states.async_set("lock.back_door", "locked")
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "outside_doors": ["lock.back_door"]})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    assert rt._door_kind["lock.back_door"] == "lock"
+    rt.hc.seed(area.id, 1, 0.0)
+    hass.states.async_set("lock.back_door", "unlocked")
+    await hass.async_block_till_done()
+    assert rt.hc.unknown_floors() == {0} and rt.hc.count() == 0
+
+
+async def test_a_lock_on_the_door_contacts_device_never_pulses(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """A smart lock with its own door sensor, the sensor on the exit zone and the lock also listed as an outside
+    door: the contact says when the door is used, the lock only that it is closed. Locking it is not the door used."""
+    contact, lock = _device_with(hass, "front_lock", [("binary_sensor", "door"), ("lock", "lock")])
+    hass.states.async_set(contact, "off")
+    hass.states.async_set(lock, "unlocked")
+    entry, rt, area = await _entry_with_front_door(hass, radar_device, contact, {"outside_doors": [lock]}, in_area=(lock,))
+    assert lock in rt.hc.regions[area.id].exits  # (taken as an outside door)
+    assert rt._door_kind[lock] == "door_lock" and rt._lock_of == {contact: lock}
+    rt.hc.seed(area.id, 1, 0.0)
+    hass.states.async_set(lock, "locked")
+    await _tick(hass, freezer, 1)
+    hass.states.async_set(lock, "unlocked")
+    await _tick(hass, freezer, 1)
+    assert not rt.hc.unknown_floors() and rt.hc.count() == 1
+    hass.states.async_set(contact, "on")  # the door itself: used
+    await _tick(hass, freezer, 1)
+    assert rt.hc.unknown_floors() == {0}
+
+
+async def test_ec75_an_exit_door_open_at_start_is_open(hass: HomeAssistant, radar_device: str) -> None:
+    """EC-75: an exit door already open when the head count starts is fed as open (the floor is in doubt)..."""
+    hass.states.async_set("binary_sensor.front_door", "on")
+    _entry, rt, _area = await _entry_with_front_door(hass, radar_device, "binary_sensor.front_door")
+    assert rt.hc._door_seen["binary_sensor.front_door"][0]
+    assert rt.hc.unknown_floors() == {0}
+
+
+async def test_ec75_unless_it_is_locked(hass: HomeAssistant, radar_device: str) -> None:
+    """EC-75: ... unless its lock says locked (the contact is wrong)."""
+    contact, lock = _device_with(hass, "front_lock", [("binary_sensor", "door"), ("lock", "lock")])
+    hass.states.async_set(contact, "on")
+    hass.states.async_set(lock, "locked")
+    _entry, rt, _area = await _entry_with_front_door(hass, radar_device, contact)
+    assert contact not in rt.hc._door_seen and not rt.hc.unknown_floors()
+
+
+async def test_ec87_a_vacuum_that_never_says_its_room_is_replayed_after_a_while(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """EC-87 / RT-VAC-2: the hold for a vacuum that has not said where it cleans ends after HOLD_MAX_S: what came
+    since is replayed without knowing its room."""
+    from custom_components.radar_zone_presence.headcount_runtime import HOLD_MAX_S, TICK_S
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    vac, room = _device_with(hass, "robo", [("vacuum", "vacuum"), ("sensor", "current_room")])
+    hass.states.async_set(vac, "docked")
+    hass.states.async_set(room, "unknown")
+    entry = await setup_entry(hass, radar_device, [])
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "vacuums": [vac]})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    hass.states.async_set(vac, "cleaning")
+    await hass.async_block_till_done()
+    assert rt._hold is not None
+    await _tick(hass, freezer, HOLD_MAX_S - TICK_S)
+    assert rt._hold is not None
+    await _tick(hass, freezer, 2 * TICK_S)
+    assert rt._hold is None
+    assert any("replayed" in e["detail"] for e in rt.log if e["kind"] == "signal")
+
+
+async def test_a_bed_sensor_holds_someone_in_the_bedroom(hass: HomeAssistant, radar_device: str, freezer) -> None:
+    """Occupancy sensors (a bed's two sides): while either is on, at least one person is in its room, anchored there;
+    both sides on is still one person. A bounce shorter than OCCUPANCY_STEADY_S changes nothing."""
+    from custom_components.radar_zone_presence.headcount_runtime import OCCUPANCY_STEADY_S
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Upstairs", level=1)
+    hall = ar.async_get(hass).async_create("Hall", floor_id=floor.floor_id)
+    bedroom = ar.async_get(hass).async_create("Bedroom", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=hall.id)
+    ent_reg = er.async_get(hass)
+    sides = []
+    for name in ("bed_left", "bed_right"):
+        ent = ent_reg.async_get_or_create("binary_sensor", "test", name, suggested_object_id=name)
+        ent_reg.async_update_entity(ent.entity_id, area_id=bedroom.id)
+        hass.states.async_set(ent.entity_id, "off")
+        sides.append(ent.entity_id)
+    left, right = sides
+    door = {**zone("door", "Bedroom door", [[20, 10], [60, 10], [60, 50], [20, 50]], kind="exit"), "leads_to": [bedroom.id]}
+    entry = await setup_entry(hass, radar_device, [door])
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "occupancy": sides})
+    await hass.async_block_till_done()
+    rt = entry.runtime_data.headcount
+    assert rt._occupancy == {left: bedroom.id, right: bedroom.id}
+    rt.hc.seed(hall.id, 1, 0.0)  # upstairs, unseen in the hall
+
+    hass.states.async_set(left, "on")  # sat on the bed for a moment
+    await _tick(hass, freezer, 3)
+    hass.states.async_set(left, "off")
+    await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
+    assert rt.hc.held() == {} and rt.hc.by_region()[bedroom.id] == 0
+
+    hass.states.async_set(left, "on")  # in bed
+    await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
+    (tok,) = rt.hc.tokens
+    assert rt.hc.held() == {bedroom.id: tok} and rt.hc.by_region() == {hall.id: 0, bedroom.id: 1}
+    hass.states.async_set(right, "on")  # rolls over to the middle: both sides
+    await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
+    hass.states.async_set(left, "off")
+    await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
+    assert rt.hc.count() == 1 and rt.hc.held() == {bedroom.id: tok}
+    hass.states.async_set(right, "off")  # up
+    await _tick(hass, freezer, OCCUPANCY_STEADY_S + 1)
+    assert rt.hc.held() == {} and rt.hc.count() == 1
+    details = [e["detail"] for e in rt.log if e["kind"] == "signal"]
+    assert details.count("on: someone is there while it stays on") == 1 and details.count("off: they got up") == 1

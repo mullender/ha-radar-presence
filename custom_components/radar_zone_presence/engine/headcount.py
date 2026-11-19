@@ -62,6 +62,11 @@ be home, each with the region where they were last seen.
   everyone else (and not while someone is in view in a neighbouring region,
   who may be the same person seen by two radars), and counts once it walks into another region or has been
   seen for ``UNEXPLAINED_SEEN_S``.
+- **Occupancy sensors** (a bed sensor) say someone is in their region for as
+  long as they are on: one person there is *anchored*, not taken to explain a
+  track elsewhere and not put in doubt by an exit door, until the sensor turns
+  off. Several sensors in one region (a bed's two sides) mean at least one
+  person, never one each.
 - Counts are the tokens per region, per floor and in total, so the levels
   always add up.
 
@@ -199,6 +204,7 @@ class HeadCount:
         self._static: set[tuple[str, int]] = set()  # tracks that never moved: machines, ignored
         self._spots: dict[str, list[list[float]]] = {}  # region -> [[x, y, still seconds, last time]]
         self._unconfirmed: dict[str, set[int]] = {}  # track -> (last time in an outside doorway, its name)
+        self._held: dict[str, int | None] = {}  # region an occupancy sensor holds -> the person anchored there
         self._bootstrap_until = bootstrap_until
         self._next = 1
         self.changes: list[Change] = []
@@ -257,6 +263,49 @@ class HeadCount:
         ):
             self._establish(tok, t, why or "evidence")
 
+    def hold(self, region: str, on: bool, t: float, why: str = "", move: bool = True) -> None:
+        """An occupancy sensor (a bed sensor) in this region turned on or off. On: someone is there for as long as it
+        stays on. Like evidence, whoever is believed there stays (or the unseen person who could have walked there is
+        moved there, ``move``); that person is anchored: not taken to explain a track in another region, nor put in
+        doubt by an exit door (someone in bed did not go out), and back at once if in doubt. It never adds a person.
+        Off: they got up; they are there now, and free to be the next track nearby."""
+        if region not in self.regions:
+            return
+        self._tick(t)
+        if not on:
+            tok = self.tokens.get(self._held.pop(region, None) or -1)
+            if tok is not None and tok.region == region and tok.visible is None:
+                tok.last_seen = t
+                self.changes.append(Change(t, "evidence", tok.id, region, why))
+            return
+        tok = self._anchor_in(region)
+        if tok is None and move and not self._in_doorway_to(region):
+            tok = self._match(region, t)
+            if tok is not None:
+                self._move_unseen(tok, region, t)
+        self._held[region] = tok.id if tok is not None else None
+        if tok is None:
+            return
+        if tok.visible is None:
+            tok.last_seen = t
+            tok.floor_seen[self.regions[region].floor] = t
+        self.changes.append(Change(t, "evidence", tok.id, region, why))
+        if tok.unknown:
+            self._establish(tok, t, why or "occupancy")
+
+    def held(self) -> dict[str, int | None]:
+        """Regions an occupancy sensor holds, and who is anchored there."""
+        return dict(self._held)
+
+    def _anchor_in(self, region: str) -> Token | None:
+        """Who an occupancy sensor in this region means: someone in view there, else whoever is believed there
+        (firm before in doubt, seen most recently first)."""
+        here = [tok for tok in self.tokens.values() if tok.region == region and not tok.provisional]
+        return max(here, key=lambda k: (k.visible is not None, not k.unknown, k.last_seen), default=None)
+
+    def _anchored(self, tok: Token) -> bool:
+        return tok.region in self._held and self._held[tok.region] == tok.id
+
     def correct(self, region: str, n: int, t: float) -> None:
         """Someone who knows says this region holds n people: add or remove people to match. Removes the
         longest-unseen first (a phantom is someone nobody has seen), people in view last."""
@@ -265,7 +314,7 @@ class HeadCount:
         self._tick(t)
         here = sorted(
             (tok for tok in self.tokens.values() if tok.region == region and not tok.provisional),
-            key=lambda k: (k.visible is not None, k.last_seen),
+            key=lambda k: (k.visible is not None, self._anchored(k), k.last_seen),
         )
         for tok in here[: max(0, len(here) - n)]:
             if tok.visible is not None:
@@ -286,7 +335,7 @@ class HeadCount:
         self._tick(t)
         people = sorted(
             (tok for tok in self.tokens.values() if not tok.provisional),
-            key=lambda k: (k.visible is not None, k.last_seen),
+            key=lambda k: (k.visible is not None, self._anchored(k), k.last_seen),
         )
         drop = people[: max(0, len(people) - n)]
         if n == 0:
@@ -510,6 +559,11 @@ class HeadCount:
         self._now = max(self._now, t)
         self._expire_unknown(t)
         self._confirm(t)
+        for region, tid in self._held.items():
+            tok = self.tokens.get(tid) if tid is not None else None
+            if tok is None or tok.region != region or tok.provisional:  # walked out, corrected away: whoever is left
+                nxt = self._anchor_in(region)
+                self._held[region] = nxt.id if nxt is not None else None
 
     def _virtual_exit(self, region: str, name: str, t: float) -> None:
         floor = self.regions[region].floor
@@ -544,7 +598,7 @@ class HeadCount:
         return w if w is not None and self._unsettled(w.floor, t) else None
 
     def _doubt(self, tok: Token, t: float, why: str, floor: int | None = None) -> None:
-        if not tok.unknown:
+        if not tok.unknown and not self._anchored(tok):  # (an occupancy sensor says they are in its room)
             tok.unknown = True
             tok.unknown_floor = self.regions[tok.region].floor if floor is None else floor
             tok.since = t
@@ -722,6 +776,8 @@ class HeadCount:
                 continue  # someone at the exit comes back through the doorway from where they are, not out of thin air
             if self._enclosed(tok.region) and (only is None or tok.region not in only) and not patient:
                 continue  # someone in a room without a radar comes out through its door (unless missed: patient)
+            if tok.region != region and self._anchored(tok) and (only is None or tok.region not in only):
+                continue  # in bed (an occupancy sensor holds them), unless coming out through its doorway
             cost = self._reach(tok, region, t)
             if cost is not None and (best is None or (-tok.last_seen, cost) < (-best[2].last_seen, best[1])):
                 best = (tok.last_seen, cost, tok)

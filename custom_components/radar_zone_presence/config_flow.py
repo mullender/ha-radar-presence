@@ -27,6 +27,7 @@ from .const import (
     CONF_EVIDENCE,
     CONF_EVIDENCE_ON,
     CONF_IMPORT_ZONES,
+    CONF_OCCUPANCY,
     CONF_PROFILE,
     CONF_RADAR,
     CONF_OUTSIDE_DOORS,
@@ -274,6 +275,12 @@ class RadarZonePresenceOptionsFlow(OptionsFlow):
                         CONF_EVIDENCE_ON,
                         default=self.config_entry.options.get(CONF_EVIDENCE_ON, []),
                     ): selector.EntitySelector(selector.EntitySelectorConfig(domain=EVIDENCE_DOMAINS, multiple=True)),
+                    vol.Optional(
+                        CONF_OCCUPANCY,
+                        default=self.config_entry.options.get(CONF_OCCUPANCY, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain=["binary_sensor", "input_boolean"], multiple=True)
+                    ),
                     vol.Optional(
                         CONF_VACUUMS,
                         default=self.config_entry.options.get(CONF_VACUUMS, []),

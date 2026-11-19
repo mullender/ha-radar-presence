@@ -475,3 +475,17 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   come from the group preview at that exact time (not from this radar's last frame, which can be hours earlier).
 - Head count log: a decision made from a radar's tracks has a 📡 button that opens that space's radar (its own
   first; `spaces[].radars` in the head count layout) replaying that moment with a one-minute window.
+
+## 2026-11-18: occupancy sensors, paired locks, rule tests
+- New home option `occupancy` (bed sensors and similar: on while someone is there). A space is held while any of
+  its sensors is on (a bed's left / right / either sensors are one signal: at least one person, never one each),
+  after 10 s steady on either edge. Holding anchors one person there: not taken for a track in another space
+  (unless it appears at that space's doorway: getting up while the sensor lags), never put in doubt by an exit
+  door, back at once if already in doubt. It never adds a person. Released when the sensors are off; the anchor
+  is then the likeliest next track nearby.
+- A lock on the same device as a configured door contact is that door's lock even when also listed as an outside
+  door: it no longer pulses. Pulses put the floor in doubt on every lock / unlock and dropped unseen sleepers
+  there after 10 min; the pairing already says locked = closed. A lock with no contact still pulses.
+- tests/test_headcount_rules.py: one scene per engine rule that had no test (spec §14 EC rows), each checked by
+  disabling its rule and seeing the test fail (three first drafts did not, and were fixed). Runtime tests for
+  lock pulses, paired locks, a door open at start, the vacuum hold timeout and bed sensors. Replay score unchanged.

@@ -29,7 +29,7 @@ from homeassistant.helpers.event import async_call_later, async_track_state_chan
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OUTSIDE_DOORS, CONF_VACUUMS, DOMAIN, OUTSIDE
+from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OCCUPANCY, CONF_OUTSIDE_DOORS, CONF_VACUUMS, DOMAIN, OUTSIDE
 from .engine.align import apply, invert, transform_polygon
 from .engine.headcount import HeadCount, Portal, Region
 from .engine.rooms import RoomRadar, Rooms
@@ -47,6 +47,7 @@ LOG_KEEP_S = 3 * 86400.0  # the decision log the panel's head count view replays
 LOG_SAVE_DELAY_S = 120
 SEEN_EVERY_S = 15.0
 CONTACT_MIN_S = 2.0  # a door contact must stay open this long to count (a magnet at the edge of its range flickers)
+OCCUPANCY_STEADY_S = 10.0  # an occupancy sensor's region counts as held / free once it has stayed so this long
 EVENT_FRESH_S = 30.0  # a button press (event entity) counts only if its time is this recent  # who a radar sees, logged at most this often
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
@@ -109,7 +110,10 @@ class HeadCountRuntime:
         self._door_kind: dict[str, str] = {}  # entity -> "door" | "lock" | "door_lock"
         self._lock_of: dict[str, str] = {}  # door contact -> the lock on the same device (a smart lock's door sensor)
         self._evidence: dict[str, tuple[str, bool]] = {}  # entity -> (region, only switching on counts)
+        self._occupancy: dict[str, str] = {}  # occupancy sensor (a bed sensor) -> its region
+        self._occupied: dict[str, tuple[bool, float]] = {}  # region -> (any of its occupancy sensors on, since)
         self._contact_open: dict[str, float] = {}  # door contact -> when it opened (not counted yet)
+        self._occupancy_wait: dict[str, tuple[bool, float, str]] = {}  # region -> (on, since, sensor) until steady
         self._vacuums: dict[str, str | None] = {}  # robot vacuum -> its current room sensor
         self._vacuumed: dict[str, str] = {}  # space a robot vacuum is cleaning -> the vacuum: its tracks are it
         self._hold: _Hold | None = None  # one is cleaning, its room not known yet
@@ -147,7 +151,9 @@ class HeadCountRuntime:
             locks = [e.entity_id for e in er.async_entries_for_device(ents, ent.device_id) if e.domain == "lock"]
             if len(locks) == 1:
                 self._lock_of[door] = locks[0]
-                self._door_kind.setdefault(locks[0], "door_lock")
+                # Also listed as an outside door itself: the door's contact says when it is used; the lock only says
+                # it is closed (its pulses would put the floor in doubt every time it is locked or unlocked).
+                self._door_kind[locks[0]] = "door_lock"
 
     def _locked(self, door: str) -> bool:
         lock = self._lock_of.get(door)
@@ -271,6 +277,12 @@ class HeadCountRuntime:
                     _LOGGER.warning("Head count: %s is not in an area of the head count, ignored", entity_id)
                     continue
                 self._evidence[entity_id] = (region_id, on_only)
+        for entity_id in home.entry.options.get(CONF_OCCUPANCY, []) or []:
+            area_id = self._entity_area(entity_id)
+            if area_id is None or (region_id := area_region.get(area_id)) is None:
+                _LOGGER.warning("Head count: %s is not in an area of the head count, ignored", entity_id)
+                continue
+            self._occupancy[entity_id] = region_id
         ents = er.async_get(self.hass)
         for vac in home.entry.options.get(CONF_VACUUMS, []) or []:
             ent = ents.async_get(vac)
@@ -326,6 +338,13 @@ class HeadCountRuntime:
                     self._hc("door", entity_id, True, now)
         if self._evidence:
             self._unsubs.append(async_track_state_change_event(self.hass, list(self._evidence), self._on_evidence))
+        if self._occupancy:
+            self._unsubs.append(async_track_state_change_event(self.hass, list(self._occupancy), self._on_occupancy))
+            now = time.time()
+            for region in dict.fromkeys(self._occupancy.values()):
+                if self._region_occupied(region):  # held already: anchor whoever is believed there, move nobody
+                    self._occupied[region] = (True, now)
+                    self._hc("hold", region, True, now, "occupied at start", False)
         if watch := [e for pair in self._vacuums.items() for e in pair if e]:
             self._unsubs.append(async_track_state_change_event(self.hass, watch, self._on_vacuum))
             self._update_vacuumed(time.time())
@@ -494,6 +513,42 @@ class HeadCountRuntime:
         self._hc("evidence", region, new.last_changed_timestamp, entity_id, not off)
         self._changed()
 
+    def _region_occupied(self, region: str) -> bool:
+        return any(
+            (st := self.hass.states.get(e)) is not None and st.state == "on" for e, r in self._occupancy.items() if r == region
+        )
+
+    @callback
+    def _on_occupancy(self, event: Event[EventStateChangedData]) -> None:
+        """An occupancy sensor (a bed sensor) changed: its region is held while any of its sensors is on, once that
+        has lasted OCCUPANCY_STEADY_S (someone turning over, a sensor bouncing)."""
+        if self.hc is None:
+            return
+        entity_id = event.data["entity_id"]
+        new = event.data["new_state"]
+        if new is None or new.state in ("unavailable", "unknown"):
+            return
+        region = self._occupancy[entity_id]
+        on = self._region_occupied(region)
+        if self._occupied.get(region, (False, 0.0))[0] == on and region not in self._occupancy_wait:
+            return
+        t = new.last_changed_timestamp
+        self._occupancy_wait[region] = (on, t, entity_id)
+        async_call_later(self.hass, OCCUPANCY_STEADY_S, partial(self._occupancy_steady, region, t))
+
+    @callback
+    def _occupancy_steady(self, region: str, t: float, _now: Any) -> None:
+        if self.hc is None or (wait := self._occupancy_wait.get(region)) is None or wait[1] != t:
+            return
+        del self._occupancy_wait[region]
+        on, _t, entity_id = wait
+        if self._occupied.get(region, (False, 0.0))[0] == on:
+            return  # back as it was (a bounce)
+        self._occupied[region] = (on, t)
+        self._log_signal(t, "signal", entity_id, "on: someone is there while it stays on" if on else "off: they got up", region)
+        self._hc("hold", region, on, t, entity_id)
+        self._changed()
+
     @callback
     def _on_vacuum(self, event: Event[EventStateChangedData]) -> None:
         if self.hc is not None and (new := event.data["new_state"]) is not None:
@@ -626,6 +681,7 @@ class HeadCountRuntime:
             "floors": [{"level": lv, "floor_id": fid, "name": name} for lv, (fid, name) in sorted(self.floors.items())],
             "doors": self._door_spaces(),
             "evidence": {e: [r, on_only] for e, (r, on_only) in self._evidence.items()},
+            "occupancy": dict(self._occupancy),
             "before": before,
             "log": [e for e in self.log if start <= e["t"] <= end],
             "now": {"t": time.time(), **self._snapshot()} if self.hc else None,
@@ -711,7 +767,8 @@ class HeadCountRuntime:
             "connections": [[a, b, d] for a, links in hc._links.items() for b, d in links if a < b],
             "tokens": [
                 {"id": tok.id, "region": tok.region, "last_seen": tok.last_seen, "reason": tok.reason,
-                 "visible": tok.visible is not None, "unknown": tok.unknown, "provisional": tok.provisional}
+                 "visible": tok.visible is not None, "unknown": tok.unknown, "provisional": tok.provisional,
+                 "anchored": hc._anchored(tok)}
                 for tok in hc.tokens.values()
             ],
             "changes": [[c.t, c.kind, c.token, c.region, c.detail] for c in hc.changes[-50:]],

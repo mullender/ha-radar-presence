@@ -100,7 +100,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
   <li><a href="#passages">Stage 6 — exit passages</a></li>
   <li><a href="#hcmodel">Head count — model and construction</a></li>
   <li><a href="#hcengine">Head count — engine rules</a></li>
-  <li><a href="#hcruntime">Head count — runtime inputs (doors, locks, evidence, vacuums, corrections)</a></li>
+  <li><a href="#hcruntime">Head count — runtime inputs (doors, locks, evidence, occupancy, vacuums, corrections)</a></li>
   <li><a href="#advisory">Advisory analysis (panel guide)</a></li>
   <li><a href="#params">Parameters</a></li>
   <li><a href="#edge">Edge cases and special handling (test map)</a></li>
@@ -200,12 +200,12 @@ svg.dg .dash { stroke-dasharray:5 4; }
   <rect class="ha" x="20" y="20" width="250" height="80" rx="6"/><text x="30" y="40" class="t">ESPHome radar device</text><text x="30" y="58" class="s">LD2450 target X / Y sensors (slots 1–3)</text><text x="30" y="74" class="s">max_distance number, mounting</text><text x="30" y="90" class="s">device area</text>
   <rect class="cfg" x="20" y="150" width="250" height="110" rx="6"/><text x="30" y="170" class="t">Radar (subentry)</text><text x="30" y="188" class="s">device_id, targets {slot: x, y entity}</text><text x="30" y="204" class="s">zones[] in its own frame (mm)</text><text x="30" y="220" class="s">display.aligned_to {radar, angle,</text><text x="30" y="236" class="s">  reflect, offset}</text><text x="30" y="252" class="s">headcount: on / off</text>
   <rect class="cfg" x="20" y="310" width="250" height="110" rx="6"/><text x="30" y="330" class="t">Radar-local zones</text><text x="30" y="348" class="s">exclude: ignore targets inside</text><text x="30" y="364" class="s">exit: door_entity_id?, leads_to[]</text><text x="30" y="380" class="s">   (area ids or "outside")</text><text x="30" y="396" class="s">linger / transient: tracker spots</text>
-  <rect class="cfg" x="400" y="20" width="260" height="95" rx="6"/><text x="410" y="40" class="t">Home (config entry, one per HA)</text><text x="410" y="58" class="s">options: reconnect_grace_s</text><text x="410" y="74" class="s">outside_doors[], evidence[], evidence_on[]</text><text x="410" y="90" class="s">vacuums[]</text>
+  <rect class="cfg" x="400" y="20" width="260" height="95" rx="6"/><text x="410" y="40" class="t">Home (config entry, one per HA)</text><text x="410" y="58" class="s">options: reconnect_grace_s</text><text x="410" y="74" class="s">outside_doors[], evidence[], evidence_on[]</text><text x="410" y="90" class="s">occupancy[], vacuums[]</text>
   <rect class="cfg" x="400" y="170" width="260" height="90" rx="6"/><text x="410" y="190" class="t">Presence zone (subentry)</text><text x="410" y="208" class="s">radar: the frame it is drawn in</text><text x="410" y="224" class="s">polygon, filters</text><text x="410" y="240" class="s">area_id (optional)</text>
   <rect class="ha" x="790" y="170" width="250" height="60" rx="6"/><text x="800" y="192" class="t">HA Area</text><text x="800" y="210" class="s">name, floor</text>
   <rect class="ha" x="790" y="280" width="250" height="50" rx="6"/><text x="800" y="300" class="t">HA Floor</text><text x="800" y="318" class="s">level (integer)</text>
   <rect class="ext" x="400" y="480" width="200" height="80" rx="6"/><text x="410" y="500" class="t">Door entity</text><text x="410" y="518" class="s">binary_sensor / cover / lock</text><text x="410" y="534" class="s">contact + lock on one device</text><text x="410" y="550" class="s">= paired (§11.2)</text>
-  <rect class="ext" x="620" y="480" width="200" height="80" rx="6"/><text x="630" y="500" class="t">Evidence entity</text><text x="630" y="518" class="s">light, switch, fan, input_boolean,</text><text x="630" y="534" class="s">binary_sensor (contact),</text><text x="630" y="550" class="s">event (button)</text>
+  <rect class="ext" x="620" y="480" width="200" height="80" rx="6"/><text x="630" y="500" class="t">Evidence entity</text><text x="630" y="518" class="s">light, switch, fan, input_boolean,</text><text x="630" y="534" class="s">binary_sensor (contact),</text><text x="630" y="550" class="s">event (button); bed sensor</text>
   <rect class="ext" x="840" y="480" width="200" height="80" rx="6"/><text x="850" y="500" class="t">Robot vacuum</text><text x="850" y="518" class="s">state cleaning / returning</text><text x="850" y="534" class="s">current_room sensor</text><text x="850" y="550" class="s">(same device)</text>
   <path class="ln" d="M145,100 V148" marker-end="url(#a2)"/><text x="152" y="128" class="lb">1 : 1 (device_id)</text>
   <path class="ln" d="M400,95 H300 V205 H272" marker-end="url(#a2)"/><text x="306" y="125" class="lb">subentries</text>
@@ -399,6 +399,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td><b>Exit door</b> of a region</td><td>An exit zone with <code>leads_to ∋ "outside"</code> and a door entity; each <code>outside_doors</code> option entity, placed in its area's region (which may be newly created, unobserved)</td><td>Opening one starts an exit window (§10.4). Entities in the <code>lock</code> domain are door kind <code>lock</code>: each state change is a pulse (open + close).</td></tr>
 <tr><td><b>Connection</b> (a, b, door?)</td><td>(1) exit <code>leads_to</code> an area: (region, dest, exit's door); (2) every pair of regions in one group: no door; (3) every pair of spaces in the same area (different groups): no door</td><td>Undirected. If both directions exist, the one with a door wins. With any connections, people move only along them, and through a door only while it is in use (§10.3).</td></tr>
 <tr><td><b>Evidence</b> mapping</td><td><code>evidence</code> / <code>evidence_on</code> options</td><td>The entity's area (else its device's area) must already be a space, or the entity is ignored with a warning.</td></tr>
+<tr><td><b>Occupancy</b> mapping</td><td><code>occupancy</code> option (binary_sensor, input_boolean)</td><td>Same area rule as evidence. Sensors in one space are combined: the space is occupied while any is on (§11.3b).</td></tr>
 <tr><td><b>Vacuum</b> → room sensor</td><td><code>vacuums</code> option</td><td>A <code>sensor</code> on the vacuum's device with translation key <code>current_room</code> or an entity id ending <code>_current_room</code>. If there is none, a warning is logged and the vacuum's tracks cannot be ignored.</td></tr>
 <tr><td><b>Lock pairing</b></td><td>A door entity (kind <code>door</code>) whose device has exactly one <code>lock</code> entity</td><td><code>lock_of[door] = lock</code>. If the lock is not configured itself, its kind is <code>door_lock</code>: it is watched only to close and reopen the contact (§11.2).</td></tr>
 <tr><td><b>space_radars</b> (panel only)</td><td>Per region: the radars in its area, then the radars with zones in it, else all the group's head-count radars</td><td>Lets the head count log open the right radar view at a decision's time.</td></tr>
@@ -603,6 +604,19 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <li><span class="n a">Move it here if needed; <code>last_seen = t</code>; log "evidence". If it is in doubt and the floor has no unsettled window: re-establish it. <b>Evidence never adds a person</b>: a switch does not say who.</span></li></ul></div>
 <div class="rule"><span class="id">HC-CO-1</span><code>correct(region, n)</code>: remove tokens beyond n, longest-unseen first and visible ones last (a phantom is someone nobody has seen). Add "corrected" tokens (unseen, seen now) up to n. Re-establish the remaining tokens in doubt.</div>
 <div class="rule"><span class="id">HC-CO-2</span><code>correct_home(n)</code>: only removes, anywhere, longest-unseen first. Adding is not supported, because who is where is not known. With n = 0 it also removes provisional tokens and clears pending tracks.</div>
+<p>In both corrections an anchored token (HC-OC-1) is removed after the other unseen ones and before the visible ones.</p>
+
+<h3 id="occupancy">10.10 Occupancy: someone held in a region (bed sensors)</h3>
+<div class="dt"><div class="title">hold(region, on, t, why, move): an occupancy sensor's region is held (on) or free (off)</div>
+<ul class="root">
+<li><span class="n q"><code>on</code>?</span><ul>
+  <li><span class="lbl">no</span><span class="n a">Remove the region from <code>_held</code>. If its anchor is still there and unseen: <code>last_seen = t</code>; log "evidence". They just got up, so they are the likeliest next track nearby.</span></li>
+  <li><span class="lbl">yes</span><span class="n q">Is a counted or in-doubt token believed to be here (<code>_anchor_in</code>)?</span><ul>
+    <li><span class="lbl">yes</span><span class="n a">anchor = a visible one first, then a counted one before an in-doubt one, then the most recently seen</span></li>
+    <li><span class="lbl">no</span><span class="n q"><code>move</code>, and nobody visible next door at a portal leading here?</span><ul><li><span class="lbl">yes</span><span class="n a"><code>_match(region)</code>, moved here unseen</span></li><li><span class="lbl">no</span><span class="n x">held with no anchor (never adds a person)</span></li></ul></li></ul></li></ul></li>
+<li><span class="n a"><code>_held[region] = anchor</code>. If unseen: <code>last_seen = t</code>. Log "evidence". If it was in doubt: re-establish it at once, even while the window is open (someone in bed did not go out).</span></li></ul></div>
+<div class="rule"><span class="id">HC-OC-1</span>While a region is held, its anchor is <b>not matched to a track in another region</b> (<code>_match</code> skips it) unless that track appears at a portal leading to the held region (<code>only</code> includes it: coming out through the bedroom door while the sensor lags). The anchor is also <b>never put in doubt</b> (<code>_doubt</code> skips it): not by an exit door opening, a virtual exit, or walking towards the exit.</div>
+<div class="rule"><span class="id">HC-OC-2</span>On every tick, an anchor that is gone, has left the region or is provisional is replaced by <code>_anchor_in(region)</code> (possibly none). With two people in bed and either side on, one is the anchor; the other is free to be a track elsewhere. Several sensors in one region are one signal: <b>at least one person, never one each</b>.</div>
 
 <!-- ================================================================== -->
 <h2 id="hcruntime">11. Head count — runtime inputs</h2>
@@ -611,7 +625,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 
 <h3>11.1 Doors to outside and connection doors</h3>
 <ul>
-  <li><b>Door kinds:</b> <code>door</code> covers contacts and covers; "open" means a state in {on, open, opening, closing}. <code>lock</code> covers lock entities configured as outside doors. <code>door_lock</code> covers locks found only by pairing.</li>
+  <li><b>Door kinds:</b> <code>door</code> covers contacts and covers; "open" means a state in {on, open, opening, closing}. <code>lock</code> covers lock entities configured as outside doors that have no paired door contact. <code>door_lock</code> covers locks paired with a configured door contact on the same device. <b>Pairing wins</b>: a paired lock that is also listed as an outside door is still a <code>door_lock</code>, and never pulses (RT-LK-1).</li>
   <li><b>Ignored states:</b> unavailable and unknown are ignored. The event time is the state's <code>last_changed</code>.</li>
   <li><b>Start-up:</b> a <code>door</code> that is open at start-up and not locked is fed as opening at start-up.</li>
 </ul>
@@ -626,7 +640,8 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <li><span class="n q">Kind <code>door</code>, an open state, and its paired lock is locked?</span><ul><li><span class="lbl">yes</span><span class="n x">log "ignored: the door is locked, so it is closed"; stop</span></li></ul></li>
 <li><span class="n q">Kind <code>lock</code>?</span><ul><li><span class="lbl">yes</span><span class="n a">If the old state was known and differs: <b>pulse</b> (open and close at t). This starts and immediately closes an exit window on the lock's floor.</span></li>
 <li><span class="lbl">no</span><span class="n a">feed <code>door(entity, state ∈ OPEN_STATES, t)</code></span></li></ul></li></ul></div>
-<div class="warn">A lock configured as an outside door pulses on every lock and unlock. Each pulse puts everyone on that floor (or seen there in the last 120 s) in doubt. People who stay unseen there for 10 minutes, such as a sleeper on the entry floor, are then removed as "left". When the door also has a paired contact, the pairing alone already covers "locked = closed". Consider whether the lock should be an outside door at all.</div>
+<div class="rule"><span class="id">RT-LK-1</span>A lock on the same device as a configured door contact is that door's lock (<code>door_lock</code>), even when it is also listed as an outside door. The contact says when the door is used; the lock only says it is closed. Before this rule, such a lock pulsed on every lock and unlock. Each pulse put everyone on that floor (or seen there in the last 120 s) in doubt, and anyone then unseen for 10 minutes, such as a sleeper on the entry floor, was removed as "left".</div>
+<div class="warn">A lock <i>without</i> a paired contact still pulses (EC-74). Use one as an outside door only when the door has no contact sensor.</div>
 
 <h3>11.3 Evidence (switches, contacts, buttons)</h3>
 <div class="dt"><div class="title">_on_evidence(event)</div>
@@ -639,6 +654,16 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <li><span class="n q">A <code>binary_sensor</code> (door contact)?</span><ul><li><span class="lbl">opened</span><span class="n w">wait <code>CONTACT_MIN_S</code> = 2 s. If it is still open then: evidence at the time it opened (move = true).</span></li>
 <li><span class="lbl">closed</span><span class="n q">Was it open for less than 2 s?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore (the magnet flickering at the edge of its range)</span></li></ul></li></ul></li>
 <li><span class="n a">Log the signal; <code>evidence(region, t, entity, move)</code>, with move = false when a light, switch, fan or input_boolean turned off (on the way out: confirms, moves nobody).</span></li></ul></div>
+
+<h3 id="occrt">11.3b Occupancy sensors (bed sensors)</h3>
+<div class="dt"><div class="title">_on_occupancy(event) → _occupancy_steady(region, t)</div>
+<ul class="root">
+<li><span class="n q">New state unavailable / unknown?</span><ul><li><span class="lbl">yes</span><span class="n x">ignore</span></li></ul></li>
+<li><span class="n a">The region is <i>occupied</i> while <b>any</b> of its occupancy sensors is on (a bed's left, right, both and either sensors are one signal). No context filter: these sensors are not switched by hand.</span></li>
+<li><span class="n q">Same as the applied state, with no change waiting?</span><ul><li><span class="lbl">yes</span><span class="n x">nothing</span></li></ul></li>
+<li><span class="n w">Wait <code>OCCUPANCY_STEADY_S</code> = 10 s. A newer change restarts the wait.</span></li>
+<li><span class="n q">Still different from the applied state?</span><ul><li><span class="lbl">no</span><span class="n x">nothing (turning over, a bounce)</span></li><li><span class="lbl">yes</span><span class="n a">log the signal ("on: someone is there while it stays on" / "off: they got up"); <code>hold(region, on, t of the change, sensor)</code></span></li></ul></li></ul></div>
+<div class="rule"><span class="id">RT-OC-1</span>At start-up, every region with a sensor on is held with <code>move = false</code>: it anchors whoever was restored there and moves nobody in. Held state is not saved; it is read back from the sensors.</div>
 
 <h3>11.4 Robot vacuums</h3>
 <p>A robot vacuum moves like a person to a radar: slow sweeps across a whole room. While a configured vacuum is <code>cleaning</code> or <code>returning</code>, the head count ignores the radars of the room it reports. Its room sensor's state is matched to a space whose area name has the same letters and digits (case-insensitive, punctuation and spaces removed).</p>
@@ -744,6 +769,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td><code>SPOT_MM</code> / <code>SPOT_FORGET_S</code> / <code>SPOT_APPLY</code></td><td>500 / 6 h / False</td><td>headcount</td><td>still spots (suggestion only)</td></tr>
 <tr><td><code>TICK_S</code></td><td>5 s</td><td>runtime</td><td>head count tick</td></tr>
 <tr><td><code>CONTACT_MIN_S</code></td><td>2 s</td><td>runtime</td><td>a contact must stay open this long to be evidence</td></tr>
+<tr><td><code>OCCUPANCY_STEADY_S</code></td><td>10 s</td><td>runtime</td><td>an occupancy sensor's region counts as held or free once it has stayed so this long</td></tr>
 <tr><td><code>EVENT_FRESH_S</code></td><td>30 s</td><td>runtime</td><td>a button press counts only if this recent</td></tr>
 <tr><td><code>BOOTSTRAP_S</code></td><td>3600 s</td><td>runtime</td><td>bootstrap period without saved counts</td></tr>
 <tr><td><code>COVER_MARGIN_MM</code></td><td>500</td><td>runtime</td><td>another radar "looks" at a spot this far inside its view</td></tr>
@@ -787,53 +813,62 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td colspan="5"><b>Head count: identity and conservation</b></td></tr>
 <tr><td>EC-40</td><td>A sleeper the radar loses stays counted; walking between floors</td><td>tokens are conserved</td><td>§10</td><td><span class="cov-y">✔</span> test_saturday_morning</td></tr>
 <tr><td>EC-41</td><td>Something moves downstairs for minutes with no door used</td><td>pending → provisional, not counted</td><td>§10.7</td><td><span class="cov-y">✔</span> test_nobody_appears_without_a_door</td></tr>
-<tr><td>EC-42</td><td>Provisional confirmed (walks to another region / 10 min) or expired (1 h)</td><td>HC-PR-1</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-42</td><td>Provisional confirmed (walks to another region / 10 min) or expired (1 h)</td><td>HC-PR-1</td><td>§10.7</td><td><span class="cov-y">✔</span> test_ec42_unexplained_track_is_confirmed_by_walking_into_another_region, test_ec42_unexplained_track_is_confirmed_by_staying_around, test_ec42_unexplained_track_that_goes_away_expires</td></tr>
 <tr><td>EC-43</td><td>Car pulls into an observed garage</td><td>no inner door used: not a person</td><td>§10.7</td><td><span class="cov-y">✔</span> test_car_in_the_garage_is_not_a_person</td></tr>
 <tr><td>EC-44</td><td>Someone goes to the front door and comes back</td><td>doubt, then re-established</td><td>§10.4</td><td><span class="cov-y">✔</span> test_going_to_the_door_and_back_changes_nothing</td></tr>
 <tr><td>EC-45</td><td>A person who sat still for hours walks down and leaves</td><td>stairs portal identifies them</td><td>§10.2</td><td><span class="cov-y">✔</span> test_someone_who_sat_still_for_hours_and_then_leaves_is_gone</td></tr>
 <tr><td>EC-46</td><td>A blip downstairs must not "wake" a sleeper in a room without a radar</td><td>enclosed rooms are skipped unless patient</td><td>§10.3</td><td><span class="cov-y">✔</span> test_a_ghost_downstairs_does_not_wake_the_sleeper_in_a_room_without_a_radar</td></tr>
-<tr><td>EC-47</td><td>Track splitting next to a person</td><td>pending while within 1.5 m</td><td>§10.2</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-48</td><td>Two radars of neighbouring regions see the same person</td><td>no new person while a doorless neighbour has someone visible</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-49</td><td>The tracker reuses a track id for another person far away, or after they were seen elsewhere</td><td>stale binding: REFOUND_MM / REFOUND_S</td><td>§10.1 step 5, §10.2</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-50</td><td>One-radar reflection in an overlapping group</td><td>unconfirmed → pending</td><td>RT-REF-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-47</td><td>Track splitting next to a person</td><td>pending while within 1.5 m</td><td>§10.2</td><td><span class="cov-y">✔</span> test_ec47_a_track_splitting_next_to_someone_waits</td></tr>
+<tr><td>EC-48</td><td>Two radars of neighbouring regions see the same person</td><td>no new person while a doorless neighbour has someone visible</td><td>§10.7</td><td><span class="cov-y">✔</span> test_ec48_someone_in_view_next_door_explains_an_extra_track</td></tr>
+<tr><td>EC-49</td><td>The tracker reuses a track id for another person far away, or after they were seen elsewhere</td><td>stale binding: REFOUND_MM / REFOUND_S</td><td>§10.1 step 5, §10.2</td><td><span class="cov-y">✔</span> test_ec49_a_track_id_reused_far_away_is_not_the_same_person, test_ec49_a_track_refound_where_it_vanished_keeps_its_person</td></tr>
+<tr><td>EC-50</td><td>One-radar reflection in an overlapping group</td><td>unconfirmed → pending</td><td>RT-REF-1</td><td><span class="cov-p">◐</span> test_ec50_a_reflection_explains_nobody_until_another_radar_sees_it (engine side; the runtime geometry is untested)</td></tr>
 <tr><td>EC-51</td><td>Rooms in one aligned group; doorway flicker</td><td>nearest covering radar, zones' rooms, hysteresis</td><td>§9.2</td><td><span class="cov-y">✔</span> test_rooms_follow_the_nearest_radar_that_sees_the_spot</td></tr>
 <tr><td>EC-52</td><td>Walking from one room into another in one fused track</td><td>hand-over, not re-matching</td><td>§9.2</td><td><span class="cov-y">✔</span> test_walking_out_of_the_bedroom_in_one_track_is_a_handover</td></tr>
 <tr><td>EC-53</td><td>One area seen by two groups</td><td>linked spaces, summed count, correction to one</td><td>§9.1, §11.6</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-54</td><td>Stairwell portal leading up and down</td><td>lost there: stays (unknown which)</td><td>§10.5</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-55</td><td>Floor change faster than physically possible</td><td>FLOOR_TRAVEL_S</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-56</td><td>An unknown (doubt) token cannot reappear inside a region with portals</td><td>must come back through a doorway</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-54</td><td>Stairwell portal leading up and down</td><td>lost there: stays (unknown which)</td><td>§10.5</td><td><span class="cov-y">✔</span> test_ec54_lost_at_a_stairwell_leading_up_and_down_stays_put</td></tr>
+<tr><td>EC-55</td><td>Floor change faster than physically possible</td><td>FLOOR_TRAVEL_S</td><td>§10.3</td><td><span class="cov-y">✔</span> test_ec55_nobody_changes_floor_faster_than_the_stairs_allow</td></tr>
+<tr><td>EC-56</td><td>An unknown (doubt) token cannot reappear inside a region with portals</td><td>must come back through a doorway</td><td>§10.3</td><td><span class="cov-y">✔</span> test_ec56_someone_in_doubt_comes_back_through_a_doorway_not_out_of_thin_air</td></tr>
 <tr><td colspan="5"><b>Head count: exits and doors</b></td></tr>
-<tr><td>EC-60</td><td>A sleeper elsewhere must not explain a new track during a window</td><td>RECENT_S gate; 1 hop</td><td>§10.3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-60</td><td>A sleeper elsewhere must not explain a new track during a window</td><td>RECENT_S gate; 1 hop</td><td>§10.3</td><td><span class="cov-y">✔</span> test_ec60_a_sleeper_does_not_explain_a_track_on_the_exit_floor, test_ec60_someone_just_seen_one_hop_away_does_explain_it, test_ec60_someone_just_seen_two_hops_away_does_not</td></tr>
 <tr><td>EC-61</td><td>Someone still visible on the exit floor after the door closes (radar lag, seeing through the door)</td><td>back after LAG_S</td><td>§10.4</td><td><span class="cov-p">◐</span> test_going_to_the_door_and_back_changes_nothing</td></tr>
 <tr><td>EC-62</td><td>Someone in doubt is never seen again</td><td>left after REESTABLISH_S</td><td>§10.4</td><td><span class="cov-y">✔</span> test_someone_who_sat_still_for_hours_and_then_leaves_is_gone</td></tr>
-<tr><td>EC-63</td><td>Seen outside through the door before it opened, then the door opens</td><td>pending → arrived on re-check</td><td>§10.7</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-63</td><td>Seen outside through the door before it opened, then the door opens</td><td>pending → arrived on re-check</td><td>§10.7</td><td><span class="cov-y">✔</span> test_ec63_seen_through_the_door_before_it_opens_then_coming_in</td></tr>
 <tr><td>EC-64</td><td>Front door contact misses the opening</td><td>virtual exit (outbound only)</td><td>§10.5</td><td><span class="cov-y">✔</span> test_walking_out_of_the_front_door_counts_even_if_its_sensor_misses_it</td></tr>
-<tr><td>EC-65</td><td>Virtual exit while a window is already in use</td><td>extend the window's close</td><td>§10.5</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-65</td><td>Virtual exit while a window is already in use</td><td>extend the window's close</td><td>§10.5</td><td><span class="cov-y">✔</span> test_ec65_a_virtual_exit_during_a_window_extends_it</td></tr>
 <tr><td>EC-66</td><td>Unobserved garage inferred from its two doors (out and back)</td><td>into / out-of rules</td><td>HC-UN-1/2</td><td><span class="cov-y">✔</span> test_saturday_morning_with_an_unobserved_garage</td></tr>
 <tr><td>EC-67</td><td>Fetching something from the garage (the big door never moves)</td><td>moved in and back, no exit</td><td>HC-UN-1</td><td><span class="cov-y">✔</span> test_fetching_something_from_the_garage_is_not_leaving</td></tr>
 <tr><td>EC-68</td><td>Arriving by car: the big door first</td><td>direction "in": nobody doubted, newcomer counted</td><td>HC-UN-3</td><td><span class="cov-y">✔</span> test_coming_down_to_greet_someone_arriving_through_the_garage</td></tr>
 <tr><td>EC-69</td><td>Leaving by car: the inner door first; a blip at the door as it swings</td><td>direction "out": no new person</td><td>HC-UN-3</td><td><span class="cov-y">✔</span> test_leaving_through_the_garage_does_not_count_the_door_as_someone_new</td></tr>
-<tr><td>EC-70</td><td>Two exits on one floor used in opposite directions</td><td>direction None</td><td>§10.4</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-70</td><td>Two exits on one floor used in opposite directions</td><td>direction None</td><td>§10.4</td><td><span class="cov-y">✔</span> test_ec70_two_exits_used_in_opposite_directions_make_the_direction_unknown</td></tr>
 <tr><td>EC-71</td><td>Door connections gate paths (a door link is passable only after use)</td><td>CROSS_WINDOW_S</td><td>§10.3</td><td><span class="cov-p">◐</span> garage scenarios</td></tr>
 <tr><td>EC-72</td><td>Head count sensors unknown during a window; at_least</td><td>§11.6 outputs</td><td>§11.6</td><td><span class="cov-y">✔</span> test_head_count_sensors_follow_the_front_door</td></tr>
 <tr><td>EC-73</td><td>A smart lock's contact says open after the door was locked</td><td>locked = closed; open while locked ignored; unlock re-applies the contact</td><td>§11.2</td><td><span class="cov-y">✔</span> test_a_locked_door_is_closed_whatever_its_contact_says</td></tr>
-<tr><td>EC-74</td><td>A lock configured as an outside door pulses on every change</td><td>exit window on its floor</td><td>§11.2</td><td><span class="cov-n">✘</span> (see the warning in §11.2)</td></tr>
-<tr><td>EC-75</td><td>An exit door open at start-up</td><td>fed open unless locked</td><td>§11.1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-74</td><td>A lock configured as an outside door pulses on every change</td><td>exit window on its floor (only a lock without a paired contact: RT-LK-1)</td><td>§11.2</td><td><span class="cov-y">✔</span> test_ec74_a_lock_alone_as_an_outside_door_pulses</td></tr>
+<tr><td>EC-75</td><td>An exit door open at start-up</td><td>fed open unless locked</td><td>§11.1</td><td><span class="cov-y">✔</span> test_ec75_an_exit_door_open_at_start_is_open, test_ec75_unless_it_is_locked</td></tr>
 <tr><td colspan="5"><b>Head count: machines, evidence, vacuums, corrections, restarts</b></td></tr>
 <tr><td>EC-80</td><td>A fan behind a wall, after everyone left</td><td>static track: given back / not a person</td><td>§10.8</td><td><span class="cov-y">✔</span> test_a_fan_behind_the_wall_does_not_keep_someone_home, test_a_still_track_never_becomes_a_new_person</td></tr>
-<tr><td>EC-81</td><td>A seated person tracked continuously but nearly motionless for 90 s</td><td>classed static: their token goes back to its state before the track (kept, not removed). Real sitting spreads 120–500 mm RMS, so this is rare.</td><td>HC-ST-1</td><td><span class="cov-n">✘</span></td></tr>
-<tr><td>EC-82</td><td>A static track starts moving</td><td>a new appearance after moving 400 mm</td><td>HC-ST-1</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-81</td><td>A seated person tracked continuously but nearly motionless for 90 s</td><td>classed static: their token goes back to its state before the track (kept, not removed). Real sitting spreads 120–500 mm RMS, so this is rare.</td><td>HC-ST-1</td><td><span class="cov-y">✔</span> test_ec81_a_track_that_never_moves_gives_its_person_back</td></tr>
+<tr><td>EC-82</td><td>A static track starts moving</td><td>a new appearance after moving 400 mm</td><td>HC-ST-1</td><td><span class="cov-y">✔</span> test_ec82_a_still_track_that_starts_moving_is_a_new_appearance</td></tr>
 <tr><td>EC-83</td><td>Switch by hand: moves the unseen person, never adds; does not pull from an enclosed room; someone in the doorway explains it; off moves nobody</td><td>§10.9</td><td>§10.9</td><td><span class="cov-y">✔</span> test_a_switch_puts_the_unseen_person_in_its_room_but_never_adds_one, test_a_switch_does_not_pull_someone_out_of_a_room_without_a_radar, test_someone_in_the_doorway_explains_the_switch</td></tr>
 <tr><td>EC-84</td><td>Switch used by an automation or the app; on-only list; a restored button press</td><td>ignored</td><td>§11.3</td><td><span class="cov-y">✔</span> test_switches_used_by_hand_are_evidence</td></tr>
 <tr><td>EC-85</td><td>Door contact flickering at the edge of the magnet's range</td><td>&lt; 2 s ignored</td><td>§11.3</td><td><span class="cov-y">✔</span> test_a_flickering_door_contact_is_not_evidence</td></tr>
 <tr><td>EC-86</td><td>Robot vacuum cleaning; room unknown at first; room name punctuation</td><td>ignore its room; hold + replay; name key</td><td>§11.4</td><td><span class="cov-y">✔</span> test_a_robot_vacuum_is_not_a_person</td></tr>
-<tr><td>EC-87</td><td>Vacuum never reports a room (HOLD_MAX_S); starts with a person in view</td><td>replay without knowing; tracks lost at the start</td><td>RT-VAC-2/3</td><td><span class="cov-n">✘</span></td></tr>
+<tr><td>EC-87</td><td>Vacuum never reports a room (HOLD_MAX_S); starts with a person in view</td><td>replay without knowing; tracks lost at the start</td><td>RT-VAC-2/3</td><td><span class="cov-p">◐</span> test_ec87_a_vacuum_that_never_says_its_room_is_replayed_after_a_while (timeout only; a person in view at the start is untested)</td></tr>
 <tr><td>EC-88</td><td>Phantom left over after a restart</td><td>correction removes the longest-unseen first</td><td>HC-CO-1</td><td><span class="cov-y">✔</span> test_a_correction_removes_the_phantom_first</td></tr>
 <tr><td>EC-89</td><td>Nobody home</td><td>removes all, incl. provisional and pending</td><td>HC-CO-2</td><td><span class="cov-y">✔</span> test_nobody_home_clears_everyone</td></tr>
 <tr><td>EC-90</td><td>Restart: counts restored as long-unseen tokens</td><td>seed; bootstrap off</td><td>§11.6</td><td><span class="cov-p">◐</span> seed used in many tests; the store round trip is not tested</td></tr>
 <tr><td>EC-91</td><td>Restart during an exit window</td><td>people in doubt are not saved, so they are lost on restore</td><td>§11.6</td><td><span class="cov-n">✘</span> (known limitation)</td></tr>
 <tr><td>EC-92</td><td>First hour with no saved counts</td><td>bootstrap: 20 s, not provisional</td><td>§11.6</td><td><span class="cov-p">◐</span> scenarios use bootstrap_until</td></tr>
 <tr><td>EC-93</td><td>A radar switched off for the head count</td><td>no region; still fused if aligned</td><td>§11.6</td><td><span class="cov-y">✔</span> test_head_count_leaves_out_radars_switched_off (single radar)</td></tr>
+<tr><td>EC-94</td><td>A smart lock with its own door sensor, also listed as an outside door</td><td>the lock is the contact's lock only: locking is not the door used</td><td>RT-LK-1</td><td><span class="cov-y">✔</span> test_a_lock_on_the_door_contacts_device_never_pulses</td></tr>
+<tr><td colspan="5"><b>Occupancy sensors</b></td></tr>
+<tr><td>EC-95</td><td>A ghost or someone else's track elsewhere while someone is in bed</td><td>the anchor is not matched to it</td><td>HC-OC-1</td><td><span class="cov-y">✔</span> test_occupancy_keeps_the_person_in_bed_from_explaining_a_track_elsewhere</td></tr>
+<tr><td>EC-96</td><td>An exit door on the bed's floor opens</td><td>the anchor is not put in doubt; if already in doubt, back at once</td><td>HC-OC-1</td><td><span class="cov-y">✔</span> test_occupancy_person_in_bed_is_not_put_in_doubt_by_the_exit, test_occupancy_in_doubt_already_is_back_at_once</td></tr>
+<tr><td>EC-97</td><td>Getting up while the sensor still says on</td><td>a track at the bedroom's doorway may be the anchor</td><td>HC-OC-1</td><td><span class="cov-y">✔</span> test_occupancy_coming_out_through_the_bedroom_door_is_the_person_in_bed</td></tr>
+<tr><td>EC-98</td><td>Two in bed; both sides on; one gets up</td><td>one anchor; the other is free</td><td>HC-OC-2</td><td><span class="cov-y">✔</span> test_occupancy_two_in_bed_one_gets_up, test_a_bed_sensor_holds_someone_in_the_bedroom</td></tr>
+<tr><td>EC-99</td><td>Bed sensor on with nobody unseen who could be there</td><td>held, no anchor; never adds</td><td>§10.10</td><td><span class="cov-y">✔</span> test_occupancy_pulls_the_unseen_person_in_but_never_adds_one</td></tr>
+<tr><td>EC-100</td><td>Sitting on the bed for a moment; turning over</td><td>OCCUPANCY_STEADY_S debounce on both edges</td><td>§11.3b</td><td><span class="cov-y">✔</span> test_a_bed_sensor_holds_someone_in_the_bedroom</td></tr>
+<tr><td>EC-101</td><td>"−" on home with someone in bed and someone unseen elsewhere</td><td>the anchored one is removed last</td><td>HC-CO-1/2</td><td><span class="cov-y">✔</span> test_occupancy_a_correction_removes_the_anchored_person_last</td></tr>
 </table>
 
 <!-- ================================================================== -->
@@ -851,8 +886,9 @@ Between <code>SETTLE_S</code> and re-establishment, people in doubt are temporar
 <h3>15.2 Known limitations / not used yet</h3>
 <ul>
 <li>A restart during an exit window drops the people in doubt (EC-91).</li>
-<li>Locks configured as outside doors put their floor in doubt on every lock and unlock (EC-74).</li>
-<li>Stair PIR sensors and bed or presence mats are not used as evidence of floor crossings or occupancy.</li>
+<li>A lock without a paired contact, configured as an outside door, puts its floor in doubt on every lock and unlock (EC-74).</li>
+<li>Stair PIR sensors are not used as evidence of floor crossings.</li>
+<li>An occupancy sensor never adds a person: with nobody unseen who could be there, the region is held with no anchor. If the sensor turns off more than <code>CONFIRM_S</code> after its person was seen leaving (a long off delay), their track meanwhile becomes a provisional person.</li>
 <li>Still spots are not applied automatically (<code>SPOT_APPLY = False</code>). Ghosts must be excluded via the guide.</li>
 <li>Guide answers are stored per browser, not on the server.</li>
 <li>A radar switched off for the head count still contributes tracks to its aligned group.</li>
@@ -866,6 +902,7 @@ Between <code>SETTLE_S</code> and re-establishment, people in doubt are temporar
 <tr><td><code>tests/test_engine.py</code></td><td>Geometry, frame assembly, units, exclusions, delays, hysteresis, grace, holds; recorded fixtures (kitchen ghost, Screek slot lag, busy firmware cycles).</td></tr>
 <tr><td><code>tests/test_tracker.py</code></td><td>Alignment maths, groups, track continuity, merges, splits, re-finding, lost memory.</td></tr>
 <tr><td><code>tests/test_headcount.py</code></td><td>Synthetic household scenarios for the head count engine (§14 EC-40…EC-89).</td></tr>
+<tr><td><code>tests/test_headcount_rules.py</code></td><td>One minimal scene per engine rule that had no test (§14 rows named <code>test_ecNN_…</code>), plus the occupancy rules. Each was checked by disabling its rule and seeing the test fail.</td></tr>
 <tr><td><code>tests/test_integration.py</code></td><td>Config flows, entities, websocket API, passages, head count sensors, evidence, locks, vacuums, in a real HA test harness.</td></tr>
 <tr><td><code>tests/test_vectors.py</code> + <code>tests/js/*.mjs</code></td><td>The Python and JavaScript engines in lock-step (zone, group, tracked vectors); the frontend analysis (dwell spots, classification, pinpoint, cross-check, door location, registration).</td></tr>
 <tr><td><code>tools/headcount.py</code> (replay + scoring)</td><td>Replays exported history (frames, doors, locks, vacuums, evidence) through the real runtime build and engine. It scores against a ground-truth file: hours wrong, hours above daily bounds, and count changes without an exit. This is the main regression net for the ✘ rows in §14. The data and ground truth are private and not in the repository.</td></tr>
@@ -874,15 +911,7 @@ Between <code>SETTLE_S</code> and re-establishment, people in doubt are temporar
 <h3>16.1 Before simplifying</h3>
 <ol>
 <li><b>Keep the ✔ scenarios green.</b> They encode the behaviours that were each found by tracing a wrong count in real data.</li>
-<li><b>Write a test first for each ✘ rule you touch.</b> The highest-value missing tests:
-  <ul>
-    <li>EC-50, reflections: they removed all hours above the daily bounds.</li>
-    <li>EC-49, reused track ids: a person carried 5 m away.</li>
-    <li>EC-60, the RECENT_S gate.</li>
-    <li>EC-42, provisional confirm and expire.</li>
-    <li>EC-74, lock pulses.</li>
-    <li>EC-87, vacuum timeout.</li>
-  </ul></li>
+<li><b>Write a test first for each ✘ rule you touch.</b> The engine rules all have one now; what is left is mostly geometry and start-up (EC-07, EC-26, EC-53, EC-91), plus the runtime's reflection geometry (RT-REF-1: which radar "looks" at a spot), whose engine side EC-50 covers.</li>
 <li><b>Re-run the private replay and compare hours wrong before and after.</b> The rules were tuned on those same days, so also check new days.</li>
 <li><b>Candidates for simplification, with their risk:</b>
   <ul>
