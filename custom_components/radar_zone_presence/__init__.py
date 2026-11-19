@@ -68,7 +68,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         sidebar_title="Presence",
         sidebar_icon="mdi:radar",
         module_url=f"{base}/panel.js",
-        require_admin=True,
+        require_admin=False,  # read-only for people who aren't admins (the websocket API enforces it)
         config={"version": version},
     )
     # Dashboard card (custom:radar-zone-presence-card), loaded on every frontend page.

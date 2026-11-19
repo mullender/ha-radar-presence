@@ -1,4 +1,10 @@
-"""Websocket API used by the Presence panel."""
+"""Websocket API used by the Presence panel.
+
+Reading (radars, shapes, history, live frames, the occupant count) is open to
+every user: people who aren't admins get the panel read-only. Correcting the
+count is too (it is a household count, like the dashboard card). Saving shapes
+and settings needs an admin.
+"""
 
 from __future__ import annotations
 
@@ -91,7 +97,6 @@ def _target_unit(hass: HomeAssistant, runtime: HomeRuntime, radar_id: str) -> st
     return common_unit(async_resolve_units(hass, feed.entity_ids, feed.unit_fallback))
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list"})
 @callback
 def ws_list(hass: HomeAssistant, connection, msg) -> None:
@@ -138,7 +143,6 @@ def ws_list(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], {"home": home, "radars": radars, "unconfigured": unconfigured})
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/config", vol.Required("radar_id"): str})
 @callback
 def ws_config(hass: HomeAssistant, connection, msg) -> None:
@@ -301,7 +305,6 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], {"zones": zones})
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/headcount"})
 @callback
 def ws_headcount(hass: HomeAssistant, connection, msg) -> None:
@@ -326,7 +329,6 @@ def ws_headcount_history(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], entry.runtime_data.headcount.history(msg["start"], msg.get("end", float("inf"))))
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/headcount/correct", vol.Optional("space"): str, vol.Required("count"): vol.All(int, vol.Range(min=0, max=50))}
 )
@@ -393,7 +395,6 @@ def _frame_message(view: RadarView) -> dict[str, Any]:
     return msg
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/frames/subscribe", vol.Required("radar_id"): str}
 )
@@ -443,7 +444,6 @@ def _parse_range(msg) -> tuple[datetime, datetime]:
     return start, end
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/frames/history",
@@ -465,7 +465,6 @@ async def ws_history_frames(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], await async_history_frames(hass, feed.targets, start, end, feed.unit_fallback))
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/zone_events",

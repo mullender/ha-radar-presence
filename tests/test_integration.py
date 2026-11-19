@@ -291,6 +291,26 @@ async def test_hold_until_exit_with_max_hold(hass: HomeAssistant, radar_device: 
     assert state.state == "off" and state.attributes["held"] == 0
 
 
+async def test_ws_read_only_for_people_who_arent_admins(
+    hass: HomeAssistant, radar_device: str, hass_ws_client, hass_read_only_access_token: str
+) -> None:
+    """The panel is read-only for people who aren't admins: they can read and correct the count, not save shapes."""
+    await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    for msg in (
+        {"type": f"{DOMAIN}/list"},
+        {"type": f"{DOMAIN}/config", "radar_id": RADAR},
+        {"type": f"{DOMAIN}/headcount/history", "start": 0},
+        {"type": f"{DOMAIN}/frames/history", "radar_id": RADAR, "start": "2026-01-01T00:00:00+00:00", "end": "2026-01-01T00:10:00+00:00"},
+        {"type": f"{DOMAIN}/headcount/correct", "count": 0},
+    ):
+        await client.send_json_auto_id(msg)
+        res = await client.receive_json()
+        assert res["success"] or res["error"]["code"] != "unauthorized", (msg["type"], res)  # (no recorder in tests)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/zones/save", "radar_id": RADAR, "zones": []})
+    assert (await client.receive_json())["error"]["code"] == "unauthorized"
+
+
 async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
     client = await hass_ws_client(hass)

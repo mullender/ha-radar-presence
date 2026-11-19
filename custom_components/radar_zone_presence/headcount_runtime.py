@@ -754,7 +754,7 @@ class HeadCountRuntime:
     def debug(self) -> dict[str, Any]:
         """For the panel / diagnostics: spaces, tokens and recent changes."""
         if self.hc is None:
-            return {"spaces": [], "tokens": [], "changes": []}
+            return {"spaces": [], "connections": [], "tokens": [], "changes": []}
         hc = self.hc
         return {
             "home": self.home_count(),

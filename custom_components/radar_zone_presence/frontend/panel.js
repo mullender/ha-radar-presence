@@ -214,6 +214,9 @@ class RadarZonePresencePanel extends HTMLElement {
   }
   get hass() { return this._hass; }
 
+  /** People who aren't admins get the panel read-only: review only, no Edit, suggestions, Details or setup. */
+  get admin() { return this._hass?.user?.is_admin !== false; }
+
   set narrow(v) { this.toggleAttribute('narrow', !!v); this.hcEl?.toggleAttribute('narrow', !!v); }
   set panel(p) { this._panel = p; }
 
@@ -242,8 +245,9 @@ class RadarZonePresencePanel extends HTMLElement {
   // ----------------------------------------------------------- bootstrap
 
   async _start() {
+    if (!this.admin) this.details = false;
     this._buildShell();
-    this.hass.callWS({ type: 'frontend/get_user_data', key: 'radar_presence' })
+    if (this.admin) this.hass.callWS({ type: 'frontend/get_user_data', key: 'radar_presence' })
       .then(r => { if (r?.value && 'details' in r.value && !!r.value.details !== this.details) this._setDetails(!!r.value.details, false); })
       .catch(() => {});
     await this._loadRadars();
@@ -1119,7 +1123,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _enterEdit() {
-    if (this.editing || !this.config) return;
+    if (this.editing || !this.config || !this.admin) return;
     this.editing = true;
     this._renderHeader();
     this._renderToolbar();
@@ -1304,7 +1308,7 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
         el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
         el('button', { class: 'ibtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗'),
-        el('button', { class: 'ibtn', title: this.details ? 'Hide details' : 'Show details: radar sightings, ignored tracks', onclick: () => { this._setDetails(!this.details); this._renderHeader(); } }, this.details ? '◉' : '◎'));
+        !this.admin ? '' : el('button', { class: 'ibtn', title: this.details ? 'Hide details' : 'Show details: radar sightings, ignored tracks', onclick: () => { this._setDetails(!this.details); this._renderHeader(); } }, this.details ? '◉' : '◎'));
       return;
     }
     if (this.editing) {
@@ -1326,7 +1330,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this.radars.length ? range : '',
       this.radars.length ? el('button', { class: 'ibtn', title: 'Reload history', onclick: () => this._loadHistory() }, '⟳') : '',
       el('div', { class: 'spacer' }),
-      this.config ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎ Edit') : '',
+      this.config && this.admin ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎ Edit') : '',
       this.config ? el('button', { class: 'ibtn', title: 'More', onclick: e => this._openMenu(e.currentTarget) }, '⋮') : '',
     );
   }
@@ -1349,10 +1353,10 @@ class RadarZonePresencePanel extends HTMLElement {
     const item = (label, fn, disabled = false) => el('button', { disabled, onclick: () => { close(); fn(); } }, label);
     const menu = el('div', { class: 'menu-pop', style: { top: `${r.bottom + 4}px`, right: `${Math.max(8, innerWidth - r.right)}px` } },
       item('Copy a link to this moment', () => this._copyLink(), !this.hist),
-      item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
-      item('Export shapes…', () => this._exportZones(), !this.zones.length),
-      item('Import shapes…', () => this._importZones()),
-      item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)));
+      !this.admin ? '' : item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
+      !this.admin ? '' : item('Export shapes…', () => this._exportZones(), !this.zones.length),
+      !this.admin ? '' : item('Import shapes…', () => this._importZones()),
+      !this.admin ? '' : item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)));
     const close = () => { menu.remove(); this._menu = null; removeEventListener('pointerdown', away, true); };
     const away = e => { if (!e.composedPath().includes(menu)) close(); };
     addEventListener('pointerdown', away, true);
@@ -1647,7 +1651,8 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'btn', title: 'Load shapes from an exported JSON file. Shapes with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
     if (!this.editing) {
       // Review: what is on at the playhead, the selected shape's preview, then suggestions.
-      s.replaceChildren(el('div', { class: 'guide' }), el('div', { class: 'section at' }), this._shapeSummary() || '', el('div', { class: 'section spots' }), this._doorsSection());
+      s.replaceChildren(el('div', { class: 'guide' }), el('div', { class: 'section at' }), this._shapeSummary() || '',
+        ...(this.admin ? [el('div', { class: 'section spots' }), this._doorsSection()] : []));
       this._atKey = null;
       this._renderAt();
     } else {
@@ -1667,7 +1672,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const saved = this.config.zones.find(q => q.id === z.id);
     return el('div', { class: 'section' },
       el('h3', {}, glyphSvg(st.glyph, this._zoneColor(z), 14), el('span', { class: 'grow', style: { marginLeft: '6px' } }, z.name),
-        el('button', { class: 'btn', title: 'Edit this shape', onclick: () => this._enterEdit() }, '✎ Edit')),
+        this.admin ? el('button', { class: 'btn', title: 'Edit this shape', onclick: () => this._enterEdit() }, '✎ Edit') : ''),
       el('div', { class: 'help' }, `${st.label}${saved?.device_id ? ' · ' : ''}`,
         saved?.device_id ? el('a', { href: `/config/devices/device/${saved.device_id}` }, 'its device ↗') : ''),
       el('div', { class: 'trail' }),
@@ -2020,6 +2025,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _renderGuide() {
     const box = this.side?.querySelector('.guide');
     if (!box) return;
+    if (!this.admin) { box.replaceChildren(); box.className = 'guide'; return; }
     const { answers, save } = this._guideAnswers();
     const items = [
       ...(this.spots || []).filter(sp => !sp.covered && !answers[this._spotKey(sp)]).map(sp => ({ spot: sp })),
