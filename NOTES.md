@@ -626,6 +626,11 @@ Stage 4, guide:
 
 Open: the To do card has no cropped evidence map yet (the proposal plays the
 busiest 20 s in place; today "Show me" opens the radar at the peak); no
-"short blips" or "use these switches as hints" questions in To do yet (blips
-are handled in the timeline popover, hints in Settings); Plan mode; /presence
+"people appear and vanish here → doorway" or "use these switches as hints"
+questions in To do yet (hints are suggested in Settings); Plan mode; /presence
 URLs; load_report `--dev`.
+
+To do also asks per room: short blips (5+ turn-ons under 3 s in a day → turn
+on after 2 s) and people who sit still (analysis.suggestHold → remember them,
+max from suggestMaxHold), each with a replayed impact line (tracker.replayGroup
+on the radar's own day, no peers).

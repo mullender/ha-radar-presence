@@ -7,10 +7,10 @@
 // with a radar) and from the home's layout (rooms nobody can get into, rooms
 // without a radar, radars in one room that are not lined up).
 
-import { fovPolygon, pointInPolygon, summarize, validatePolygon } from './engine.js';
+import { pointInPolygon, summarize, validatePolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
-import { classify, crossCheck, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestMaxHold, trailStats } from './analysis.js';
-import { KIND_STYLE, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
+import { classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
+import { el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const DAY = 86400;
@@ -139,6 +139,18 @@ export class RzpTodo extends HTMLElement {
       const times = spotTimes(hist, polygon, { exclusions });
       out.push({ key, type: 'spot', radar: r, cfg, hist, sp, polygon, stats, cls, times, room: rooms.find(z => pointInPolygon(cx, cy, z.polygon)) });
     }
+    // Rooms: short blips that turn them on, and people who sit still and are lost.
+    if (rooms.length) {
+      const base = this._replay(hist, valid, rooms.map(z => z.id));
+      const names = rooms.map(z => this._zoneName(z, r));
+      for (const [k, z] of rooms.entries()) {
+        const name = names.filter(n => n === names[k]).length > 1 && names[k] !== z.name ? `${names[k]} (${z.name})` : names[k];
+        const blips = base[z.id].intervals.filter(([a, b]) => b - a < 3).length;
+        if (blips >= 5 && !(z.filters?.on_delay_s > 0)) out.push({ key: `${r.radar_id}:blips:${z.id}`, type: 'blips', radar: r, cfg, hist, zone: z, name, blips, turnedOn: base[z.id].intervals.length });
+        const st = trailStats(hist, z.polygon, { exclusions });
+        if (!z.filters?.hold_until_exit && suggestHold(st)) out.push({ key: `${r.radar_id}:hold:${z.id}`, type: 'hold', radar: r, cfg, hist, zone: z, name, stats: st, clear: base[z.id].intervals.length });
+      }
+    }
     // Ignore areas people walk through.
     for (const z of exclusions) {
       const st = trailStats(hist, z.polygon, { exclusions: exclusions.filter(q => q !== z) });
@@ -153,6 +165,30 @@ export class RzpTodo extends HTMLElement {
       out.push({ key: `${r.radar_id}:door:${id}`, type: 'door', radar: r, cfg, door: id, pos });
     }
     return out;
+  }
+
+  /** Replay a radar's day with these zones: {zoneId: {intervals, occupied}} for `ids`. */
+  _replay(hist, zones, ids) {
+    const zs = zones.map(z => ({ ...z, filters: z.filters || {} }));
+    return summarize(replayGroup({ hist, zones: zs }, [], 0).transitions, ids, hist.start, hist.end);
+  }
+
+  /** A room's name: its area's when the shape still has a default name ("Polygon 1"). */
+  _zoneName(z, r = null) {
+    const area = this.hass.areas?.[z.area_id]?.name || r?.area;
+    return area && /^(polygon|zone|room)\b/i.test(z.name) ? area : z.name;
+  }
+
+  /** Change one zone's filters; returns an undo. */
+  _setFilters(radarId, zoneId, filters) {
+    return this._saveZones(radarId, zones => zones.map(z => (z.id === zoneId ? { ...z, filters: { ...(z.filters || {}), ...filters } } : z)));
+  }
+
+  /** An impact line worked out after the card is shown (replays take a moment). */
+  _later(fn) {
+    const box = el('div', { class: 'impact' }, 'Replaying the last day…');
+    setTimeout(() => { try { box.replaceChildren(...fn()); } catch (err) { box.replaceChildren(`(Could not replay: ${err.message})`); } }, 30);
+    return box;
   }
 
   _layoutQuestions() {
@@ -214,11 +250,13 @@ export class RzpTodo extends HTMLElement {
   _group(i) { return i.radar ? this._room(i.radar) : i.title || 'House'; }
 
   _short(i) {
-    return { spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
+    return { blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
   }
 
   _hint(i) {
     if (i.type === 'spot') return `${fmtDuration(i.sp.dwell)} in the last day, ${this._room(i.radar)}.`;
+    if (i.type === 'blips') return `Turned on for under 3 s ${i.blips}× in a day.`;
+    if (i.type === 'hold') return 'Goes clear while someone sits still.';
     if (i.type === 'walked') return `${i.zone.name}: walked into ${i.walkIn}× in a day.`;
     if (i.type === 'door') return `${this._entityName(i.door)} lines up with ${this._room(i.radar)}.`;
     if (i.type === 'noradar') return 'No radar. Mark its doorway so it can be counted.';
@@ -257,6 +295,36 @@ export class RzpTodo extends HTMLElement {
         this._impactEl(i),
       ];
       if (peak) acts.push(show(i.radar.radar_id, peak));
+    } else if (i.type === 'blips') {
+      const room = i.name.toLowerCase();
+      body = [
+        el('h2', {}, glyphSvg('room', kindTone('include'), 18), `Short blips turn the ${room} on`),
+        el('div', { class: 'why' }, `It turned on for less than 3 seconds ${i.blips} times in the last day (of ${i.turnedOn}). That is usually a ghost at the edge of the view or someone passing a corner, and it is the usual answer to “why did the light turn on?”.`),
+        el('div', { class: 'ans' },
+          el('button', { class: 'rec', onclick: () => this._answer(i, 'on-delay', () => this._setFilters(i.radar.radar_id, i.zone.id, { on_delay_s: 2 })) }, 'Turn on after 2 s', el('span', { class: 'tag' }, 'likely')),
+          el('button', { onclick: () => this._answer(i, 'leave') }, 'Leave it')),
+        this._later(() => {
+          const zones = i.cfg.zones.filter(z => !validatePolygon(z.polygon)).map(z => (z.id === i.zone.id ? { ...z, filters: { ...(z.filters || {}), on_delay_s: 2 } } : z));
+          const n = this._replay(i.hist, zones, [i.zone.id])[i.zone.id].intervals.length;
+          return [el('b', {}, '▶ The last day with 2 s: '), `the ${room} would have turned on ${n} times instead of ${i.turnedOn}. Real arrivals turn it on 2 s later.`];
+        }),
+      ];
+    } else if (i.type === 'hold') {
+      const room = i.name.toLowerCase(), st = i.stats, visits = st.walkIn + st.appearIn;
+      const maxHold = suggestMaxHold(st);
+      body = [
+        el('h2', {}, glyphSvg('room', kindTone('include'), 18), `People sit still in the ${room} and it goes clear`),
+        el('div', { class: 'why' }, `Someone vanished inside ${st.vanishIn} of ${visits} times in the last day and was seen again inside ${st.reappearIn} times: the radar lost them while they sat still.`),
+        el('div', { class: 'ans' },
+          el('button', { class: 'rec', onclick: () => this._answer(i, 'hold', () => this._setFilters(i.radar.radar_id, i.zone.id, { hold_until_exit: true, hold_max_s: maxHold })) },
+            `Remember people who sit still (up to ${Math.round(maxHold / 60)} min)`, el('span', { class: 'tag' }, 'likely')),
+          el('button', { onclick: () => this._answer(i, 'leave') }, 'Leave it')),
+        this._later(() => {
+          const zones = i.cfg.zones.filter(z => !validatePolygon(z.polygon)).map(z => (z.id === i.zone.id ? { ...z, filters: { ...(z.filters || {}), hold_until_exit: true, hold_max_s: maxHold } } : z));
+          const n = this._replay(i.hist, zones, [i.zone.id])[i.zone.id].intervals.length;
+          return [el('b', {}, '▶ The last day remembering them: '), n < i.clear ? `the ${room} would have gone clear ${i.clear - n} time${i.clear - n === 1 ? '' : 's'} less.` : `the ${room} would have gone clear just as often.`];
+        }),
+      ];
     } else if (i.type === 'walked') {
       body = [
         el('h2', {}, glyphSvg('ignore', kindTone('exclude'), 18), `People walk through “${i.zone.name}”`),
@@ -374,5 +442,4 @@ export class RzpTodo extends HTMLElement {
   }
 }
 
-void KIND_STYLE; void crossCheck; void fovPolygon;
 customElements.get('rzp-todo') || customElements.define('rzp-todo', RzpTodo);
