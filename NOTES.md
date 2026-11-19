@@ -510,16 +510,32 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
 
 Response to the design brief, kept private next to it:
 `dev/data/design-brief/radar-presence-ux-proposal.html` (gitignored; mockups
-use invented data). Main proposals, none adopted yet:
-- Drop "zone" from the UI (it collides with HA's GPS zones). Kinds become
-  Room / Spot / Walkway / Doorway (leads to a room, upstairs, downstairs or
-  outside) / Ignore area. Head count → "Occupants" (avoids HA's `person`),
-  Decisions → "Activity", in doubt → "settling", #1 → Person A. Panel
-  "Presence", integration "Radar Presence". Code identifiers stay.
-- Panel = House (default) → Room drill-down (radar map); tabs House / To do /
-  Settings; the time range and playhead are kept in the URL.
-- Review → Edit (HA's blue edit bar) → Details (per-user switch).
-- Shapes: fill only, outline on hover/selection, occupied = 2× fill,
-  glyph in every label, hollow points inside ignore areas.
-- Stages: 1 calm (terms, modes, styling), 2 explain (Activity sentences,
-  person story, card sizes), 3 guide (To do, setup wizard), 4 unify.
+use invented data).
+
+Decided with the user (round 1):
+- **Renaming is in:** integration "Radar Presence", panel "Presence". Entity
+  ids stay. The UI drops "zone" (it collides with HA's GPS zones). Head count →
+  "Occupants", Decisions → "Activity", in doubt → "settling", #1 → Person A.
+- **One HA area = one room shape**, drawn on the linked floor map. It may
+  span several radars and have parts no radar sees (lighter fill). Rooms
+  without a radar can be drawn too.
+- **Doorways mark entry and exit points.** On the shared edge between two room
+  shapes they connect the rooms, which gives the head count its layout. Walkway
+  (transient) is no longer a main kind (exits already act as transient for the
+  tracker); it is an advanced option.
+- **A spot's occupancy sensor is optional, off by default** (a panel toggle that
+  creates or removes the device; not a disabled entity). The spot still keeps
+  its room occupied.
+- **People who aren't admins get a read-only panel** (House and Room in review).
+  Read-only websocket commands drop require_admin; commands that write keep it.
+- **Pets deferred**; correction answers ("a pet") are recorded for later.
+- **Report a problem:** an anonymized `.rpreport.json.gz` for one window
+  (export_history format + home model + Activity + corrections; names
+  replaced by aliases, date moved, time of day off by default), attached by
+  hand to a GitHub issue; `tools/load_report.py` to replay it, load it into
+  dev HA, or turn it into a test fixture.
+
+Stages: 1 calm (renaming, review/edit, styling, spot toggle, read-only access),
+2 explain (Activity sentences, person story, card sizes, reports),
+3 one shape per area (shapes in the group frame, room devices with occupancy
+plus occupants), 4 guide (To do, setup wizard, notification, blueprints).
