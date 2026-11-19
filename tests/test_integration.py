@@ -1007,3 +1007,21 @@ async def test_a_bed_sensor_holds_someone_in_the_bedroom(hass: HomeAssistant, ra
     assert rt.hc.held() == {} and rt.hc.count() == 1
     details = [e["detail"] for e in rt.log if e["kind"] == "signal"]
     assert details.count("on: someone is there while it stays on") == 1 and details.count("off: released") == 1
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+async def test_rt_ref_1_one_radar_track_where_another_looks_is_a_reflection_unless_it_excludes_there(
+    hass: HomeAssistant, radar_device: str, second_radar: str, excluded: bool
+) -> None:
+    """RT-REF-1: a track only radar 1 sees, at a spot well inside radar 2's view, is flagged (a reflection until
+    radar 2 confirms it), unless radar 2 excludes that spot: it does not look there (another room through a door)."""
+    aligned = {"aligned_to": {"radar_id": RADAR, "angle_deg": 0, "reflect": False, "offset_mm": [2540, 0]}}
+    hide = [zone("thru", "Hall through the door", [[-100, 100], [-60, 100], [-60, 140], [-100, 140]], kind="exclude")]
+    radar2 = {**radar_subentry(second_radar, hide if excluded else None, subentry_id="radar2", slug=SLUG2, display=aligned),
+              "title": "Kitchen radar"}
+    entry = await setup_entry(hass, radar_device, [], [radar2])
+    group = entry.runtime_data.groups[0]
+    await move(hass, 1, 20, 120)  # (-80, 120) in radar 2's frame: inside its cone and range
+    (tg,) = group.last_targets
+    assert group.track_radars[tg.slot] == frozenset({0})
+    assert entry.runtime_data.headcount._unconfirmed(group) == (set() if excluded else {tg.slot})

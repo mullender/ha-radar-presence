@@ -30,6 +30,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_EVIDENCE, CONF_EVIDENCE_ON, CONF_OCCUPANCY, CONF_OUTSIDE_DOORS, CONF_VACUUMS, DOMAIN, OUTSIDE
+from .engine import point_in_polygon
 from .engine.align import apply, invert, transform_polygon
 from .engine.headcount import HeadCount, Portal, Region
 from .engine.rooms import RoomRadar, Rooms
@@ -430,6 +431,8 @@ class HeadCountRuntime:
                 if k in radars or not feed.available:
                     continue
                 x, y = apply(invert(group.to_anchor[feed.id]), tg.x, tg.y)
+                if any(point_in_polygon(x, y, z.polygon) for z in feed.exclude):
+                    continue  # it does not look where it excludes targets (another room seen through a door)
                 max_d = self.home.max_distance(feed.id)
                 if side_margin(x, y) >= COVER_MARGIN_MM and math.hypot(x, y) <= max_d - COVER_MARGIN_MM:
                     out.add(tg.slot)

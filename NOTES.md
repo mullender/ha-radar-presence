@@ -494,3 +494,14 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   room without a radar skipped the doorway rule and went to whoever was seen most recently: at night the parent
   in bed was carried into the child's room. Fixed (the doorway applies to revived tracks too). With the fix the
   rooms are right at every bed change even without the sensor; with it, the same. Home score unchanged.
+
+## 2026-11-18: aligning radars in two rooms (3rd floor)
+- Replayed the 3rd floor aligned (hall + bedroom radar) on the current engine: 18.9 h wrong, 28 h above the daily
+  bounds. Cause: the reflection cross-check is geometry only. Every hall track inside the bedroom radar's cone
+  (behind the wall) counted as "the bedroom radar looks there and sees nothing" and was held back as a reflection.
+- Fix: a radar does not look where it excludes targets. With an exclusion on the bedroom radar over the hall it sees
+  through the door, aligned scores as unaligned (0.01 h, 0 over bounds), keeps the bedroom right whenever the bed
+  sensor is on, and places people seen through the door in the hall instead of the bedroom. Without the exclusion
+  the fix changes nothing (18.9 h). Tried and rejected: skipping the check across rooms of a group (fixes the 3rd
+  floor without an exclusion, but breaks the open-plan kitchen / living room: 5 -> 9 false counts while away).
+  Turning the cross-check off: 11.5 h above bounds; it is worth keeping.

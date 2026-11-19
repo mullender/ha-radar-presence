@@ -64,6 +64,8 @@ def main() -> None:
     ap.add_argument("--dump", nargs="*", default=[], help="print these regions' tracks (and their tokens) whenever they change")
     ap.add_argument("--set", nargs="*", default=[], help="override engine constants, e.g. VIRTUAL_EXITS=0 LAG_S=60")
     ap.add_argument("--no-cross-check", dest="cross_check", action="store_false", help="do not flag one-radar reflections")
+    ap.add_argument("--cross-check-geometry-only", dest="cross_check_excl", action="store_false",
+                    help="old cross-check: any radar whose cone covers the spot 'looks' there, even where it excludes targets")
     ap.add_argument("--from-leads-to", action="store_true",
                     help="build spaces, doorways, connections and exits from the exit zones' leads_to (as the integration does)")
     ap.add_argument("--outside-doors", default="{}", help='JSON: door entity -> area, doors to outside no radar sees (with --from-leads-to)')
@@ -242,6 +244,8 @@ def main() -> None:
     dumped: dict[str, dict] = {}
     n_changes = 0
     tick = None
+    occ_on: dict[str, bool] = {}  # occupancy as the sensors say (applied or not)
+    occ_s = occ_miss_s = 0.0  # time a space was occupied, and of that, with nobody believed there
     for t, kind, key, payload in events:
         if t_to is not None and t > t_to:
             break
@@ -249,6 +253,10 @@ def main() -> None:
         tick = t if tick is None else tick
         while tick + 5 < t:
             tick += 5
+            for region, on in occ_on.items():
+                if on:
+                    occ_s += 5
+                    occ_miss_s += 5 if not any(k.region == region and not k.provisional for k in hc.tokens.values()) else 0
             n_before = len(hc.changes)
             hc.advance(tick)
             record(timeline, hc, tick)
@@ -263,6 +271,7 @@ def main() -> None:
             continue
         if kind == 3:
             on, since, sensor = payload
+            occ_on[key] = on
             n_before = len(hc.changes)
             if not a.occupancy_dry:
                 hc.hold(key, on, since, sensor)
@@ -320,7 +329,7 @@ def main() -> None:
         ]
         out = tr.fuse([o for obs in kept.values() for o in obs], t)
         tracks = {tg.slot: (tg.x, tg.y) for tg in out.targets}
-        flagged = unconfirmed(tr, out, g, cfgs) if a.cross_check else set()
+        flagged = unconfirmed(tr, out, g, cfgs, exclusions if a.cross_check_excl else None) if a.cross_check else set()
         if rooms is None:
             region = next(iter(region_of_area.values()))
             hc.frame(region, {} if region in vacuumed else tracks, t, flagged)
@@ -356,6 +365,8 @@ def main() -> None:
         door_times = [(t, s) for e, rows in doors.items() if e in exits_all for t, s in rows]
         for line in score(timeline, json.loads(a.truth.read_text()), door_times, fmt):
             print(line)
+    if occ_s:
+        print(f"OCCUPANCY  on {occ_s / 3600:.2f}h, of which nobody believed there {occ_miss_s / 3600:.2f}h")
 
 
 def from_leads_to(cfgs: dict, groups: list, floors: dict, outside_doors: dict) -> tuple[str, str, str, dict]:
@@ -412,8 +423,9 @@ def group_rooms(g, cfgs: dict, floors: dict, unobserved: dict):
     return feed_area, zone_rooms
 
 
-def unconfirmed(tr, out, g, cfgs) -> set[int]:
-    """Tracks seen by one radar only, at a spot another radar of the group covers (it would have seen them)."""
+def unconfirmed(tr, out, g, cfgs, exclusions=None) -> set[int]:
+    """Tracks seen by one radar only, at a spot another radar of the group covers (it would have seen them), as the
+    runtime: a radar does not look where it excludes targets (``exclusions``; None: the old, geometry-only check)."""
     if len(g.members) < 2:
         return set()
     flagged = set()
@@ -426,6 +438,8 @@ def unconfirmed(tr, out, g, cfgs) -> set[int]:
                 continue
             x, y = apply(invert(g.to_anchor[rid]), tg.x, tg.y)
             if side_margin(x, y) >= 500 and math.hypot(x, y) <= cfgs[rid]["fov"]["max_distance_mm"] - 500:
+                if exclusions is not None and any(point_in_polygon(x, y, p) for p in exclusions.get(rid, [])):
+                    continue  # it does not look there (seen through a door, behind a wall)
                 flagged.add(tg.slot)
                 break
     return flagged

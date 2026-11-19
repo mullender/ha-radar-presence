@@ -285,6 +285,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <div class="rule"><span class="id">AL-2</span>Radars connected by alignments form a group. The anchor is the root of the chain: the member not aligned to another member, or for a cycle the first in configuration order. Each member's transform into the anchor frame comes from a breadth-first walk, using inverse transforms against the arrow direction.</div>
 <div class="rule"><span class="id">AL-3</span>Each group runs one tracker and one zone engine in the anchor frame. All its members' include zones, exits and spots are transformed into that frame. A radar with no alignment is a group of one with the identity transform: exactly the single-radar behaviour.</div>
 <div class="rule"><span class="id">AL-4</span><b>Coverage</b> of a zone: the zone's own radar, plus every group member whose field of view contains a sample of the zone polygon. Samples are the vertices, edge midpoints and centroid; "in view" means y &gt; 0, within range and within ±60°. With ≥2 covering radars, "seen by" sensors are created.</div>
+<div class="rule"><span class="id">AL-5</span><b>Radars in different rooms</b> (a bedroom radar and the hall radar outside its door) can be aligned. Each must then exclude what it sees of the other room through the door: geometry alone does not know about walls, so without the exclusion the reflection check (RT-REF-1) would ask the bedroom radar about every hall track in its cone, and flag them all. Replay on real data: aligned without the exclusion, 18.9 h wrong; with it, the same as unaligned (0.01 h), and people seen in the hall through the door are placed in the hall, not the bedroom.</div>
 
 <!-- ================================================================== -->
 <h2 id="tracker">6. Stage 4 — people tracker</h2>
@@ -687,7 +688,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <div class="rule"><span class="id">RT-VAC-3</span>A vacuumed space receives an empty track list every frame. Tracks there are therefore <i>lost</i> at the moment cleaning starts, with the usual §10.5 consequences: portal moves and virtual exits. Zone presence is not affected; the vacuum still turns zones on.</div>
 
 <h3>11.5 Reflection flags for overlapping radars</h3>
-<div class="rule"><span class="id">RT-REF-1</span>In a group with ≥2 radars, a fused track seen by exactly one radar is flagged <b>unconfirmed</b> if another available member covers its position with margin: side margin ≥ <code>COVER_MARGIN_MM</code> = 500 and range ≤ max − 500. Another radar looks there and sees nothing, so it is probably a reflection (a kitchen radar seeing someone twice). It explains nobody and creates nobody until another radar also sees it (§10.2, §10.7).</div>
+<div class="rule"><span class="id">RT-REF-1</span>In a group with ≥2 radars, a fused track seen by exactly one radar is flagged <b>unconfirmed</b> if another available member covers its position with margin: side margin ≥ <code>COVER_MARGIN_MM</code> = 500 and range ≤ max − 500, and the position is not inside one of that member's exclusion zones (it does not look where it excludes targets: another room seen through a door, AL-5). Another radar looks there and sees nothing, so it is probably a reflection (a kitchen radar seeing someone twice). It explains nobody and creates nobody until another radar also sees it (§10.2, §10.7).</div>
 
 <h3>11.6 Persistence, start-up and outputs</h3>
 <ul>
@@ -821,7 +822,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td>EC-47</td><td>Track splitting next to a person</td><td>pending while within 1.5 m</td><td>§10.2</td><td><span class="cov-y">✔</span> test_ec47_a_track_splitting_next_to_someone_waits</td></tr>
 <tr><td>EC-48</td><td>Two radars of neighbouring regions see the same person</td><td>no new person while a doorless neighbour has someone visible</td><td>§10.7</td><td><span class="cov-y">✔</span> test_ec48_someone_in_view_next_door_explains_an_extra_track</td></tr>
 <tr><td>EC-49</td><td>The tracker reuses a track id for another person far away, or after they were seen elsewhere</td><td>stale binding: REFOUND_MM / REFOUND_S</td><td>§10.1 step 5, §10.2</td><td><span class="cov-y">✔</span> test_ec49_a_track_id_reused_far_away_is_not_the_same_person, test_ec49_a_track_refound_where_it_vanished_keeps_its_person</td></tr>
-<tr><td>EC-50</td><td>One-radar reflection in an overlapping group</td><td>unconfirmed → pending</td><td>RT-REF-1</td><td><span class="cov-p">◐</span> test_ec50_a_reflection_explains_nobody_until_another_radar_sees_it (engine side; the runtime geometry is untested)</td></tr>
+<tr><td>EC-50</td><td>One-radar reflection in an overlapping group</td><td>unconfirmed → pending</td><td>RT-REF-1</td><td><span class="cov-y">✔</span> test_ec50_a_reflection_explains_nobody_until_another_radar_sees_it, test_rt_ref_1_one_radar_track_where_another_looks_is_a_reflection_unless_it_excludes_there</td></tr>
 <tr><td>EC-51</td><td>Rooms in one aligned group; doorway flicker</td><td>nearest covering radar, zones' rooms, hysteresis</td><td>§9.2</td><td><span class="cov-y">✔</span> test_rooms_follow_the_nearest_radar_that_sees_the_spot</td></tr>
 <tr><td>EC-52</td><td>Walking from one room into another in one fused track</td><td>hand-over, not re-matching</td><td>§9.2</td><td><span class="cov-y">✔</span> test_walking_out_of_the_bedroom_in_one_track_is_a_handover</td></tr>
 <tr><td>EC-53</td><td>One area seen by two groups</td><td>linked spaces, summed count, correction to one</td><td>§9.1, §11.6</td><td><span class="cov-n">✘</span></td></tr>
@@ -870,6 +871,7 @@ svg.dg .dash { stroke-dasharray:5 4; }
 <tr><td>EC-100</td><td>Sitting on the bed for a moment; turning over</td><td>OCCUPANCY_STEADY_S debounce on both edges</td><td>§11.3b</td><td><span class="cov-y">✔</span> test_a_bed_sensor_holds_someone_in_the_bedroom</td></tr>
 <tr><td>EC-101</td><td>"−" on home with someone in bed and someone unseen elsewhere</td><td>the anchored one is removed last</td><td>HC-CO-1/2</td><td><span class="cov-y">✔</span> test_occupancy_a_correction_removes_the_anchored_person_last</td></tr>
 <tr><td>EC-102</td><td>The tracker revives a track id in a doorway, hours after its person was last seen there</td><td>the doorway still says who could be there (a re-found track no longer skips the portal rule)</td><td>§10.2</td><td><span class="cov-y">✔</span> test_a_refound_track_at_a_doorway_is_someone_from_where_it_leads</td></tr>
+<tr><td>EC-103</td><td>Aligned radars in two rooms: a hall track inside the bedroom radar's cone, behind the wall</td><td>not a reflection if the bedroom radar excludes that spot (AL-5)</td><td>RT-REF-1</td><td><span class="cov-y">✔</span> test_rt_ref_1_… [excluded]</td></tr>
 </table>
 
 <!-- ================================================================== -->
@@ -912,7 +914,7 @@ Between <code>SETTLE_S</code> and re-establishment, people in doubt are temporar
 <h3>16.1 Before simplifying</h3>
 <ol>
 <li><b>Keep the ✔ scenarios green.</b> They encode the behaviours that were each found by tracing a wrong count in real data.</li>
-<li><b>Write a test first for each ✘ rule you touch.</b> The engine rules all have one now; what is left is mostly geometry and start-up (EC-07, EC-26, EC-53, EC-91), plus the runtime's reflection geometry (RT-REF-1: which radar "looks" at a spot), whose engine side EC-50 covers.</li>
+<li><b>Write a test first for each ✘ rule you touch.</b> The engine rules all have one now; what is left is mostly geometry and start-up (EC-07, EC-26, EC-53, EC-91), </li>
 <li><b>Re-run the private replay and compare hours wrong before and after.</b> The rules were tuned on those same days, so also check new days.</li>
 <li><b>Candidates for simplification, with their risk:</b>
   <ul>
