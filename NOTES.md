@@ -505,3 +505,21 @@ Not used yet: lock state changes and stair PIRs as exit / floor-crossing evidenc
   the fix changes nothing (18.9 h). Tried and rejected: skipping the check across rooms of a group (fixes the 3rd
   floor without an exclusion, but breaks the open-plan kitchen / living room: 5 -> 9 false counts while away).
   Turning the cross-check off: 11.5 h above bounds; it is worth keeping.
+
+## 2026-11-18: UI/UX proposal (not started)
+
+Response to the design brief, kept private next to it:
+`dev/data/design-brief/radar-presence-ux-proposal.html` (gitignored; mockups
+use invented data). Main proposals, none adopted yet:
+- Drop "zone" from the UI (it collides with HA's GPS zones). Kinds become
+  Room / Spot / Walkway / Doorway (leads to a room, upstairs, downstairs or
+  outside) / Ignore area. Head count → "Occupants" (avoids HA's `person`),
+  Decisions → "Activity", in doubt → "settling", #1 → Person A. Panel
+  "Presence", integration "Radar Presence". Code identifiers stay.
+- Panel = House (default) → Room drill-down (radar map); tabs House / To do /
+  Settings; the time range and playhead are kept in the URL.
+- Review → Edit (HA's blue edit bar) → Details (per-user switch).
+- Shapes: fill only, outline on hover/selection, occupied = 2× fill,
+  glyph in every label, hollow points inside ignore areas.
+- Stages: 1 calm (terms, modes, styling), 2 explain (Activity sentences,
+  person story, card sizes), 3 guide (To do, setup wizard), 4 unify.
