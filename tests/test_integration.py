@@ -127,6 +127,23 @@ async def test_config_flow_imports_legacy_polygons(hass: HomeAssistant, radar_de
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_devices"
 
 
+async def test_a_new_radar_has_presence_in_its_room_right_away(hass: HomeAssistant, radar_device: str) -> None:
+    """No drawing needed: a radar in an area starts with a room shape covering its whole view, named after the area."""
+    from homeassistant.helpers import area_registry as ar
+
+    area = ar.async_get(hass).async_create("Study")
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    result = await start_radar_flow(hass)
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {"device_id": radar_device})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    (room,) = [s for s in entry.subentries.values() if s.subentry_type == "zone"]
+    assert room.title == "Study" and len(room.data["polygon"]) == 14  # the radar and 13 points along its range
+    state = hass.states.get(eid(hass, room.data["id"]))
+    assert state.attributes["friendly_name"] == "Study Occupancy"
+
+
 async def test_single_home_entry(hass: HomeAssistant, radar_device: str) -> None:
     await start_radar_flow(hass)
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})

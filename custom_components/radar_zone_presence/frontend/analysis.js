@@ -690,3 +690,22 @@ export function explainOn(hist, poly, a, b, { exclusions = [], next = null, hold
   else if (!hold && !walkedOut && gap !== null && gap <= 120) cause = 'lost';
   return { cause, duration, points, walkedIn, walkedOut, spread, gap };
 }
+
+/** Share of a polygon that any of the view cones covers (0–1), and how many cones touch it, by grid sampling. */
+export function coverageOf(poly, cones, steps = 30) {
+  const xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  let inside = 0, seen = 0;
+  const touched = new Set();
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < steps; j++) {
+      const x = x0 + ((i + 0.5) / steps) * (x1 - x0), y = y0 + ((j + 0.5) / steps) * (y1 - y0);
+      if (!pointInPolygon(x, y, poly)) continue;
+      inside++;
+      let any = false;
+      cones.forEach((c, k) => { if (pointInPolygon(x, y, c)) { any = true; touched.add(k); } });
+      if (any) seen++;
+    }
+  }
+  return { share: inside ? seen / inside : 0, radars: touched.size };
+}

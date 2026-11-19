@@ -20,7 +20,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import area_registry as ar, floor_registry as fr, selector
+from homeassistant.helpers import area_registry as ar, device_registry as dr, floor_registry as fr, selector
 
 from .const import (
     CONF_DEVICE_ID,
@@ -40,8 +40,9 @@ from .const import (
     SUBENTRY_RADAR,
     SUBENTRY_ZONE,
 )
-from .discovery import RadarDevice, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
+from .discovery import RadarDevice, async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
 from .engine import KIND_INCLUDE, validate_polygon
+from .engine.geometry import fov_polygon
 
 
 def _radar_unit(hass, radar: RadarDevice) -> str | None:
@@ -170,8 +171,38 @@ class RadarSubentryFlow(ConfigSubentryFlow):
             description_placeholders={"count": str(len(self._legacy))},
         )
 
+    def _whole_view_room(self) -> list[dict[str, Any]]:
+        """A new radar's room: its whole view, named after its area, unless that area already has a room.
+        Most people never draw one; open-plan views split it later."""
+        radar = self._radar
+        assert radar is not None
+        if not radar.area_id:
+            return []
+        entry = self._get_entry()
+        dev_reg = dr.async_get(self.hass)
+        radar_area = {s.subentry_id: (dev_reg.async_get(s.data.get(CONF_DEVICE_ID)) or None) for s in entry.subentries.values() if s.subentry_type == SUBENTRY_RADAR}
+        for s in entry.subentries.values():
+            if s.subentry_type != SUBENTRY_ZONE or s.data.get("spot"):
+                continue
+            dev = radar_area.get(s.data.get(CONF_RADAR))
+            if (s.data.get("area_id") or (dev.area_id if dev else None)) == radar.area_id:
+                return []
+        area = ar.async_get(self.hass).async_get_area(radar.area_id)
+        max_d = async_device_geometry(self.hass, radar.device_id)["max_distance_mm"]
+        return [
+            {
+                "id": f"z{uuid4().hex[:10]}",
+                "name": area.name if area else "Room",
+                "kind": KIND_INCLUDE,
+                "polygon": [[round(p[0], 1), round(p[1], 1)] for p in fov_polygon(max_d, 60.0, 12)],
+                "filters": {"on_delay_s": 0, "off_delay_s": 0, "edge_margin_mm": 0, "hold_until_exit": False, "hold_max_s": 0},
+                "area_id": None,
+            }
+        ]
+
     def _create(self, zones: list[dict[str, Any]]) -> SubentryFlowResult:
         assert self._radar is not None
+        zones = zones or self._whole_view_room()
         data: dict[str, Any] = {
             CONF_DEVICE_ID: self._radar.device_id,
             CONF_PROFILE: self._radar.profile,

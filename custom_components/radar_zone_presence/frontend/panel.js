@@ -7,7 +7,7 @@ import './headcount.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
-  classify, crossCheck, crossGhost, doorEvents, explainOn, convexHull, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
+  classify, coverageOf, crossCheck, crossGhost, doorEvents, explainOn, convexHull, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
@@ -1623,6 +1623,17 @@ class RadarZonePresencePanel extends HTMLElement {
   _shapeLabels() {
     const out = {};
     const floors = this.hass?.floors || {}, areas = this.hass?.areas || {};
+    // Rooms carry their area's name (one room shape per area); a second shape in the same area adds its own name.
+    const rooms = [
+      ...this.zones.filter(z => z.kind === 'include' && !z.spot).map(z => [z, z.area_id || this.config?.device_area_id]),
+      ...this._linkedShapes().filter(l => l.zone.kind === 'include' && !l.zone.spot).map(l => [l.zone, l.zone.area_id || this.peers.get(l.radarId)?.cfg.device_area_id]),
+    ];
+    for (const [z, areaId] of rooms) {
+      const area = areas[areaId];
+      if (!area) continue;
+      const twins = rooms.filter(([, a]) => a === areaId).length;
+      out[z.id] = { text: twins > 1 && z.name.trim().toLowerCase() !== area.name.toLowerCase() ? `${area.name} · ${z.name}` : area.name };
+    }
     const level = id => floors[areas[id]?.floor_id]?.level;
     const here = level(this.config?.device_area_id);
     for (const z of this.zones) {
@@ -1777,7 +1788,7 @@ class RadarZonePresencePanel extends HTMLElement {
     return el('div', { class: 'section' },
       el('h3', {}, glyphSvg(st.glyph, this._zoneColor(z), 14), el('span', { class: 'grow', style: { marginLeft: '6px' } }, z.name),
         this.admin ? el('button', { class: 'btn', title: 'Edit this shape', onclick: () => this._enterEdit() }, '✎ Edit') : ''),
-      el('div', { class: 'help' }, `${st.label}${saved?.device_id ? ' · ' : ''}`,
+      el('div', { class: 'help' }, `${st.label}${z.kind === 'include' && !z.spot && this._coverageText(z) ? ` · ${this._coverageText(z)}` : ''}${saved?.device_id ? ' · ' : ''}`,
         saved?.device_id ? el('a', { href: `/config/devices/device/${saved.device_id}` }, 'its device ↗') : ''),
       el('div', { class: 'trail' }),
       el('div', { class: 'zone-stats' }));
@@ -1851,9 +1862,18 @@ class RadarZonePresencePanel extends HTMLElement {
                 seen.map(t => t.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '')).join(', '))] : [];
           })(),
           el('label', {}, 'Area'),
-          el('select', { onchange: e => this._patchZone(z.id, { area_id: e.target.value || null }) },
+          el('select', { onchange: e => this._patchZone(z.id, { area_id: e.target.value || null, ...(z.spot ? {} : this._areaName(z, e.target.value)) }, { renderSide: true }) },
             el('option', { value: '', selected: !z.area_id }, `Same as the radar${deviceArea ? ` (${deviceArea})` : ''}`),
             areas.map(a => el('option', { value: a.area_id, selected: a.area_id === z.area_id }, a.name))),
+          !z.spot && this._coverageText(z) ? [el('label', {}, 'Coverage'), el('span', { class: 'help' }, this._coverageText(z))] : '',
+          ...(() => {
+            const twins = this._sameAreaRooms(z);
+            if (!twins.length) return [];
+            const t = twins[0];
+            return [el('div', { class: 'help full', style: { color: 'var(--warning-color, #e65100)' } },
+              `This area already has a room shape: “${t.z.name}”${t.radarTitle ? ` on ${t.radarTitle}` : ''}. An area has one room; draw open-plan parts as one shape, or give this one its own area.`,
+              el('div', { class: 'actions' }, el('button', { class: 'btn', onclick: () => (t.radarId ? this._openLinked(t.radarId, t.z.id) : this._select(t.z.id, null)) }, 'Select it')))];
+          })(),
           el('label', {}, 'Turn on after (s)'),
           num(f.on_delay_s, e => this._patchZone(z.id, { filters: { ...f, on_delay_s: Math.max(0, +e.target.value || 0) } })),
           el('label', {}, 'Turn off after (s)'),
@@ -1920,6 +1940,31 @@ class RadarZonePresencePanel extends HTMLElement {
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[0]), onchange: e => set(i, 0, +e.target.value) })),
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[1]), onchange: e => set(i, 1, +e.target.value) })),
         el('td', {}, z.polygon.length > 3 ? el('button', { class: 'tb', title: 'Delete vertex', onclick: () => this._patchZone(z.id, { polygon: z.polygon.filter((_, k) => k !== i) }, { renderSide: true }) }, '✕') : '')))));
+  }
+
+  /** A room renamed after its area when it still has a generic name ("Room 2", "Polygon 1", "Whole room"). */
+  _areaName(z, areaId) {
+    const area = this.hass.areas?.[areaId || this.config.device_area_id];
+    return area && /^(room|polygon|zone|whole room|spot)\b/i.test(z.name.trim()) ? { name: area.name } : {};
+  }
+
+  /** Coverage of a room by this radar's and the linked radars' views: "85 % seen by 2 radars". */
+  _coverageText(z) {
+    const cones = this._coverage() || [];
+    if (!cones.length || validatePolygon(z.polygon)) return '';
+    const c = coverageOf(z.polygon, cones);
+    if (c.share < 0.005) return 'no radar sees it: counted at its doorways';
+    return `${Math.round(c.share * 100)} % seen by ${c.radars} radar${c.radars === 1 ? '' : 's'}`;
+  }
+
+  /** Other room shapes in the same area (this radar's and linked radars'): an area has one room. */
+  _sameAreaRooms(z) {
+    const area = z.area_id || this.config?.device_area_id;
+    if (!area || z.kind !== 'include' || z.spot) return [];
+    const mine = this.zones.filter(q => q.id !== z.id && q.kind === 'include' && !q.spot && (q.area_id || this.config.device_area_id) === area).map(q => ({ z: q }));
+    const linked = this._linkedShapes().filter(l => l.zone.kind === 'include' && !l.zone.spot && (l.zone.area_id || this.peers.get(l.radarId)?.cfg.device_area_id) === area)
+      .map(l => ({ z: l.zone, radarId: l.radarId, radarTitle: l.radarTitle }));
+    return [...mine, ...linked];
   }
 
   /** Kind from the type picker. A spot keeps its sensor when it already has one (a room becoming a spot keeps its entity). */
