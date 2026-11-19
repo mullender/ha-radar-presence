@@ -7,7 +7,7 @@ import './headcount.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
-  classify, crossCheck, crossGhost, doorEvents, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
+  classify, crossCheck, crossGhost, doorEvents, explainOn, convexHull, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
@@ -135,6 +135,13 @@ td input { width: 70px; text-align: right; }
 .check input { width: auto; margin-top: 2px; }
 .trail { margin-top: 10px; }
 .plot-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
+.bar-pop { position: fixed; z-index: 20; width: 330px; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222);
+  border-radius: 10px; box-shadow: 0 4px 18px rgba(0,0,0,.25); padding: 12px 14px; font-size: 13px; }
+.bar-pop .bp-h { font-weight: 500; margin-bottom: 4px; }
+.bar-pop .bp-say { color: var(--secondary-text-color, #555); line-height: 1.4; margin-bottom: 10px; }
+.bar-pop .bp-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.pchip { font: inherit; font-size: 12px; border: 1px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff); color: var(--primary-color, #03a9f4);
+  border-radius: 14px; padding: 4px 10px; cursor: pointer; }
 .legend { position: absolute; right: 12px; bottom: 10px; display: flex; gap: 10px; padding: 4px 10px; border-radius: 14px; font-size: 12px;
   background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0,0,0,.15); color: var(--primary-text-color, #222); pointer-events: none; }
 .legend .chip { display: flex; align-items: center; gap: 4px; }
@@ -1249,6 +1256,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.plot.addEventListener('pointer-world', e => { this._pointer = e.detail; this._renderPointer(); });
     this.timeline.addEventListener('seek', e => { this.playing = false; this._seek(e.detail.t); });
     this.timeline.addEventListener('trigger', e => this._jumpTo(e.detail.t, e.detail.zoneId));
+    this.timeline.addEventListener('bar', e => this._barPopover(e.detail));
     this.timeline.addEventListener('window', e => {
       const had = !!this.brush;
       this.brush = e.detail.brush;
@@ -1346,6 +1354,51 @@ class RadarZonePresencePanel extends HTMLElement {
     if (this.hcEl) { this.hcEl.details = on; if (this.hcEl._active) this.hcEl.render(); }
     if (this.config) this._renderAll();
     this._renderFrames();
+  }
+
+  /** A timeline bar was clicked: what happened, in words, with the obvious fix for the cause we found. */
+  _barPopover({ zoneId, a, b, x, y }) {
+    this._pop?.remove();
+    const z = this.zones.find(q => q.id === zoneId);
+    if (!z || !this.hist) return;
+    const iv = this.preview?.summary?.[zoneId]?.intervals || [];
+    const next = iv.find(v => v[0] > b + 0.01)?.[0] ?? null;
+    const exclusions = this.zones.filter(q => q.kind === 'exclude' && !validatePolygon(q.polygon));
+    const ex = explainOn(this.hist, z.polygon, a, b, { exclusions, next, hold: !!z.filters.hold_until_exit });
+    const room = z.name;
+    const say = {
+      still: 'Something appeared here and vanished without moving. That usually means a curtain, a plant or a fan.',
+      blip: `On for only ${fmtDuration(ex.duration)}: someone brushed past the edge, or a short ghost.`,
+      lost: `It went clear for ${fmtDuration(ex.gap)} with nobody seen leaving: the radar loses people who sit still.`,
+      walked: `Someone walked in and it stayed on for ${fmtDuration(ex.duration)}.`,
+    }[ex.cause];
+    const close = () => { pop.remove(); this._pop = null; removeEventListener('pointerdown', away, true); };
+    const away = e => { if (!e.composedPath().includes(pop)) close(); };
+    const fix = (label, fn) => this.admin ? el('button', { class: 'pchip', onclick: () => { close(); fn(); } }, label) : '';
+    const f = z.filters;
+    const fixes = [];
+    if (ex.cause === 'still' && ex.points.length) {
+      fixes.push(fix('Ignore that spot', () => {
+        const poly = offsetConvex(convexHull(ex.points), 250);
+        if (poly) { this._addZone(poly, 'exclude', `Ignore near ${room}`); this._toast('Added an ignore area: check it, then Save.'); }
+      }));
+    }
+    if ((ex.cause === 'still' || ex.cause === 'blip') && z.kind === 'include' && (f.on_delay_s || 0) < 3) {
+      fixes.push(fix('Turn on after 3 s', () => { this._select(z.id, null); this._patchZone(z.id, { filters: { ...f, on_delay_s: 3 } }, { renderSide: true }); }));
+    }
+    if (ex.cause === 'lost' && z.kind === 'include') {
+      fixes.push(fix('Remember people who sit still', () => { this._select(z.id, null); this._patchZone(z.id, { filters: { ...f, hold_until_exit: true, hold_max_s: f.hold_max_s || this._suggestedMaxHold(z) } }, { renderSide: true }); }));
+    }
+    const pop = el('div', { class: 'bar-pop', style: { left: `${Math.min(innerWidth - 340, Math.max(8, x - 160))}px`, top: `${Math.max(8, y - 190)}px` } },
+      el('div', { class: 'bp-h' }, `${room} · on ${fmtTime(a)} – ${fmtTime(b)} (${fmtDuration(ex.duration)})`),
+      el('div', { class: 'bp-say' }, say),
+      el('div', { class: 'bp-acts' },
+        el('button', { class: 'pchip', onclick: () => { close(); this._showTime(a, Math.max(60, (b - a) * 3)); this._seek(Math.max(this.hist.start, a - 3)); this._togglePlay(); } }, '▶ Play this moment'),
+        ...fixes,
+        el('button', { class: 'pchip', onclick: close }, ex.cause === 'walked' ? 'Close' : 'It was real')));
+    addEventListener('pointerdown', away, true);
+    this.shadowRoot.append(pop);
+    this._pop = pop;
   }
 
   /** The ⋮ menu of the radar view. */
@@ -1461,7 +1514,7 @@ class RadarZonePresencePanel extends HTMLElement {
         rows.push({ id: z.id, name: `🚪 ${z.name}`, color: EXIT_COLOR, predicted: [], actual: iv, triggers: [], actualTriggers: iv.map(v => v[0]) });
         return;
       }
-      rows.push({ id: z.id, name: z.name, color: kindTone(styleKind(z)), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
+      rows.push({ id: z.id, popover: true, name: z.name, color: kindTone(styleKind(z)), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
     });
     rows.push({ id: 'presence', name: 'Anyone (not ignored)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
     this.timeline.set({

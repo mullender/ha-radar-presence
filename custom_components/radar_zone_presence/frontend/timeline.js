@@ -112,6 +112,19 @@ export class RzpTimeline extends HTMLElement {
     return null;
   }
 
+  /** A predicted on-interval under the pointer: {row, a, b}. */
+  _hitBar(x, y) {
+    let rowY = AXIS_H + DENSITY_H;
+    const t = this._t(x), slack = 3 / Math.max(1e-9, this._x(1) - this._x(0)); // 3 px in seconds
+    for (const row of this.rows) {
+      if (y >= rowY && y < rowY + ROW_H && row.popover) {
+        for (const [a, b] of row.predicted || []) if (t >= a - slack && t <= b + slack) return { row, a, b };
+      }
+      rowY += ROW_H;
+    }
+    return null;
+  }
+
   get _trim() {
     return this.brush || { t0: this.range.start, t1: this.range.end };
   }
@@ -159,6 +172,8 @@ export class RzpTimeline extends HTMLElement {
     if (x < LABEL_W) return;
     const hit = this._hitTrigger(x, y);
     if (hit) { this._emit('trigger', { zoneId: hit.row.id, t: hit.t }); return; }
+    const bar = this._hitBar(x, y);
+    if (bar) { this._emit('bar', { zoneId: bar.row.id, a: bar.a, b: bar.b, x: e.clientX, y: e.clientY }); this._emit('seek', { t: this._clamp(bar.a) }); return; }
     if (e.shiftKey || e.button === 1) { this._drag = { kind: 'pan', x, view: { ...this.view } }; return; }
     this._drag = { kind: 'scrub' };
     this._emit('seek', { t: this._clamp(this._t(x)) });
@@ -336,6 +351,10 @@ export class RzpTimeline extends HTMLElement {
       for (const [a, b] of row.predicted || []) {
         if (b < this.view.v0 || a > this.view.v1) continue;
         ctx.fillRect(xa(a), ry + 2, Math.max(1.5, xa(b) - xa(a)), ROW_H - 7);
+        if (row.popover && b - a < 3) { // short blips get a marker: the usual cause of "why did the light turn on?"
+          const x = xa((a + b) / 2);
+          ctx.beginPath(); ctx.arc(x, ry + ROW_H - 3, 2, 0, Math.PI * 2); ctx.fill();
+        }
       }
       ctx.fillStyle = text;
       ctx.globalAlpha = 0.6;

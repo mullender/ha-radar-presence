@@ -652,3 +652,41 @@ export function viewToMatch(refDisplay, reg) {
   const rotation = ((Math.round((Math.atan2(M[1][0], M[0][0]) * 180) / Math.PI) % 360) + 360) % 360;
   return { rotation, mirror };
 }
+
+/**
+ * Why a shape was on over [a, b] (absolute s), in the terms a person uses:
+ *  - 'still':   something appeared inside and vanished without moving (curtain, plant, fan) → ignore that spot;
+ *  - 'blip':    on for under 3 s → turn on after 3 s;
+ *  - 'lost':    it went clear and back on within 2 min with nobody seen walking out (someone sitting still) → remember them;
+ *  - 'walked':  someone walked in.
+ * `next`: start of the next on interval (or null). Returns {cause, duration, points: [[x, y]], walkedIn, spread, gap}.
+ */
+export function explainOn(hist, poly, a, b, { exclusions = [], next = null, hold = false } = {}) {
+  const t0 = a - hist.start, t1 = b - hist.start;
+  const points = [];
+  let walkedIn = false, walkedOut = false;
+  let k = 0;
+  for (let i = 0; i < hist.frame_t.length; i++) {
+    const t = hist.frame_t[i];
+    for (let j = 0; j < hist.frame_n[i]; j++, k++) {
+      if (t < t0 - 4 || t > t1 + 4) continue;
+      const x = hist.x[k], y = hist.y[k];
+      if (exclusions.some(z => pointInPolygon(x, y, z.polygon))) continue;
+      const inside = pointInPolygon(x, y, poly);
+      if (inside && t >= t0 && t <= t1) points.push([x, y]);
+      else if (!inside && signedDistance(x, y, poly) > -1500) {
+        if (t < t0 && t >= t0 - 4) walkedIn = true;
+        if (t > t1 && t <= t1 + 4) walkedOut = true;
+      }
+    }
+  }
+  const duration = b - a;
+  const cx = points.reduce((s, p) => s + p[0], 0) / (points.length || 1), cy = points.reduce((s, p) => s + p[1], 0) / (points.length || 1);
+  const spread = points.length ? Math.max(...points.map(p => Math.hypot(p[0] - cx, p[1] - cy))) : null;
+  const gap = next != null ? next - b : null;
+  let cause = 'walked';
+  if (!walkedIn && points.length && spread !== null && spread <= 350) cause = 'still';
+  else if (duration < 3) cause = 'blip';
+  else if (!hold && !walkedOut && gap !== null && gap <= 120) cause = 'lost';
+  return { cause, duration, points, walkedIn, walkedOut, spread, gap };
+}

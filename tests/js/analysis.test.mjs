@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold, crossCheck, crossGhost, spotTimes,
+  convexHull, offsetConvex, reduceConvex, findDwellSpots, fitHull, trailStats, classify, suggestHold, crossCheck, crossGhost, spotTimes, explainOn,
 } from '../../custom_components/radar_zone_presence/frontend/analysis.js';
 import { polygonArea, pointInPolygon } from '../../custom_components/radar_zone_presence/frontend/engine.js';
 
@@ -252,4 +252,22 @@ test('spotTimes: the busiest quarter hour and how many hours of the day', () => 
   assert.equal(peak, 3600 + 450);
   assert.equal(hours, 2);
   assert.equal(spotTimes(hist, [[5000, 5000], [5100, 5000], [5100, 5100]]).peak, null);
+});
+
+test('explainOn: a fan, a blip, someone sitting still, someone walking in', () => {
+  const box = [[0, 1000], [1000, 1000], [1000, 2000], [0, 2000]];
+  const frames = [];
+  // 10–12 s: appears in place at the curtain and vanishes (no walk in).
+  for (let t = 10; t <= 12; t += 0.5) frames.push([t, [[1, 500 + rnd() * 40, 1500 + rnd() * 40]]]);
+  // 30–31 s: walks in from outside, leaves within a second (a blip).
+  for (let t = 27; t <= 31; t += 0.5) frames.push([t, [[1, -1200 + (t - 27) * 450, 1500]]]);
+  // 60–90 s: walks in, sits, lost (no walk out), back at 120 s.
+  for (let t = 57; t <= 90; t += 0.5) frames.push([t, [[2, t < 60 ? -1500 + (t - 57) * 600 : 400, 1400]]]);
+  frames.push([200, []]);
+  const h = pack(frames);
+  assert.equal(explainOn(h, box, 10, 12).cause, 'still');
+  assert.equal(explainOn(h, box, 30, 31.5).cause, 'blip');
+  assert.equal(explainOn(h, box, 60, 90, { next: 120 }).cause, 'lost');
+  assert.equal(explainOn(h, box, 60, 90, { next: 120, hold: true }).cause, 'walked');
+  assert.equal(explainOn(h, box, 60, 90).cause, 'walked');
 });
