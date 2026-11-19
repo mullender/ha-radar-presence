@@ -128,6 +128,7 @@ def ws_list(hass: HomeAssistant, connection, msg) -> None:
                     "title": sub.title,
                     "device_id": sub.data[CONF_DEVICE_ID],
                     "area": area.name if area else None,
+                    "area_id": area.id if area else None,
                     "floor_id": floor.floor_id if floor else None,
                     "floor": floor.name if floor else None,
                     "floor_level": floor.level if floor else None,

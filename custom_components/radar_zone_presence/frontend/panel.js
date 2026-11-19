@@ -4,6 +4,7 @@
 import './plot.js';
 import './timeline.js';
 import './headcount.js';
+import './todo.js';
 import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
@@ -39,7 +40,8 @@ header .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; background: rgba(255,255,255,.12); border-radius: 6px; padding: 2px; }
 .tabs .tab { background: none; border: 0; color: inherit; padding: 5px 12px; border-radius: 4px; cursor: pointer; opacity: .8; }
 .tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }
-.app > rzp-headcount { min-height: 0; }
+.app > rzp-headcount, .app > rzp-todo { min-height: 0; }
+.tabs .tab .badge { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 5px; border-radius: 8px; background: #d97706; color: #fff; font-size: 11px; line-height: 16px; text-align: center; font-weight: 500; }
 header .dirty { font-size: 12px; opacity: .9; }
 header.edit { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
 header.edit h1 { font-size: 18px; }
@@ -215,13 +217,14 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hoverSpot = null;
     this.showSpots = true;
     this.fitPreview = null; // polygon previewed by hovering 'Fit to points'
-    this.tab = 'radars'; // 'radars' | 'headcount'
+    this.tab = 'radars'; // 'radars' | 'headcount' | 'todo'
     this.editing = false; // review (default) or edit: tools, property panel, undo, Save / Cancel
   }
 
   set hass(hass) {
     this._hass = hass;
     if (this.hcEl) this.hcEl.hass = hass;
+    if (this.todoEl) this.todoEl.hass = hass;
     if (!this._started) { this._started = true; this._start(); }
     else if (this.config) { this._refreshLiveBadges(); this._updateDoorStates(); }
   }
@@ -265,6 +268,7 @@ class RadarZonePresencePanel extends HTMLElement {
       .catch(() => {});
     await this._loadRadars();
     const q0 = new URLSearchParams(location.hash.slice(1));
+    if (q0.get('view') === 'todo' && this.admin) { await this._setTab('todo'); return; }
     if (q0.get('view') === 'headcount') {
       await this._setTab('headcount');
       if (q0.get('t')) this.hcEl.showTime(+q0.get('t'), +q0.get('span') || 600);
@@ -286,6 +290,7 @@ class RadarZonePresencePanel extends HTMLElement {
 
   async _applyHash() {
     const q = new URLSearchParams(location.hash.slice(1));
+    if (q.get('view') === 'todo' && this.admin) { await this._setTab('todo'); return; }
     if (q.get('view') === 'headcount') {
       await this._setTab('headcount');
       if (q.get('t')) this.hcEl.showTime(+q.get('t'), +q.get('span') || 600);
@@ -334,17 +339,44 @@ class RadarZonePresencePanel extends HTMLElement {
     if (tab === this.tab && (tab !== 'headcount' || this.hcEl._active)) return;
     this.tab = tab;
     const hc = tab === 'headcount';
-    this.bodyEl.style.display = hc ? 'none' : '';
+    this.bodyEl.style.display = tab === 'radars' ? '' : 'none';
     this.hcEl.style.display = hc ? '' : 'none';
+    this.todoEl.style.display = tab === 'todo' ? '' : 'none';
     this._renderHeader();
     if (hc) {
       history.replaceState(null, '', '#view=headcount');
       await this.hcEl.activate();
+    } else if (tab === 'todo') {
+      this.hcEl.deactivate();
+      history.replaceState(null, '', '#view=todo');
+      await this.todoEl.activate();
     } else {
       this.hcEl.deactivate();
       if (this.radarId) history.replaceState(null, '', `#radar=${this.radarId}`);
       else if (pick && this.radars.length) await this._selectRadar(this.radars[0].radar_id);
     }
+  }
+
+  /** To do → "Line them up": the radar's editor, scrolled to Line up with. */
+  async _todoLineUp(radarId) {
+    await this._openRadarAt(radarId, Date.now() / 1000 - 300, 600);
+    this._enterEdit();
+    this.selectedId = null;
+    this._renderSide();
+    this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' });
+  }
+
+  /** To do → "Mark its doorway": a radar on the same floor (one next to the room if known), editing, drawing doorways. */
+  async _todoMarkDoorway(area) {
+    const floor = this.hass.areas?.[area]?.floor_id;
+    const pick = this.radars.find(r => r.radar_id === this.radarId && r.floor_id === floor) || this.radars.find(r => r.floor_id === floor) || this.radars[0];
+    if (!pick) return;
+    await this._openRadarAt(pick.radar_id, Date.now() / 1000 - 300, 600);
+    this._enterEdit();
+    this.drawKind = 'exit';
+    this._setTool('draw');
+    this._renderToolbar();
+    this._toast(`Draw the doorway into ${(this.hass.areas?.[area]?.name || area).toLowerCase()} where this radar sees it.`);
   }
 
   async _copyHeadcountLink() {
@@ -1245,7 +1277,15 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hcEl.style.display = 'none';
     this.hcEl.addEventListener('open-radar', e => this._openRadarAt(e.detail.radar, e.detail.t));
     this.hcEl.addEventListener('report', e => this._report(e.detail.t, e.detail.symptom));
-    root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl));
+    this.todoEl = document.createElement('rzp-todo');
+    this.todoEl.hass = this._hass;
+    this.todoEl.style.display = 'none';
+    this.todoEl.addEventListener('count', e => { this.todoCount = e.detail.count; localStorage.setItem('rzp.todo.count', String(e.detail.count ?? '')); this._renderHeader(); });
+    this.todoEl.addEventListener('open-radar', e => this._openRadarAt(e.detail.radar, e.detail.t, 120));
+    this.todoEl.addEventListener('line-up', e => this._todoLineUp(e.detail.radar));
+    this.todoEl.addEventListener('mark-doorway', e => this._todoMarkDoorway(e.detail.area));
+    this.todoCount = localStorage.getItem('rzp.todo.count') ? +localStorage.getItem('rzp.todo.count') : null;
+    root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl, this.todoEl));
 
     this.plot.addEventListener('zones-change', e => {
       if (e.detail.commit) {
@@ -1323,8 +1363,17 @@ class RadarZonePresencePanel extends HTMLElement {
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
     const tabs = el('div', { class: 'tabs' },
       el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'),
-      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'));
-    h.classList.toggle('edit', this.editing && this.tab !== 'headcount');
+      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
+      !this.admin || !this.radars.length ? '' : el('button', { class: `tab${this.tab === 'todo' ? ' on' : ''}`, onclick: () => this._setTab('todo') }, 'To do',
+        this.todoCount ? el('span', { class: 'badge' }, String(this.todoCount)) : ''));
+    h.classList.toggle('edit', this.editing && this.tab === 'radars');
+    if (this.tab === 'todo') {
+      h.replaceChildren(
+        el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
+        el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
+        el('button', { class: 'ibtn', title: 'Look again', onclick: () => this.todoEl.activate({ rebuild: true }) }, '⟳'));
+      return;
+    }
     if (this.tab === 'headcount') {
       h.replaceChildren(
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
