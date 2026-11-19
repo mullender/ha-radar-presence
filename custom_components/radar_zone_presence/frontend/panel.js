@@ -258,6 +258,7 @@ class RadarZonePresencePanel extends HTMLElement {
       return;
     }
     const fromHash = new URLSearchParams(location.hash.slice(1)).get('radar');
+    if (!fromHash && this.home && this.radars.length) { await this._setTab('headcount'); return; } // the House is the home screen
     const stored = localStorage.getItem('rzp.radar');
     const pick = [fromHash, stored].find(id => this.radars.some(r => r.radar_id === id)) || this.radars[0]?.radar_id;
     if (pick) {
@@ -1301,8 +1302,8 @@ class RadarZonePresencePanel extends HTMLElement {
     const range = el('select', { onchange: e => { this.rangeS = +e.target.value; this._exitReplay(); this._loadHistory(); }, title: 'History range' },
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
     const tabs = el('div', { class: 'tabs' },
-      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
-      el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'));
+      el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'),
+      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'));
     h.classList.toggle('edit', this.editing && this.tab !== 'headcount');
     if (this.tab === 'headcount') {
       h.replaceChildren(

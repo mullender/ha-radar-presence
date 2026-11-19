@@ -34,13 +34,18 @@ const css = `
 .scroll { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
 :host([narrow]) .scroll { grid-template-columns: 1fr; }
 .house { position: relative; padding: 14px; min-width: 0; }
-.floors { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 56px; z-index: 1; }
-.floor h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666);
-  display: flex; gap: 8px; align-items: baseline; }
-.floor h2 .n { margin-left: auto; font-size: 15px; color: var(--primary-text-color, #222); text-transform: none; }
+.floors { position: relative; display: flex; flex-direction: column; gap: 22px; z-index: 1; }
+.floor { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; align-items: start; padding-bottom: 18px; border-bottom: 1px solid var(--divider-color, #e4e4e4); }
+.floor:last-child { border-bottom: 0; }
+.floor .rooms { display: flex; flex-wrap: wrap; gap: 12px; }
+.floor h2 { margin: 6px 0 0; font-size: 13px; font-weight: 500; color: var(--secondary-text-color, #666); display: flex; flex-direction: column; gap: 2px; }
+.floor h2 .n { font-size: 28px; font-weight: 400; color: var(--primary-text-color, #222); }
 .floor.doubt h2 .n { color: var(--warning-color, #f9a825); }
-.space { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ddd); border-radius: 8px; padding: 8px 10px; margin-bottom: 14px;
-  min-height: 74px; transition: box-shadow .2s; }
+.space { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ddd); border-radius: 10px; padding: 8px 10px;
+  width: 190px; min-height: 84px; transition: box-shadow .2s, background .2s; }
+.space.occ { background: color-mix(in srgb, #3b82f6 10%, var(--card-background-color, #fff)); border-color: color-mix(in srgb, #3b82f6 35%, var(--divider-color, #ddd)); }
+.space.link { cursor: pointer; }
+.space.link:hover { box-shadow: 0 1px 6px rgba(0,0,0,.15); }
 .space.blind { border-style: dashed; }
 .space.hit { box-shadow: 0 0 0 2px var(--primary-color, #03a9f4); }
 .space .top { display: flex; align-items: baseline; gap: 6px; }
@@ -52,15 +57,15 @@ const css = `
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); cursor: pointer; }
 .space .meta { font-size: 11px; color: var(--secondary-text-color, #777); }
 .dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; min-height: 22px; }
-.dot { font-size: 11px; min-width: 26px; height: 22px; padding: 0 5px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
+.dot { font-size: 11px; font-weight: 600; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
   border: 2px solid var(--c); color: var(--c); cursor: pointer; }
 .dot.v { background: var(--c); color: #fff; }
-.dot.u { border-style: dashed; }
+.dot.u { border-style: dotted; }
 .dot.p { opacity: .45; }
 .dot.sel { outline: 2px solid var(--primary-text-color, #222); outline-offset: 1px; }
 .doors { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .chip { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--secondary-background-color, #eee); color: var(--secondary-text-color, #555); }
-.chip.open { background: #fb8c00; color: #fff; }
+.chip.open { background: #d97706; color: #fff; }
 svg.links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
 svg.links path { fill: none; stroke: var(--divider-color, #bbb); stroke-width: 2; }
 svg.links path.door { stroke-dasharray: 5 4; }
@@ -193,7 +198,7 @@ export class RzpHeadcount extends HTMLElement {
       a.regions.push(sp.id);
       this.areas.set(sp.area_id, a);
     }
-    const levels = [...new Set([...this.areas.values()].map(a => a.level))].sort((x, y) => x - y);
+    const levels = [...new Set([...this.areas.values()].map(a => a.level))].sort((x, y) => y - x); // upstairs on top
     const floorName = lv => d.floors.find(f => f.level === lv)?.name || `Floor ${lv}`;
     this.floors = levels.map(lv => ({ level: lv, name: floorName(lv), areas: [...this.areas.values()].filter(a => a.level === lv) }));
     this.links = [];
@@ -205,6 +210,16 @@ export class RzpHeadcount extends HTMLElement {
       seen.add(key);
       this.links.push({ a: x, b: y, door });
     }
+  }
+
+  /** 'Garage Entry Door Sensor Door' -> 'Garage entry door'. */
+  _doorLabel(e) {
+    const n = this._entityName(e).replace(/\b(contact|sensor)\b/gi, ' ').replace(/\s+/g, ' ').trim().replace(/\b(\w+)\s+\1$/i, '$1');
+    return n.charAt(0) + n.slice(1).toLowerCase();
+  }
+
+  _doorWord(st) {
+    return { on: 'open', off: 'closed', open: 'open', closed: 'closed', opening: 'opening', closing: 'closing', locked: 'locked', unlocked: 'unlocked' }[st] || st;
   }
 
   _name(region) { return this.areas.get(this.regionArea[region] ?? region)?.name ?? region; }
@@ -285,26 +300,32 @@ export class RzpHeadcount extends HTMLElement {
       const doubt = unknownFloors.has(f.level);
       const n = f.areas.reduce((x, a) => x + (per.get(a.id) || 0), 0);
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
-        el('h2', {}, f.name, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `≥${n}` : String(n))),
-        f.areas.map(a => {
+        el('h2', {}, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), f.name),
+        el('div', { class: 'rooms' }, f.areas.map(a => {
           const doors = Object.entries(this.data.doors).filter(([, rs]) => rs.some(r => this.regionArea[r] === a.id));
-          const box = el('div', { class: `space${a.observed ? '' : ' blind'}${hit.has(a.id) ? ' hit' : ''}` },
+          const radar = a.regions.map(r => this.regionRadars[r]?.[0]).find(Boolean);
+          const count = per.get(a.id) || 0;
+          const box = el('div', {
+            class: `space${a.observed ? '' : ' blind'}${hit.has(a.id) ? ' hit' : ''}${count ? ' occ' : ''}${radar ? ' link' : ''}`,
+            title: radar ? `Open ${a.name} at this moment` : '',
+            onclick: e => { if (radar && !e.composedPath().some(n => n.tagName === 'BUTTON' || n.classList?.contains('dot'))) this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: t ?? Date.now() / 1000 } })); },
+          },
             el('div', { class: 'top' }, el('span', { class: 'name', title: a.name }, a.name),
               t === null ? el('span', { class: 'fix' },
                 el('button', { title: 'Correct: one person fewer here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) - 1) }, '−'),
                 el('button', { title: 'Correct: one more person here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) + 1) }, '+')) : '',
               el('span', { class: 'count' }, doubt ? `${per.get(a.id) || 0}?` : String(per.get(a.id) || 0))),
-            el('div', { class: 'meta' }, a.observed ? 'radar' : 'no radar: through its doorways'),
+            el('div', { class: 'meta' }, a.observed ? '' : 'no radar · counted at its doors'),
             el('div', { class: 'dots' }, (byArea.get(a.id) || []).sort((x, y) => x[0] - y[0]).map(([id, flags]) => this._dot(id, flags))),
             doors.length ? el('div', { class: 'doors' }, doors.map(([e]) => {
               const st = this._doorAt(e, t);
               const open = ['on', 'open', 'opening', 'closing', 'unlocked'].includes(st);
-              return el('span', { class: `chip${open ? ' open' : ''}`, title: `${e}: ${st}` }, `🚪 ${this._entityName(e)}: ${st}`);
+              return el('span', { class: `chip${open ? ' open' : ''}`, title: `${this._entityName(e)}: ${st}` }, `${this._doorLabel(e)} · ${this._doorWord(st)}`);
             })) : '',
           );
           this.boxes.set(a.id, box);
           return box;
-        }));
+        })));
     });
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     this.svg.setAttribute('class', 'links');
@@ -386,13 +407,14 @@ export class RzpHeadcount extends HTMLElement {
       const p = r(a), q = r(b);
       if (!p || !q) continue;
       let d;
-      if (Math.abs(p.l - q.l) < 5) { // same floor: a bracket on the right
-        const x = p.r, y1 = (p.t + p.b) / 2, y2 = (q.t + q.b) / 2;
-        d = `M${x},${y1} C${x + 26},${y1} ${x + 26},${y2} ${x},${y2}`;
-      } else {
+      if (Math.abs(p.t - q.t) < 5) { // same row: across the seam between the tiles
         const [L, R] = p.l < q.l ? [p, q] : [q, p];
-        const y1 = (L.t + L.b) / 2, y2 = (R.t + R.b) / 2, mx = (L.r + R.l) / 2;
-        d = `M${L.r},${y1} C${mx},${y1} ${mx},${y2} ${R.l},${y2}`;
+        const y = (L.t + L.b) / 2;
+        d = `M${L.r},${y} L${R.l},${y}`;
+      } else { // between floors: from the bottom of the upper tile to the top of the lower one
+        const [U, D] = p.t < q.t ? [p, q] : [q, p];
+        const x1 = (U.l + U.r) / 2, x2 = (D.l + D.r) / 2, my = (U.b + D.t) / 2;
+        d = `M${x1},${U.b} C${x1},${my} ${x2},${my} ${x2},${D.t}`;
       }
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', d);
