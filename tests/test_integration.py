@@ -1135,3 +1135,17 @@ async def test_a_room_no_radar_sees_follows_its_occupants(hass: HomeAssistant, r
     await setup_entry(hass, radar_device, [behind, door])
     state = hass.states.get(eid(hass, "pantry"))
     assert state.attributes.get("from_occupants") is True and state.state == "off"
+
+
+async def test_todo_answers_are_kept_on_the_server(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    """Another browser does not ask again: answers live in a store, and can be forgotten."""
+    await setup_entry(hass, radar_device, [])
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/todo/answer", "key": "radar1:spot:3,4", "answer": "nothing"})
+    assert (await client.receive_json())["success"]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/todo/answers"})
+    assert (await client.receive_json())["result"]["answers"]["radar1:spot:3,4"]["answer"] == "nothing"
+    await client.send_json_auto_id({"type": f"{DOMAIN}/todo/answer", "key": "radar1:spot:3,4", "answer": None})
+    assert (await client.receive_json())["success"]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/todo/answers"})
+    assert "radar1:spot:3,4" not in (await client.receive_json())["result"]["answers"]

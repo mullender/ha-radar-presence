@@ -58,6 +58,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_headcount_correct,
         ws_headcount_answer,
         ws_report_build,
+        ws_todo_answers,
+        ws_todo_answer,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -353,6 +355,34 @@ def ws_headcount_correct(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "invalid_space", str(err))
         return
     connection.send_result(msg["id"], {"t": t})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/todo/answers"})
+@websocket_api.async_response
+async def ws_todo_answers(hass: HomeAssistant, connection, msg) -> None:
+    """Answers given to To do questions (shared by every browser)."""
+    from .todo import async_get_todo
+
+    todo = await async_get_todo(hass)
+    connection.send_result(msg["id"], {"answers": todo.answers, "meta": todo.meta})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/todo/answer",
+        vol.Required("key"): vol.All(str, vol.Length(min=1, max=200)),
+        vol.Required("answer"): vol.Any(None, vol.All(str, vol.Length(max=100))),
+    }
+)
+@websocket_api.async_response
+async def ws_todo_answer(hass: HomeAssistant, connection, msg) -> None:
+    """Remember (or, with answer null, forget) the answer to one To do question."""
+    from .todo import async_get_todo
+
+    todo = await async_get_todo(hass)
+    todo.set(msg["key"], msg["answer"])
+    connection.send_result(msg["id"])
 
 
 CORRECTION_ANSWERS = ["left_unseen", "pet", "visitor", "not_sure"]
