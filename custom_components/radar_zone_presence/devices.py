@@ -37,6 +37,18 @@ def zone_device_info(zone: Zone, radar_id: str, radar_device_id: str | None, spo
     return info
 
 
+def area_device_info(area_id: str, area_name: str) -> DeviceInfo:
+    """A room no shape stands for (a room without a radar): its device holds its occupancy and occupants."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"area_{area_id}")},
+        name=area_name,
+        manufacturer=MANUFACTURER,
+        model=ROOM_MODEL,
+        sw_version=VERSION,
+        suggested_area=area_name,
+    )
+
+
 def radar_device_info(feed: RadarFeed, radar: DeviceEntry | None) -> DeviceInfo:
     """Our side of a radar (its exits), linked to the radar's own device through its connections.
 

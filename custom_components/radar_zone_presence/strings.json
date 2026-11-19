@@ -114,8 +114,8 @@
       "people_floor": {
         "name": "{floor} occupants"
       },
-      "people_space": {
-        "name": "{space} occupants"
+      "room_occupants": {
+        "name": "Occupants"
       }
     },
     "event": {

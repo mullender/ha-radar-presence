@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN, MANUFACTURER, VERSION
+from .devices import area_device_info, zone_device_info
 from .entity import ZoneEntity
 from .headcount_runtime import HeadCountRuntime
 from .home import HomeRuntime, ZoneDef
@@ -26,8 +27,11 @@ async def async_setup_entry(
     if hc.hc is not None:
         entities: list[PeopleSensor] = [HomePeopleSensor(entry, hc)]
         entities += [FloorPeopleSensor(entry, hc, level) for level in sorted(hc.floors)]
-        entities += [SpacePeopleSensor(entry, hc, sid) for sid in hc.area_spaces()]
         async_add_entities(entities)
+        for sid in hc.area_spaces():
+            # On the room shape's device (added under its subentry, or HA unlinks the device from it), else the area's own.
+            zd = runtime.room_zone(hc.spaces[sid].area_id)
+            async_add_entities([SpacePeopleSensor(entry, runtime, sid)], config_subentry_id=zd.subentry_id if zd else None)
 
 
 class PeopleSensor(SensorEntity):
@@ -97,17 +101,27 @@ class FloorPeopleSensor(PeopleSensor):
 
 
 class SpacePeopleSensor(PeopleSensor):
-    _attr_translation_key = "people_space"
+    """A room's occupants, on the room's own device (with its occupancy): "Kitchen Occupants"."""
 
-    def __init__(self, entry: ConfigEntry, hc: HeadCountRuntime, space_id: str) -> None:
+    _attr_translation_key = "room_occupants"
+
+    def __init__(self, entry: ConfigEntry, runtime: HomeRuntime, space_id: str) -> None:
+        hc = runtime.headcount
         self.space_id = space_id
         sp = hc.spaces[space_id]
-        self._attr_translation_placeholders = {"space": sp.name}
         super().__init__(entry, hc, f"people_{space_id}")
+        self._attr_device_info = room_device_info(runtime, sp.area_id, sp.name)
 
     def _value(self) -> tuple[int | None, dict[str, Any]]:
         sp = self.hc.spaces[self.space_id]
         return self.hc.space_count(self.space_id), {"area_id": sp.area_id, "radar": sp.observed}
+
+
+def room_device_info(runtime: HomeRuntime, area_id: str, name: str) -> DeviceInfo:
+    """The device of a room: its room shape's, or (a room no shape stands for) one of its own."""
+    if (zd := runtime.room_zone(area_id)) is not None:
+        return zone_device_info(zd.zone, zd.radar_id, runtime.feeds[zd.radar_id].device_id, zd.spot)
+    return area_device_info(area_id, name)
 
 
 class ZoneTargetCountSensor(ZoneEntity, SensorEntity):

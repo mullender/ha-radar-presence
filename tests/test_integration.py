@@ -670,12 +670,18 @@ async def test_head_count_sensors_follow_the_front_door(hass: HomeAssistant, rad
     assert hass.states.get(home_eid).state == "0"
     assert hass.states.get(home_eid).attributes["friendly_name"] == "Home Occupants"
     assert hass.states.get(floor_eid).attributes["friendly_name"] == "Home Ground floor occupants"
-    assert hass.states.get(space_eid).attributes["friendly_name"] == "Home Entry occupants"
+    assert hass.states.get(space_eid).attributes["friendly_name"] == "Entry Occupants"  # on the room's own device
 
+    # The entry has no room shape: its own device (model Room) holds its occupancy and its occupants.
+    occ_eid = ent_reg.async_get_entity_id("binary_sensor", DOMAIN, f"{entry.entry_id}_occupied_{area.id}")
+    room_dev = dr.async_get(hass).async_get(ent_reg.async_get(space_eid).device_id)
+    assert room_dev.model == "Room" and room_dev.name == "Entry" and ent_reg.async_get(occ_eid).device_id == room_dev.id
+    assert hass.states.get(occ_eid).state == "off"
     for k in range(8):  # someone in the room for a while (no door: counted while the home starts up)
         await move(hass, 1, -40 + k, 120)
         await _tick(hass, freezer, 4)
     assert hass.states.get(home_eid).state == "1"
+    assert hass.states.get(occ_eid).state == "on"
     assert hass.states.get(floor_eid).state == "1" and hass.states.get(space_eid).state == "1"
 
     hass.states.async_set("binary_sensor.front_door", "on")
@@ -1114,3 +1120,18 @@ async def test_rt_ref_1_one_radar_track_where_another_looks_is_a_reflection_unle
     (tg,) = group.last_targets
     assert group.track_radars[tg.slot] == frozenset({0})
     assert entry.runtime_data.headcount._unconfirmed(group) == (set() if excluded else {tg.slot})
+
+
+async def test_a_room_no_radar_sees_follows_its_occupants(hass: HomeAssistant, radar_device: str) -> None:
+    """A room drawn where no radar looks (behind the sensor) takes its occupancy from the occupant count."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    hall = ar.async_get(hass).async_create("Hall", floor_id=floor.floor_id)
+    pantry = ar.async_get(hass).async_create("Pantry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=hall.id)
+    behind = {**zone("pantry", "Pantry", [[-40, -100], [40, -100], [40, -60], [-40, -60]]), "area_id": pantry.id}
+    door = {**zone("door", "Pantry door", [[-10, 5], [10, 5], [10, 15], [-10, 15]], kind="exit"), "leads_to": [pantry.id]}
+    await setup_entry(hass, radar_device, [behind, door])
+    state = hass.states.get(eid(hass, "pantry"))
+    assert state.attributes.get("from_occupants") is True and state.state == "off"

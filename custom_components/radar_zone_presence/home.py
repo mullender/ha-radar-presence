@@ -299,6 +299,39 @@ class HomeRuntime:
 
     # ------------------------------------------------------------- lookups
 
+    def room_zone(self, area_id: str) -> ZoneDef | None:
+        """The room shape that stands for an area (its device holds the room's occupancy and occupants), if any."""
+        from homeassistant.helpers import device_registry as dr
+
+        dev_reg = dr.async_get(self.hass)
+        for zd in self.zones.values():
+            if zd.spot:
+                continue
+            radar = dev_reg.async_get(self.feeds[zd.radar_id].device_id)
+            if (zd.zone.area_id or (radar.area_id if radar else None)) == area_id:
+                return zd
+        return None
+
+    def zone_area(self, zone_id: str) -> str | None:
+        """A zone's area: its own, or its radar's."""
+        from homeassistant.helpers import device_registry as dr
+
+        zd = self.zones[zone_id]
+        if zd.zone.area_id:
+            return zd.zone.area_id
+        radar = dr.async_get(self.hass).async_get(self.feeds[zd.radar_id].device_id)
+        return radar.area_id if radar else None
+
+    def seen(self, zone_id: str) -> bool:
+        """Does any radar's view reach the zone at all? A room no radar sees takes its occupancy from the count."""
+        group = self.zone_group(zone_id)
+        zd = group.zone_defs[zone_id]
+        to_zone_radar = group.to_anchor[zd.radar_id]
+        return any(
+            _fov_covers(transform_polygon(mul(invert(group.to_anchor[f.id]), to_zone_radar), zd.zone.polygon), self._max_distance.get(f.id, DEFAULT_MAX_DISTANCE_MM))
+            for f in group.feeds
+        )
+
     def zone_group(self, zone_id: str) -> GroupRuntime:
         return self.group_of[self.zones[zone_id].radar_id]
 

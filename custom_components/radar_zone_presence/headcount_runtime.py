@@ -761,6 +761,10 @@ class HeadCountRuntime:
         counts = self.hc.by_region()
         return sum(counts.get(sid, 0) for sid, other in self.spaces.items() if other.area_id == sp.area_id)
 
+    def area_count(self, area_id: str) -> int | None:
+        """Occupants of an area (None: unknown, or not a room the count knows)."""
+        return self.space_count(area_id) if area_id in self.spaces else None
+
     def area_spaces(self) -> list[str]:
         """One space per area for the sensors (an area seen by several radar groups has several spaces)."""
         return [sid for sid, sp in self.spaces.items() if sid == sp.area_id]
@@ -805,4 +809,5 @@ class HeadCountRuntime:
             f"{eid}_nobody_home",
             *(f"{eid}_people_floor_{lv}" for lv in self.floors),
             *(f"{eid}_people_{s}" for s in self.area_spaces()),
+            *(f"{eid}_occupied_{s}" for s in self.area_spaces() if self.home.room_zone(self.spaces[s].area_id) is None),
         }
