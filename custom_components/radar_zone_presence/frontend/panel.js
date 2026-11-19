@@ -1841,7 +1841,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this._renderAt();
     } else {
       const z = this.zones.find(q => q.id === this.selectedId);
-      s.replaceChildren(el('div', { class: 'guide' }), zonesSec, z ? this._zoneEditor() : [sensor, this._settingsSection(), this._firmwareSection()], el('div', { class: 'section spots' }), this._doorsSection());
+      s.replaceChildren(el('div', { class: 'guide' }), zonesSec, ...(z ? [this._zoneEditor() || ''] : [sensor, this._settingsSection(), this._firmwareSection()]), el('div', { class: 'section spots' }), this._doorsSection());
     }
     this._renderLiveBadges();
     this._renderSideStats();
