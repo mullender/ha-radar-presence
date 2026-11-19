@@ -393,7 +393,8 @@ export class RzpHeadcount extends HTMLElement {
   _followUp(t, from, to) {
     if (t == null) return;
     this.shadowRoot.querySelector('.rzp-followup')?.remove();
-    this.shadowRoot.append(correctionFollowUp({ hass: this.hass, t, from, to, floors: this.floors.map(f => f.name) }));
+    this.shadowRoot.append(correctionFollowUp({ hass: this.hass, t, from, to, floors: this.floors.map(f => f.name),
+      onReport: this.admin ? () => this.dispatchEvent(new CustomEvent('report', { detail: { t, symptom: 'count_wrong' } })) : null }));
   }
 
   /** Person A, B, C…: lettered per loaded range, so they never read as identities. */
@@ -670,7 +671,8 @@ export class RzpHeadcount extends HTMLElement {
           el('ul', {}, this._howWeKnow(e).map(b => el('li', {}, b))),
           el('div', { class: 'links' },
             e.token ? el('button', { onclick: () => { this.selected = e.token; this.render(); } }, `Follow person ${this._letter(e.token)}`) : '',
-            radar ? el('button', { onclick: () => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: e.t } })) }, `▶ Play in the ${this._room(e.region)}`) : '')) : '');
+            radar ? el('button', { onclick: () => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: e.t } })) }, `▶ Play in the ${this._room(e.region)}`) : '',
+            this.admin ? el('button', { onclick: () => this.dispatchEvent(new CustomEvent('report', { detail: { t: e.t, symptom: 'count_wrong' } })) }, 'Report a problem with this') : '')) : '');
     });
     const chip = (key, label) => el('button', { class: `fchip${this.filter === key ? ' on' : ''}`, onclick: () => { this.filter = key; this.render(); } }, label);
     this.logEl.replaceChildren(

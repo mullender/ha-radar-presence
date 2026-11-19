@@ -305,7 +305,7 @@ export function radarTransforms(fromId, radars) {
  * The optional follow-up to a correction, as a snackbar-style prompt (never blocking): what happened?
  * Answers are stored with the correction (headcount/answer), for tuning and for pets later.
  */
-export function correctionFollowUp({ hass, t, from, to, floors = [], onClose = () => {} }) {
+export function correctionFollowUp({ hass, t, from, to, floors = [], onClose = () => {}, onReport = null }) {
   const answers = [['left_unseen', 'Someone left unseen'], ['pet', 'A pet'], ['visitor', 'A visitor came and went'], ['not_sure', 'Not sure']];
   const box = el('div', { class: 'rzp-followup', style: {
     position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)', zIndex: 30, maxWidth: '520px', width: 'calc(100% - 32px)',
@@ -330,7 +330,8 @@ export function correctionFollowUp({ hass, t, from, to, floors = [], onClose = (
       el('span', { style: { color: 'var(--secondary-text-color, #777)' } }, 'What happened? (optional, helps tune)'),
       el('button', { style: { marginLeft: 'auto', border: 0, background: 'none', cursor: 'pointer', color: 'inherit', fontSize: '15px' }, title: 'Dismiss', onclick: close }, '✕')),
     el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' } },
-      answers.map(([key, label]) => chip(label, () => send(key, where?.value || null))), where || ''));
+      answers.map(([key, label]) => chip(label, () => send(key, where?.value || null))), where || '',
+      onReport ? el('a', { style: { marginLeft: 'auto', fontSize: '12px', cursor: 'pointer', color: 'var(--secondary-text-color, #777)' }, onclick: () => { close(); onReport(); } }, 'Report a problem') : ''));
   timer = setTimeout(close, 15000);
   box.addEventListener('pointerenter', () => clearTimeout(timer));
   return box;

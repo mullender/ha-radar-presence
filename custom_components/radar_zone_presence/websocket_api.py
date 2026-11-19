@@ -8,7 +8,7 @@ and settings needs an admin.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
@@ -57,6 +57,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_headcount_subscribe,
         ws_headcount_correct,
         ws_headcount_answer,
+        ws_report_build,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -149,7 +150,11 @@ def ws_list(hass: HomeAssistant, connection, msg) -> None:
 def ws_config(hass: HomeAssistant, connection, msg) -> None:
     if (found := _radar(hass, connection, msg)) is None:
         return
-    entry, runtime, sub = found
+    connection.send_result(msg["id"], radar_config(hass, *found))
+
+
+def radar_config(hass: HomeAssistant, entry, runtime, sub) -> dict[str, Any]:
+    """One radar as the panel (and a problem report) sees it: targets, zones, settings, field of view."""
     rid = sub.subentry_id
     feed = runtime.feeds[rid]
     dev_reg = dr.async_get(hass)
@@ -174,9 +179,7 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
         )
     zones += [dict(z) for z in sub.data.get(CONF_ZONES, [])]
     group = runtime.group_of[rid]
-    connection.send_result(
-        msg["id"],
-        {
+    return {
             "radar_id": rid,
             "home_entry_id": entry.entry_id,
             "title": sub.title,
@@ -195,8 +198,7 @@ def ws_config(hass: HomeAssistant, connection, msg) -> None:
             "fov": {"half_angle_deg": FOV_HALF_ANGLE_DEG, "max_distance_mm": geometry["max_distance_mm"]},
             "device_zones": geometry["device_zones"],
             "device_mounting": geometry["mounting"],
-        },
-    )
+    }
 
 
 FILTERS_SCHEMA = vol.Schema(
@@ -354,6 +356,37 @@ def ws_headcount_correct(hass: HomeAssistant, connection, msg) -> None:
 
 
 CORRECTION_ANSWERS = ["left_unseen", "pet", "visitor", "not_sure"]
+REPORT_SYMPTOMS = ["count_wrong", "light_on_by_itself", "stayed_occupied", "went_clear", "other"]
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/report/build",
+        vol.Required("start"): vol.Coerce(float),
+        vol.Required("end"): vol.Coerce(float),
+        vol.Required("symptom"): vol.In(REPORT_SYMPTOMS),
+        vol.Optional("expected", default=""): vol.All(str, vol.Length(max=2000)),
+        vol.Optional("keep_time_of_day", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_report_build(hass: HomeAssistant, connection, msg) -> None:
+    """Report a problem: one window (at most 30 min), anonymized. The panel downloads it; nothing is sent anywhere."""
+    from .report import async_build_report
+
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    if _recorder_missing(hass, connection, msg):
+        return
+    start = datetime.fromtimestamp(msg["start"], UTC)
+    end = datetime.fromtimestamp(max(msg["end"], msg["start"] + 1), UTC)
+    report = await async_build_report(
+        hass, entry, start, end, symptom=msg["symptom"], expected=msg["expected"], keep_time_of_day=msg["keep_time_of_day"]
+    )
+    connection.send_result(msg["id"], report)
 
 
 @websocket_api.websocket_command(

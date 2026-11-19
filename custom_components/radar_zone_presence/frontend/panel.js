@@ -14,6 +14,7 @@ import {
   EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
+import { openReportDialog } from './report.js';
 
 const DOMAIN = 'radar_zone_presence';
 const PANEL_PATH = 'radar-zones';
@@ -1233,8 +1234,10 @@ class RadarZonePresencePanel extends HTMLElement {
     this.hcEl = document.createElement('rzp-headcount');
     this.hcEl.hass = this._hass;
     this.hcEl.details = this.details;
+    this.hcEl.admin = this.admin;
     this.hcEl.style.display = 'none';
     this.hcEl.addEventListener('open-radar', e => this._openRadarAt(e.detail.radar, e.detail.t));
+    this.hcEl.addEventListener('report', e => this._report(e.detail.t, e.detail.symptom));
     root.append(el('div', { class: 'app' }, this.header, this.bodyEl, this.hcEl));
 
     this.plot.addEventListener('zones-change', e => {
@@ -1318,6 +1321,7 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
         el('h1', {}, 'Presence'), tabs, el('div', { class: 'spacer' }),
         el('button', { class: 'ibtn', title: 'Copy a link to this moment', onclick: () => this._copyHeadcountLink() }, '🔗'),
+        !this.admin ? '' : el('button', { class: 'ibtn', title: 'Report a problem…', onclick: () => this._report(this.hcEl.cursor ?? Date.now() / 1000) }, '⚑'),
         !this.admin ? '' : el('button', { class: 'ibtn', title: this.details ? 'Hide details' : 'Show details: radar sightings, ignored tracks', onclick: () => { this._setDetails(!this.details); this._renderHeader(); } }, this.details ? '◉' : '◎'));
       return;
     }
@@ -1395,10 +1399,17 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'bp-acts' },
         el('button', { class: 'pchip', onclick: () => { close(); this._showTime(a, Math.max(60, (b - a) * 3)); this._seek(Math.max(this.hist.start, a - 3)); this._togglePlay(); } }, '▶ Play this moment'),
         ...fixes,
-        el('button', { class: 'pchip', onclick: close }, ex.cause === 'walked' ? 'Close' : 'It was real')));
+        el('button', { class: 'pchip', onclick: close }, ex.cause === 'walked' ? 'Close' : 'It was real'),
+        this.admin ? el('button', { class: 'pchip', onclick: () => { close(); this._report(a, z.kind === 'include' ? 'light_on_by_itself' : 'other'); } }, 'It was wrong…') : ''));
     addEventListener('pointerdown', away, true);
     this.shadowRoot.append(pop);
     this._pop = pop;
+  }
+
+  /** Report a problem around t: an anonymized file to attach to an issue. */
+  _report(t, symptom = null) {
+    if (!this.admin) return;
+    openReportDialog({ hass: this.hass, root: this.shadowRoot, t, symptom, radars: this.radars.length });
   }
 
   /** The ⋮ menu of the radar view. */
@@ -1411,7 +1422,8 @@ class RadarZonePresencePanel extends HTMLElement {
       !this.admin ? '' : item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
       !this.admin ? '' : item('Export shapes…', () => this._exportZones(), !this.zones.length),
       !this.admin ? '' : item('Import shapes…', () => this._importZones()),
-      !this.admin ? '' : item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)));
+      !this.admin ? '' : item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)),
+      !this.admin ? '' : item('Report a problem…', () => this._report(this.cursor ?? Date.now() / 1000)));
     const close = () => { menu.remove(); this._menu = null; removeEventListener('pointerdown', away, true); };
     const away = e => { if (!e.composedPath().includes(menu)) close(); };
     addEventListener('pointerdown', away, true);
