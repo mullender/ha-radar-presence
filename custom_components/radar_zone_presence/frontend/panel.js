@@ -1061,6 +1061,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _select(zoneId, vertex) {
+    this._linkedSel = null;
     this.selectedId = zoneId;
     this.selectedVertex = vertex;
     this._updatePlot();
@@ -1254,6 +1255,7 @@ class RadarZonePresencePanel extends HTMLElement {
       }
     });
     this.plot.addEventListener('select', e => this._select(e.detail.zoneId, e.detail.vertex));
+    this.plot.addEventListener('linked', e => this._openLinked(e.detail.radarId, e.detail.zoneId));
     this.plot.addEventListener('zone-drawn', e => { this._addZone(e.detail.polygon, e.detail.kind); this._setTool('select'); });
     this.plot.addEventListener('tool', e => this._setTool(e.detail.tool));
     this.plot.addEventListener('pointer-world', e => { this._pointer = e.detail; this._renderPointer(); });
@@ -1404,6 +1406,16 @@ class RadarZonePresencePanel extends HTMLElement {
     addEventListener('pointerdown', away, true);
     this.shadowRoot.append(pop);
     this._pop = pop;
+  }
+
+  /** A shape drawn on a linked radar was clicked: say so, and offer to open it there. */
+  _openLinked(radarId, zoneId) {
+    const peer = this.peers.get(radarId);
+    const z = peer?.cfg.zones.find(q => q.id === zoneId);
+    if (!z) return;
+    this.selectedId = null;
+    this._linkedSel = { radarId, zoneId };
+    this._renderSide();
   }
 
   /** Report a problem around t: an anonymized file to attach to an issue. */
@@ -1573,6 +1585,7 @@ class RadarZonePresencePanel extends HTMLElement {
       dark: !!this.hass?.themes?.darkMode,
       labels: this._shapeLabels(),
       coverage: this._coverage(),
+      linked: this._linkedShapes(),
       showGrid: this.editing && this.snap.grid,
       editing: this.editing,
       opacity: this.detOpacity,
@@ -1619,6 +1632,20 @@ class RadarZonePresencePanel extends HTMLElement {
       const lv = level(z.leads_to[0]);
       const arrow = here == null || lv == null || lv === here ? '→' : lv > here ? '↑' : '↓';
       out[z.id] = { glyph: arrow === '→' ? 'door' : 'stairs', text: `${arrow} ${names}` };
+    }
+    return out;
+  }
+
+  /** Shapes drawn on linked radars, in this radar's frame: one room view with several cones. */
+  _linkedShapes() {
+    const out = [];
+    for (const [id, T] of this._peerTransforms()) {
+      const peer = this.peers.get(id);
+      if (!peer) continue;
+      for (const z of peer.cfg.zones) {
+        if (validatePolygon(z.polygon)) continue;
+        out.push({ radarId: id, radarTitle: peer.title, zone: { ...this._editable(z), polygon: z.polygon.map(p => affineApply(T, p)) } });
+      }
     }
     return out;
   }
@@ -1734,6 +1761,16 @@ class RadarZonePresencePanel extends HTMLElement {
   /** Review: the selected shape in words, with its preview and recorded history. */
   _shapeSummary() {
     const z = this.zones.find(q => q.id === this.selectedId);
+    const ls = this._linkedSel;
+    if (!z && ls) {
+      const peer = this.peers.get(ls.radarId), lz = peer?.cfg.zones.find(q => q.id === ls.zoneId);
+      if (!lz) return null;
+      const st = KIND_STYLE[styleKind(this._editable(lz))] || KIND_STYLE.include;
+      return el('div', { class: 'section' },
+        el('h3', {}, glyphSvg(st.glyph, kindTone(styleKind(this._editable(lz))), 14), el('span', { class: 'grow', style: { marginLeft: '6px' } }, lz.name)),
+        el('div', { class: 'help' }, `${st.label} · drawn on ${peer.title}, a linked radar. Its state shows here; it is edited there.`),
+        el('div', { class: 'actions' }, el('button', { class: 'btn', onclick: () => { this._linkedSel = null; this._selectRadar(ls.radarId).then(() => this._select(ls.zoneId, null)); } }, `Open ${peer.title.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '')}`)));
+    }
     if (!z) return null;
     const st = KIND_STYLE[styleKind(z)] || KIND_STYLE.include;
     const saved = this.config.zones.find(q => q.id === z.id);
@@ -1758,15 +1795,20 @@ class RadarZonePresencePanel extends HTMLElement {
       if (z.kind === 'include') rows.push([z, states[z.id] ? 'Occupied' : states[z.id] === undefined ? 'not saved yet' : 'Clear', !!states[z.id]]);
       else if (z.kind === 'exit' && z.door_entity_id) { const o = this._doorOpenAt(z.door_entity_id, replay ? this.cursor : null); rows.push([z, o ? 'Open' : 'Closed', o]); }
     }
+    if (!replay) { // linked radars' rooms: their state arrives with this group's live updates
+      for (const { zone: z, radarTitle } of this._linkedShapes()) {
+        if (z.kind === 'include' && states[z.id] !== undefined) rows.push([z, states[z.id] ? 'Occupied' : 'Clear', !!states[z.id], radarTitle.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '')]);
+      }
+    }
     const anyone = replay ? this._zoneOnAt('presence', this.cursor) : this.livePresence;
     const key = JSON.stringify([at == null ? null : Math.floor(at), rows.map(r => r[1]), anyone, this.selectedId]);
     if (key === this._atKey) return;
     this._atKey = key;
     box.replaceChildren(
       el('h3', {}, at == null ? 'Now' : `${this.mode === 'live' ? 'Live' : 'At'} ${fmtTime(at)}`),
-      ...rows.map(([z, label, on]) => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: () => this._select(z.id, null) },
+      ...rows.map(([z, label, on, via]) => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: () => (this.zones.some(q => q.id === z.id) ? this._select(z.id, null) : this._openLinked(this._linkedShapes().find(l => l.zone.id === z.id)?.radarId, z.id)) },
         glyphSvg((KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph, this._zoneColor(z), 14),
-        el('span', { class: 'nm' }, z.name), el('span', { class: `st${on ? ' on' : ''}` }, label))),
+        el('span', { class: 'nm' }, z.name, via ? el('span', { class: 'help' }, ` · ${via}`) : ''), el('span', { class: `st${on ? ' on' : ''}` }, label))),
       el('div', { class: 'at-row' }, el('span', { class: 'nm help' }, 'Anyone in view (not ignored)'), el('span', { class: `st${anyone ? ' on' : ''}` }, anyone ? 'Yes' : 'No')),
       rows.length ? '' : el('div', { class: 'help' }, 'No rooms on this radar yet. Press Edit to draw one.'));
   }

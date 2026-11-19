@@ -109,6 +109,7 @@ export class RzpPlot extends HTMLElement {
     this.showDeviceZones = false; // zones saved on the radar: only while importing them
     this.opacity = 1; // detection density control
     this.editing = false; // edit mode: handles, and other shapes recede while one is selected
+    this.linked = []; // shapes drawn on linked radars, in this frame: [{zone, radarId, radarTitle}] (shown, not edited here)
 
     // View
     this.scale = 0.08; // px per mm
@@ -232,6 +233,7 @@ export class RzpPlot extends HTMLElement {
     const out = [[0, 0]];
     for (const z of this.zones) z.polygon.forEach((p, i) => { if (!(z.id === excludeZoneId && i === excludeIndex)) out.push(p); });
     for (const dz of this.deviceZones) out.push(...dz.polygon);
+    for (const l of this.linked || []) out.push(...l.zone.polygon); // snap to the linked radars' rooms: rooms meet at walls
     return out;
   }
 
@@ -361,6 +363,11 @@ export class RzpPlot extends HTMLElement {
       this.selectedVertex = idx + 1;
       this._emit('select', { zoneId: zone.id, vertex: idx + 1 });
       this._drag = { kind: 'vertex', zoneId: zone.id, idx: idx + 1, moved: true };
+      return;
+    }
+    if (role === 'linked') { // a shape drawn on a linked radar: open it there
+      this._emit('linked', { radarId: t.dataset.radar, zoneId: t.dataset.zone });
+      this._drag = { kind: 'pan', start: [e.clientX, e.clientY], pan: [...this.pan], click: true };
       return;
     }
     if (role === 'zone') {
@@ -754,22 +761,33 @@ export class RzpPlot extends HTMLElement {
       g.append(svg('defs', {}, cp));
     }
     const order = ['include', 'exclude', 'transient', 'linger', 'exit'];
-    const zones = this.zones.map((z, i) => [z, i]).sort((a, b) => order.indexOf(styleKind(a[0])) - order.indexOf(styleKind(b[0])) || a[1] - b[1]);
+    const zones = [...this.zones.map((z, i) => [z, i]), ...(this.linked || []).map((l, i) => [l.zone, 1000 + i, l])]
+      .sort((a, b) => order.indexOf(styleKind(a[0])) - order.indexOf(styleKind(b[0])) || a[1] - b[1]);
     const selected = [];
     const pills = [];
     const dim = this.editing && this.selectedId;
-    for (const [z] of zones) {
+    for (const [z, , link] of zones) {
       const st = KIND_STYLE[styleKind(z)] || KIND_STYLE.include;
       const color = this._zoneColor(z);
       const on = !!this.zoneStates[z.id];
       const isSel = z.id === this.selectedId;
       const fill = on ? st.on : st.fill;
       const d = this._path(z.polygon);
-      const grp = svg('g', dim && !isSel ? { opacity: 0.5 } : {});
+      const grp = svg('g', (dim && !isSel) || (link && this.editing) ? { opacity: 0.5 } : {});
       const room = styleKind(z) === 'include';
       if (room && clipId) {
         grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.4, 'pointer-events': 'none' }));
         grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.6, 'clip-path': `url(#${clipId})`, 'pointer-events': 'none' }));
+      }
+      if (link) {
+        const p = svg('path', { class: 'zone', d, 'data-role': 'linked', 'data-zone': z.id, 'data-radar': link.radarId,
+          fill: room && clipId ? 'transparent' : color, 'fill-opacity': room && clipId ? 0 : fill, stroke: color, 'stroke-width': 1, 'stroke-opacity': room ? 0.25 : 0 });
+        p.append(svg('title', {}, document.createTextNode(`${z.name}: drawn on ${link.radarTitle}`)));
+        grp.append(p);
+        if (z.kind === 'exit') grp.append(this._doorSymbol(z, color, on));
+        g.append(grp);
+        pills.push([z, color, on, false]);
+        continue;
       }
       grp.append(svg('path', {
         class: 'zone', d, 'data-role': 'zone', 'data-zone': z.id,
