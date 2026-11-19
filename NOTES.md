@@ -528,6 +528,14 @@ Decided with the user (round 1):
   its room occupied.
 - **People who aren't admins get a read-only panel** (House and Room in review).
   Read-only websocket commands drop require_admin; commands that write keep it.
+- **Doors (UX):** a doorway's door is None, Sliding (pocket, barn, patio,
+  overhead garage) or Hinged. Hinged = which room it opens into × which end
+  the hinge is on, picked from a row of drawings in the doorway's real
+  orientation (no "in = towards the radar", no left/right words); dragging the
+  leaf on the map changes the same setting. With a contact sensor, the leaf
+  follows the sensor during playback. Proposed use of the swept area: treat
+  detections inside it around a contact change as the door, not a person
+  (today only the map uses the swing).
 - **Pets deferred**; correction answers ("a pet") are recorded for later.
 - **Report a problem:** an anonymized `.rpreport.json.gz` for one window
   (export_history format + home model + Activity + corrections; names
