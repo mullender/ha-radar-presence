@@ -12,6 +12,8 @@
 // − on a room removes one; − on a floor removes from its only occupied room,
 // or asks which; − on home removes whoever has gone unseen longest.
 
+import { correctionFollowUp } from './util.js';
+
 const DOMAIN = 'radar_zone_presence';
 
 const css = `
@@ -123,10 +125,16 @@ class RadarZonePresenceHeadcountCard extends HTMLElement {
   }
 
   async _correct(space, count) {
+    const from = this._model?.home ?? 0;
+    const roomN = space ? this._model?.floors.flatMap(f => f.rooms).find(r => r.id === space)?.n ?? 0 : from;
     try {
-      await this._hass.callWS({ type: `${DOMAIN}/headcount/correct`, ...(space ? { space } : {}), count });
+      const r = await this._hass.callWS({ type: `${DOMAIN}/headcount/correct`, ...(space ? { space } : {}), count });
       this._pick = null;
       await this._refresh();
+      if (r?.t != null) {
+        document.querySelector('body > .rzp-followup')?.remove(); // (outside the card: it re-renders)
+        document.body.append(correctionFollowUp({ hass: this._hass, t: r.t, from, to: from - roomN + count, floors: (this._model?.floors || []).map(f => f.name) }));
+      }
     } catch (err) {
       this._error = `Could not correct: ${err.message || err.code}`;
       this._render();

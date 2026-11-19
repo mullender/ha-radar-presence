@@ -56,6 +56,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_headcount_history,
         ws_headcount_subscribe,
         ws_headcount_correct,
+        ws_headcount_answer,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -345,14 +346,33 @@ def ws_headcount_correct(hass: HomeAssistant, connection, msg) -> None:
         return
     try:
         hc = entry.runtime_data.headcount
-        if "space" in msg:
-            hc.correct(msg["space"], msg["count"])
-        else:
-            hc.correct_home(msg["count"])
+        t = hc.correct(msg["space"], msg["count"]) if "space" in msg else hc.correct_home(msg["count"])
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_space", str(err))
         return
-    connection.send_result(msg["id"])
+    connection.send_result(msg["id"], {"t": t})
+
+
+CORRECTION_ANSWERS = ["left_unseen", "pet", "visitor", "not_sure"]
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/headcount/answer",
+        vol.Required("t"): vol.Coerce(float),
+        vol.Required("answer"): vol.In(CORRECTION_ANSWERS),
+        vol.Optional("where"): vol.All(str, vol.Length(max=100)),
+    }
+)
+@callback
+def ws_headcount_answer(hass: HomeAssistant, connection, msg) -> None:
+    """The optional follow-up to a correction: what happened (someone left unseen, a pet, a visitor, not sure)."""
+    entry = _home(hass)
+    if entry is None or entry.state is not ConfigEntryState.LOADED:
+        connection.send_error(msg["id"], "not_loaded", "The home is not loaded")
+        return
+    n = entry.runtime_data.headcount.answer_correction(msg["t"], msg["answer"], msg.get("where"))
+    connection.send_result(msg["id"], {"updated": n})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/headcount/subscribe"})

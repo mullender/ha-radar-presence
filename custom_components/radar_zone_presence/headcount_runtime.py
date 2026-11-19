@@ -704,7 +704,7 @@ class HeadCountRuntime:
                     out.setdefault(d, []).extend([a, b])
         return out
 
-    def correct(self, space_id: str, n: int) -> None:
+    def correct(self, space_id: str, n: int) -> float:
         """Someone who knows sets a space's count (a phantom left over, someone missed). Logged as 'corrected'."""
         if self.hc is None or space_id not in self.spaces:
             raise ValueError(f"unknown space {space_id}")
@@ -716,15 +716,33 @@ class HeadCountRuntime:
                 self.hc.correct(sid, n if sid == space_id else 0, now)
         self._changed()
         self._store.async_delay_save(self._data, 0)
+        return now
 
-    def correct_home(self, n: int) -> None:
+    def correct_home(self, n: int) -> float:
         """Someone who knows sets the home count (0: nobody home). Only removes people. Logged as 'corrected'."""
         if self.hc is None:
             raise ValueError("no head count")
-        self._end_hold(time.time())
-        self.hc.correct_home(n, time.time())
+        now = time.time()
+        self._end_hold(now)
+        self.hc.correct_home(n, now)
         self._changed()
         self._store.async_delay_save(self._data, 0)
+        return now
+
+    def answer_correction(self, t: float, answer: str, where: str | None = None) -> int:
+        """Why the count was corrected at t ("pet", "visitor", ...), kept with the correction for tuning. Returns entries updated."""
+        n = 0
+        for e in reversed(self.log):
+            if e["t"] < t - 1:
+                break
+            if e["kind"] == "corrected" and abs(e["t"] - t) <= 1:
+                e["answer"] = answer
+                if where:
+                    e["where"] = where
+                n += 1
+        if n:
+            self._log_store.async_delay_save(self._log_data, LOG_SAVE_DELAY_S)
+        return n
 
     def home_count(self) -> int | None:
         return None if self.hc is None or self.hc.unknown() else self.hc.count()

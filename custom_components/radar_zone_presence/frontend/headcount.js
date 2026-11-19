@@ -6,7 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
-import { el, fmtTime, fmtDateTime, fmtDuration } from './util.js';
+import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const RANGES = [['1 hour', 3600], ['6 hours', 21600], ['24 hours', 86400], ['3 days', 259200]];
@@ -368,8 +368,10 @@ export class RzpHeadcount extends HTMLElement {
   }
 
   async _correctHome(n) {
+    const from = this._total(this._stateAt(null));
     try {
-      await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, count: n });
+      const r = await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, count: n });
+      this._followUp(r?.t, from, n);
     } catch (err) {
       alert(`Could not correct: ${err.message || err.code}`);
     }
@@ -378,11 +380,20 @@ export class RzpHeadcount extends HTMLElement {
   /** A correction from someone who knows: this space holds n people now. */
   async _correct(space, n) {
     if (n < 0) return;
+    const from = this._total(this._stateAt(null));
     try {
-      await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, space, count: n });
+      const r = await this.hass.callWS({ type: `${DOMAIN}/headcount/correct`, space, count: n });
+      this._followUp(r?.t, from, from - (this._counts(this._stateAt(null)).per.get(space) || 0) + n);
     } catch (err) {
       alert(`Could not correct: ${err.message || err.code}`);
     }
+  }
+
+  /** "Corrected from 3 to 2. What happened?" (optional, never blocking). */
+  _followUp(t, from, to) {
+    if (t == null) return;
+    this.shadowRoot.querySelector('.rzp-followup')?.remove();
+    this.shadowRoot.append(correctionFollowUp({ hass: this.hass, t, from, to, floors: this.floors.map(f => f.name) }));
   }
 
   /** Person A, B, C…: lettered per loaded range, so they never read as identities. */
@@ -573,7 +584,10 @@ export class RzpHeadcount extends HTMLElement {
       case 'confirmed': return `Someone turned up in the ${room} without coming through a door`;
       case 'not a person': return `What turned up in the ${room} was not a person`;
       case 'ghost': return `Ignored a detection in the ${room} that never moved (a fan?)`;
-      case 'corrected': return group.length > 1 ? 'You corrected the count' : `You corrected the count (${room})`;
+      case 'corrected': {
+        const why = { left_unseen: 'someone left unseen', pet: 'a pet', visitor: 'a visitor came and went', not_sure: 'not sure why' }[e.answer];
+        return `You corrected the count${group.length > 1 ? '' : ` (${room})`}${why ? `: ${why}` : ''}`;
+      }
       case 'restored': return 'Restored after a restart';
       case 'bootstrap': return `Counted ${who.toLowerCase() === 'someone' ? 'someone' : who} in the ${room} at the start`;
       case 'evidence': return `${who} is in the ${room}: ${(e.detail || 'a sensor says so').replace(/\b(binary_sensor|input_boolean|switch|light)\.[a-z0-9_]+/g, x => this._entityName(x))}`;

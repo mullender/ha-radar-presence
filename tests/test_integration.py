@@ -607,6 +607,30 @@ async def _tick(hass: HomeAssistant, freezer, seconds: float) -> None:
     await hass.async_block_till_done()
 
 
+async def test_a_correction_keeps_the_answer_to_what_happened(hass: HomeAssistant, radar_device: str, freezer, hass_ws_client) -> None:
+    """The optional follow-up to a correction (a pet, a visitor, ...) is stored with the corrected log entries."""
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    floor = fr.async_get(hass).async_create("Ground floor", level=0)
+    area = ar.async_get(hass).async_create("Entry", floor_id=floor.floor_id)
+    dr.async_get(hass).async_update_device(radar_device, area_id=area.id)
+    freezer.tick(120)
+    await setup_entry(hass, radar_device, [])
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount"})
+    space = (await client.receive_json())["result"]["spaces"][0]["id"]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount/correct", "space": space, "count": 2})
+    t = (await client.receive_json())["result"]["t"]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount/answer", "t": t, "answer": "visitor", "where": "Entry"})
+    assert (await client.receive_json())["result"]["updated"] >= 1
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount/history", "start": t - 10})
+    log = (await client.receive_json())["result"]["log"]
+    corrected = [e for e in log if e["kind"] == "corrected"]
+    assert corrected and all(e["answer"] == "visitor" and e["where"] == "Entry" for e in corrected)
+    await client.send_json_auto_id({"type": f"{DOMAIN}/headcount/answer", "t": t, "answer": "a ghost"})
+    assert (await client.receive_json())["error"]["code"] == "invalid_format"
+
+
 async def test_head_count_sensors_follow_the_front_door(hass: HomeAssistant, radar_device: str, freezer) -> None:
     """People home / per floor / per space: someone seen inside counts; leaving through the front door does not."""
     from homeassistant.helpers import area_registry as ar, floor_registry as fr

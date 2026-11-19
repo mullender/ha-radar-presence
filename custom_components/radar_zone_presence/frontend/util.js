@@ -300,3 +300,38 @@ export function radarTransforms(fromId, radars) {
   T.delete(fromId);
   return T;
 }
+
+/**
+ * The optional follow-up to a correction, as a snackbar-style prompt (never blocking): what happened?
+ * Answers are stored with the correction (headcount/answer), for tuning and for pets later.
+ */
+export function correctionFollowUp({ hass, t, from, to, floors = [], onClose = () => {} }) {
+  const answers = [['left_unseen', 'Someone left unseen'], ['pet', 'A pet'], ['visitor', 'A visitor came and went'], ['not_sure', 'Not sure']];
+  const box = el('div', { class: 'rzp-followup', style: {
+    position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)', zIndex: 30, maxWidth: '520px', width: 'calc(100% - 32px)',
+    background: 'var(--card-background-color, #fff)', color: 'var(--primary-text-color, #222)', borderRadius: '12px',
+    boxShadow: '0 4px 18px rgba(0,0,0,.25)', padding: '12px 14px', font: '13px Roboto, sans-serif',
+  } });
+  let timer = 0;
+  const close = () => { clearTimeout(timer); box.remove(); onClose(); };
+  const send = (answer, where) => {
+    hass.callWS({ type: 'radar_zone_presence/headcount/answer', t, answer, ...(where ? { where } : {}) }).catch(() => {});
+    box.replaceChildren(el('div', {}, 'Thanks: kept with the correction.'));
+    timer = setTimeout(close, 1800);
+  };
+  const chip = (label, fn) => el('button', { style: {
+    font: 'inherit', fontSize: '12px', border: '1px solid var(--divider-color, #ccc)', background: 'none', color: 'var(--primary-color, #03a9f4)',
+    borderRadius: '14px', padding: '4px 10px', cursor: 'pointer' }, onclick: fn }, label);
+  const where = floors.length > 1 ? el('select', { style: { font: 'inherit', fontSize: '12px', marginLeft: '6px' } },
+    el('option', { value: '' }, 'Where? (optional)'), floors.map(f => el('option', { value: f }, f))) : null;
+  box.append(
+    el('div', { style: { display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '8px' } },
+      el('b', { style: { fontWeight: 500 } }, `Corrected from ${from} to ${to}.`),
+      el('span', { style: { color: 'var(--secondary-text-color, #777)' } }, 'What happened? (optional, helps tune)'),
+      el('button', { style: { marginLeft: 'auto', border: 0, background: 'none', cursor: 'pointer', color: 'inherit', fontSize: '15px' }, title: 'Dismiss', onclick: close }, '✕')),
+    el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' } },
+      answers.map(([key, label]) => chip(label, () => send(key, where?.value || null))), where || ''));
+  timer = setTimeout(close, 15000);
+  box.addEventListener('pointerenter', () => clearTimeout(timer));
+  return box;
+}
