@@ -33,7 +33,8 @@ nothing is written to the device.
 - **Presence panel** (sidebar):
   - **House**: floors and rooms with who is where, and **Activity** in plain
     sentences ("Someone came home through the garage door") with *How we
-    know*, *Follow person A* and a jump to the radar at that moment.
+    know*, *Follow person A* and a jump to the radar at that moment. A floor
+    whose rooms are drawn on one linked map can show as a **Plan**.
   - **Radars**: the map of what a radar sees (detections, trails, people) with
     a timeline and playhead — live, or back in time. Clicking a bar explains
     why a room was on and offers the fix (ignore that spot, turn on after
@@ -41,13 +42,25 @@ nothing is written to the device.
   - **Edit** (a separate mode): rooms, spots, doorways and ignore areas with
     polygon / rectangle tools, snapping, undo, and a preview of how often the
     edited shapes would have turned on over the loaded history.
-  - **Suggestions** from the history: places where people stay, ghosts that
-    appear in place (a plant, a fan), door sensors that line up with a radar.
+  - **To do**: questions from the last day of each radar, one at a time —
+    "Someone sits here: a seat or a fan?", "People appear and vanish here: a
+    doorway?", "Short blips turn the hall on", door sensors that line up with
+    a radar, rooms without a radar or a doorway. Each answer makes one change
+    (with Undo) and shows what it would have changed yesterday. When a new
+    radar has learned for a few days, a notification says how many
+    suggestions are waiting.
+  - **Settings**: outside doors, activity hints, occupancy sensors and robot
+    vacuums, with likely entities suggested.
+  - **Setting up a radar**: a mounting check with your live dot ("walk to
+    your right") that flips or rotates the view, and the zones saved on the
+    radar as a starting point.
   - **Report a problem**: one window, anonymized, as a file to attach to an
     issue (see `tools/load_report.py`).
   - People who aren't admins get the panel read-only.
 - **Dashboard cards**: occupants (badge, tile, floors, floors + rooms, with +
   / − to correct) and a live radar card.
+- **Blueprints**: lights follow occupancy, heat only occupied rooms, everyone
+  left. Added to *Settings → Automations → Blueprints* on setup.
 - **People tracking:** the radar's target numbers are not identities. The
   integration follows people by position: a reading only continues a person
   if they could have walked there.
@@ -69,8 +82,12 @@ area):
 
 Entity ids made by earlier versions (`…_presence`) are kept.
 
-On the home device: *Occupants*, *<floor> occupants*, *<room> occupants* and
-a *Nobody home* button. Per doorway, on a small device linked to the radar:
+Each room device also has *Occupants* (people counted there). A room the
+count knows but no room shape covers (a bedroom without a radar, counted at
+its doors) gets a device of its own with *Occupancy* and *Occupants*.
+
+On the home device: *Occupants*, *<floor> occupants* and a *Nobody home*
+button. Per doorway, on a small device linked to the radar:
 `event.<radar>_<doorway>` (`arrived` / `left`).
 
 The radar firmware already has its own occupancy and target count, so there
@@ -110,9 +127,10 @@ Then:
    the integration's page.
 2. Open **Presence** in the sidebar. It opens on the House; *Radars* shows
    what each radar sees, live or back in time.
-3. Press **Edit** to draw rooms, spots, doorways and ignore areas, then
-   **Save**. With overlapping radars, *Line up with…* (⋮) lets them share
-   shapes.
+3. A new radar opens with a short mounting check. Then let it learn for a
+   few days and answer the questions in **To do**; **Edit** is for drawing
+   by hand (open-plan splits, corrections). With overlapping radars, *Line
+   up with…* (⋮) lets them share shapes.
 
 Status: early development (v0.1). See [DESIGN.md](DESIGN.md),
 [DEVELOPMENT.md](DEVELOPMENT.md) and [NOTES.md](NOTES.md).
