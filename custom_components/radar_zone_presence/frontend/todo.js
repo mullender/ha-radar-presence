@@ -10,7 +10,7 @@
 import { pointInPolygon, summarize, validatePolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import { appearVanishSpots, classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
-import { el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
+import { KIND_STYLE, SVGNS, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const DAY = 86400;
@@ -28,6 +28,9 @@ const css = `
 .card h2 { margin: 0 0 6px; font-size: 17px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .card .why { color: var(--secondary-text-color, #666); line-height: 1.45; margin-bottom: 12px; }
 .card .q { font-weight: 500; margin: 10px 0 8px; }
+.cols { display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: start; }
+.ev { width: 150px; height: 150px; border-radius: 10px; background: var(--secondary-background-color, #f3f4f6); color: var(--primary-text-color, #222); }
+@media (max-width: 560px) { .cols { grid-template-columns: 1fr; } .ev { width: 100%; height: auto; max-width: 240px; } }
 .ans { display: flex; flex-direction: column; gap: 8px; }
 .ans button { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; padding: 10px 12px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
@@ -164,7 +167,7 @@ export class RzpTodo extends HTMLElement {
     // Ignore areas people walk through.
     for (const z of exclusions) {
       const st = trailStats(hist, z.polygon, { exclusions: exclusions.filter(q => q !== z) });
-      if (st.walkIn >= 10 && st.walkOut >= st.walkIn / 2) out.push({ key: `${r.radar_id}:walked:${z.id}`, type: 'walked', radar: r, cfg, zone: z, walkIn: st.walkIn });
+      if (st.walkIn >= 10 && st.walkOut >= st.walkIn / 2) out.push({ key: `${r.radar_id}:walked:${z.id}`, type: 'walked', radar: r, cfg, hist, zone: z, walkIn: st.walkIn });
     }
     // Door sensors that line up with this radar and are not a doorway yet.
     const linked = new Set(valid.filter(z => z.kind === 'exit').map(z => z.door_entity_id).filter(Boolean));
@@ -172,7 +175,7 @@ export class RzpTodo extends HTMLElement {
       if (linked.has(id) || rows.length < 4) continue;
       const pos = doorPositions(hist, doorEvents(rows), { exclusions });
       if (!pos.events || pos.hits / pos.events < 0.5 || pos.events < 3 || !pos.points.length) continue;
-      out.push({ key: `${r.radar_id}:door:${id}`, type: 'door', radar: r, cfg, door: id, pos });
+      out.push({ key: `${r.radar_id}:door:${id}`, type: 'door', radar: r, cfg, hist, door: id, pos });
     }
     return out;
   }
@@ -389,7 +392,53 @@ export class RzpTodo extends HTMLElement {
           el('button', { onclick: () => { this.skipped.add(i.key); this.render(); } }, 'Later')),
       ];
     }
-    return el('div', { class: 'card' }, ...body, acts.length ? el('div', { class: 'acts' }, ...acts) : '');
+    const main = [...body, acts.length ? el('div', { class: 'acts' }, ...acts) : ''];
+    const ev = this._evidence(i);
+    return el('div', { class: 'card' }, ev ? el('div', { class: 'cols' }, ev, el('div', {}, ...main)) : main);
+  }
+
+  /** What the card is about, as a cropped map: the last day's detections around it and the shapes involved. */
+  _evidence(i) {
+    const shapes = {
+      spot: () => [[i.polygon, i.cls?.kind === 'ghost' ? 'exclude' : 'linger', true], i.room && [i.room.polygon, 'include']],
+      appear: () => [[i.polygon, 'exit', true], i.room && [i.room.polygon, 'include']],
+      door: () => [[placeExit(i.pos.points), 'exit', true]],
+      walked: () => [[i.zone.polygon, 'exclude', true]],
+      blips: () => [[i.zone.polygon, 'include', true]],
+      hold: () => [[i.zone.polygon, 'include', true]],
+    }[i.type]?.().filter(s => s && s[0]);
+    const hist = i.hist || this._hist?.get(i.radar?.radar_id);
+    if (!shapes?.length || !hist) return null;
+    const d = i.cfg?.settings?.display || {};
+    const r = ((d.rotation || 0) * Math.PI) / 180, m = d.mirror ? -1 : 1;
+    const tf = ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y]; // as the radar view draws it
+    const focus = shapes.find(s => s[2])[0].map(tf);
+    const xs = focus.map(p => p[0]), ys = focus.map(p => p[1]);
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) + 2400;
+    const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+    const S = 150, k = S / span;
+    const sx = ([x, y]) => [S / 2 + (x - cx) * k, S / 2 - (y - cy) * k];
+    const g = document.createElementNS(SVGNS, 'svg');
+    g.setAttribute('viewBox', `0 0 ${S} ${S}`);
+    g.setAttribute('class', 'ev');
+    const add = (tag, attrs) => { const n = document.createElementNS(SVGNS, tag); for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v); g.append(n); return n; };
+    for (const [poly, kind, main] of shapes.filter(s => !s[2]).concat(shapes.filter(s => s[2]))) {
+      const st = KIND_STYLE[kind];
+      add('polygon', { points: poly.map(p => sx(tf(p)).join(',')).join(' '), fill: st.light, 'fill-opacity': main ? st.fill * 1.6 : st.fill, stroke: st.light, 'stroke-width': main ? 1.5 : 0.8, 'stroke-opacity': main ? 0.9 : 0.4 });
+    }
+    const n = hist.x.length, stride = Math.max(1, Math.floor(n / 20000));
+    let shown = 0;
+    for (let p = 0; p < n && shown < 1500; p += stride) {
+      const [x, y] = sx(tf([hist.x[p], hist.y[p]]));
+      if (x < 0 || y < 0 || x > S || y > S) continue;
+      add('circle', { cx: x.toFixed(1), cy: y.toFixed(1), r: 0.9, fill: 'currentColor', 'fill-opacity': 0.35 });
+      shown++;
+    }
+    const [rx, ry] = sx([0, 0]);
+    if (rx >= 0 && ry >= 0 && rx <= S && ry <= S) add('circle', { cx: rx, cy: ry, r: 3, fill: 'currentColor' });
+    const scale = 1000 * k;
+    add('line', { x1: 8, y1: S - 8, x2: 8 + scale, y2: S - 8, stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-opacity': 0.6 });
+    return g;
   }
 
   /** "If you'd had this spot last day": how often the room went clear with and without it (and remembering people). */
