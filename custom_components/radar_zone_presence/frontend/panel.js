@@ -17,6 +17,7 @@ import {
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 import { openReportDialog } from './report.js';
+import { openSetup } from './setup.js';
 
 const DOMAIN = 'radar_zone_presence';
 const PANEL_PATH = 'radar-zones';
@@ -443,6 +444,9 @@ class RadarZonePresencePanel extends HTMLElement {
     this._subscribeLive();
     this._loadPeers();
     await this._loadHistory();
+    // A radar never set up here (no view saved yet): the mounting check and its own zones, once.
+    const d = this.config?.settings?.display || {};
+    if (this.admin && radarId === this.radarId && !d.v && !d.checked && !this._setupOpen) openSetup(this);
   }
 
   async _loadConfig() {
@@ -1503,6 +1507,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const menu = el('div', { class: 'menu-pop', style: { top: `${r.bottom + 4}px`, right: `${Math.max(8, innerWidth - r.right)}px` } },
       item('Copy a link to this moment', () => this._copyLink(), !this.hist),
       !this.admin ? '' : item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
+      !this.admin ? '' : item('Mounting check…', () => openSetup(this)),
       !this.admin ? '' : item('Export shapes…', () => this._exportZones(), !this.zones.length),
       !this.admin ? '' : item('Import shapes…', () => this._importZones()),
       !this.admin ? '' : item(`${this.details ? '✓ ' : ''}Show details`, () => this._setDetails(!this.details)),
@@ -2930,10 +2935,11 @@ class RadarZonePresencePanel extends HTMLElement {
       rows));
   }
 
-  _toast(msg, error = false) {
+  _toast(msg, error = false, ms = null) {
+    this.shadowRoot.querySelectorAll('.toast').forEach(o => o.remove());
     const t = el('div', { class: `toast${error ? ' error' : ''}` }, msg);
     this.shadowRoot.append(t);
-    setTimeout(() => t.remove(), error ? 6000 : 2500);
+    setTimeout(() => t.remove(), ms ?? (error ? 6000 : 2500));
   }
 }
 
