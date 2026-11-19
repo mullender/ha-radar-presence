@@ -9,7 +9,8 @@ DOMAIN = "radar_zone_presence"
 VERSION: str = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
 
 MANUFACTURER = "Radar Presence"
-ZONE_MODEL = "Occupancy"
+ROOM_MODEL = "Room"
+SPOT_MODEL = "Spot"
 RADAR_MODEL = "Radar doorways"
 
 CONF_DEVICE_ID = "device_id"

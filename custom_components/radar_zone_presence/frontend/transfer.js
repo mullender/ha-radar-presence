@@ -25,6 +25,7 @@ export function exportZones(radar, zones, settings = {}) {
       ...(z.door_entity_id ? { door_entity_id: z.door_entity_id } : {}),
       ...(z.door ? { door: z.door } : {}),
       ...(z.leads_to && z.leads_to.length ? { leads_to: [...z.leads_to] } : {}),
+      ...(z.kind === 'include' && z.spot ? { spot: true } : {}),
     })),
   };
 }
@@ -73,6 +74,7 @@ export function parseImport(text) {
       door_entity_id: typeof z.door_entity_id === 'string' && z.door_entity_id ? z.door_entity_id : null,
       door: z.door && ['none', 'in', 'out'].includes(z.door.swing) ? { swing: z.door.swing, hinge_end: z.door.hinge_end ? 1 : 0 } : null,
       leads_to: Array.isArray(z.leads_to) ? z.leads_to.filter(a => typeof a === 'string' && a).slice(0, 20) : [],
+      spot: z.kind === 'include' && z.spot === true,
     };
   });
   const grace = Number(doc.settings?.reconnect_grace_s);

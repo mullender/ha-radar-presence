@@ -11,7 +11,7 @@ import {
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 
@@ -413,6 +413,7 @@ class RadarZonePresencePanel extends HTMLElement {
       door_entity_id: z.door_entity_id ?? null,
       door: z.door ?? null,
       leads_to: Array.isArray(z.leads_to) ? [...z.leads_to] : [],
+      spot: z.kind === 'include' && !!z.spot, // a spot with its own occupancy sensor
     };
   }
 
@@ -1459,7 +1460,7 @@ class RadarZonePresencePanel extends HTMLElement {
         rows.push({ id: z.id, name: `🚪 ${z.name}`, color: EXIT_COLOR, predicted: [], actual: iv, triggers: [], actualTriggers: iv.map(v => v[0]) });
         return;
       }
-      rows.push({ id: z.id, name: z.name, color: kindTone(z.kind), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
+      rows.push({ id: z.id, name: z.name, color: kindTone(styleKind(z)), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
     });
     rows.push({ id: 'presence', name: 'Anyone (not ignored)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
     this.timeline.set({
@@ -1570,7 +1571,7 @@ class RadarZonePresencePanel extends HTMLElement {
   /** The legend: one chip per kind on the map (fill swatch + glyph). */
   _renderLegend() {
     if (!this.legendEl) return;
-    const kinds = ['include', 'linger', 'transient', 'exit', 'exclude'].filter(k => this.zones.some(z => z.kind === k));
+    const kinds = ['include', 'linger', 'transient', 'exit', 'exclude'].filter(k => this.zones.some(z => styleKind(z) === k));
     const dark = !!this.hass?.themes?.darkMode;
     const key = `${kinds}|${dark}`;
     if (key === this._legendKey) return;
@@ -1613,7 +1614,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _zoneColor(z) {
-    return kindTone(z.kind, !!this.hass?.themes?.darkMode);
+    return kindTone(styleKind(z), !!this.hass?.themes?.darkMode);
   }
 
   _renderSide() {
@@ -1631,7 +1632,7 @@ class RadarZonePresencePanel extends HTMLElement {
             : z.kind === 'exit' ? `doorway${z.door_entity_id ? ` · ${this._doorName(z.door_entity_id)}` : ''}`
               : z.kind === 'linger' ? 'spot · people stay here'
                 : z.kind === 'transient' ? 'walkway · people pass through'
-                  : eid ? (this.details ? eid : 'room · has an occupancy entity') : 'new: saving creates its occupancy entity')),
+                  : eid ? (this.details ? eid : `${z.spot ? 'spot' : 'room'} · has an occupancy entity`) : 'new: saving creates its occupancy entity')),
         el('span', { class: 'badge', 'data-live': z.id }, z.kind === 'exclude' ? 'ignore' : z.kind === 'linger' ? 'spot' : z.kind === 'transient' ? 'walkway' : '—'));
     });
     const sensor = el('div', { class: 'section' },
@@ -1668,7 +1669,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _shapeSummary() {
     const z = this.zones.find(q => q.id === this.selectedId);
     if (!z) return null;
-    const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+    const st = KIND_STYLE[styleKind(z)] || KIND_STYLE.include;
     const saved = this.config.zones.find(q => q.id === z.id);
     return el('div', { class: 'section' },
       el('h3', {}, glyphSvg(st.glyph, this._zoneColor(z), 14), el('span', { class: 'grow', style: { marginLeft: '6px' } }, z.name),
@@ -1698,7 +1699,7 @@ class RadarZonePresencePanel extends HTMLElement {
     box.replaceChildren(
       el('h3', {}, at == null ? 'Now' : `${this.mode === 'live' ? 'Live' : 'At'} ${fmtTime(at)}`),
       ...rows.map(([z, label, on]) => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: () => this._select(z.id, null) },
-        glyphSvg((KIND_STYLE[z.kind] || KIND_STYLE.include).glyph, this._zoneColor(z), 14),
+        glyphSvg((KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph, this._zoneColor(z), 14),
         el('span', { class: 'nm' }, z.name), el('span', { class: `st${on ? ' on' : ''}` }, label))),
       el('div', { class: 'at-row' }, el('span', { class: 'nm help' }, 'Anyone in view (not ignored)'), el('span', { class: `st${anyone ? ' on' : ''}` }, anyone ? 'Yes' : 'No')),
       rows.length ? '' : el('div', { class: 'help' }, 'No rooms on this radar yet. Press Edit to draw one.'));
@@ -1713,18 +1714,19 @@ class RadarZonePresencePanel extends HTMLElement {
     const num = (value, onchange, attrs = {}) => el('input', { type: 'number', value, step: 'any', min: 0, ...attrs, onchange });
     const f = z.filters;
     const editor = el('div', { class: 'section' },
-      el('h3', {}, el('span', { class: 'grow' }, { exclude: 'Ignore area', exit: 'Doorway', linger: 'Spot', transient: 'Walkway' }[z.kind] || 'Room'),
+      el('h3', {}, el('span', { class: 'grow' }, KIND_STYLE[styleKind(z)]?.label === 'Ignored' ? 'Ignore area' : KIND_STYLE[styleKind(z)]?.label || 'Room'),
         el('button', { class: 'btn danger', onclick: () => this._deleteZone(z.id) }, 'Delete')),
       el('div', { class: 'form' },
         el('label', {}, 'Name'),
         el('input', { type: 'text', value: z.name, onfocus: () => { this._namePrev = JSON.stringify(this.zones); }, oninput: e => { this.zones = this.zones.map(q => (q.id === z.id ? { ...q, name: e.target.value } : q)); this._updatePlot(); this._renderHeader(); this._renderTimeline(); }, onchange: () => { if (this._namePrev) this._pushUndo(this._namePrev); this._namePrev = null; this._renderSide(); } }),
         el('label', {}, 'Type'),
-        el('select', { onchange: e => this._patchZone(z.id, { kind: e.target.value }, { renderSide: true }) },
-          el('option', { value: 'include', selected: z.kind === 'include' }, 'Room (occupancy entity)'),
-          el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Ignore area (a fan, a plant)'),
+        el('select', { onchange: e => this._setKind(z, e.target.value) },
+          el('option', { value: 'include', selected: styleKind(z) === 'include' }, 'Room'),
+          el('option', { value: 'linger', selected: styleKind(z) === 'linger' }, 'Spot (bed, sofa, desk chair)'),
           el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Doorway (door, opening, stairs)'),
-          el('option', { value: 'linger', selected: z.kind === 'linger' }, 'Spot (bed, sofa, desk chair)'),
+          el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Ignore area (a fan, a plant)'),
           el('option', { value: 'transient', selected: z.kind === 'transient' }, 'Walkway (passing through)')),
+        styleKind(z) === 'linger' ? this._spotSensorToggle(z) : '',
         z.kind === 'include' ? [
           el('label', {}, 'Device'),
           (() => {
@@ -1810,6 +1812,28 @@ class RadarZonePresencePanel extends HTMLElement {
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[0]), onchange: e => set(i, 0, +e.target.value) })),
         el('td', {}, el('input', { type: 'number', step: 'any', value: rnd(p[1]), onchange: e => set(i, 1, +e.target.value) })),
         el('td', {}, z.polygon.length > 3 ? el('button', { class: 'tb', title: 'Delete vertex', onclick: () => this._patchZone(z.id, { polygon: z.polygon.filter((_, k) => k !== i) }, { renderSide: true }) }, '✕') : '')))));
+  }
+
+  /** Kind from the type picker. A spot keeps its sensor when it already has one (a room becoming a spot keeps its entity). */
+  _setKind(z, kind) {
+    const patch = kind === 'linger'
+      ? (z.kind === 'include' ? { spot: true } : { kind: 'linger', spot: false })
+      : { kind, spot: false };
+    this._patchZone(z.id, patch, { renderSide: true });
+  }
+
+  /** A spot's own occupancy sensor: optional, off by default. On, it is saved as a zone with a Spot device. */
+  _spotSensorToggle(z) {
+    const on = z.kind === 'include';
+    const f = z.filters;
+    return el('label', { class: 'check full', style: { marginTop: '4px' } },
+      el('input', { type: 'checkbox', checked: on, onchange: e => this._patchZone(z.id, e.target.checked
+        ? { kind: 'include', spot: true, filters: { ...f, hold_until_exit: true, hold_max_s: f.hold_max_s || this._suggestedMaxHold(z), edge_margin_mm: f.edge_margin_mm || 150 } }
+        : { kind: 'linger', spot: false }, { renderSide: true }) }),
+      el('span', {}, 'Occupancy sensor',
+        el('div', { class: 'help' }, on
+          ? 'On: saving gives this spot its own device and occupancy entity for automations. It still keeps its room occupied.'
+          : 'Off: the spot keeps its room occupied while someone sits here. Turn on to use the spot itself in automations, like a desk lamp.')));
   }
 
   _suggestedMaxHold(z) {

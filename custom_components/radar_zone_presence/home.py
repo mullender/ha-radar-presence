@@ -136,6 +136,7 @@ class ZoneDef:
     subentry_id: str
     zone: Zone  # polygon in its radar's frame
     radar_id: str
+    spot: bool = False  # a spot (desk, sofa) with its own occupancy sensor: also a linger spot for the tracker
 
 
 def _fov_covers(polygon: tuple[tuple[float, float], ...], max_distance: float) -> bool:
@@ -173,6 +174,10 @@ class GroupRuntime:
             Zone(f"{feed.id}:{z.id}", z.name, z.kind, transform_polygon(self.to_anchor[feed.id], z.polygon))
             for feed in self.feeds
             for z in feed.spots
+        ] + [  # spots with an occupancy sensor are zones too: someone lost in one is still there
+            Zone(f"{zd.radar_id}:{zd.zone.id}", zd.zone.name, KIND_LINGER, transform_polygon(self.to_anchor[zd.radar_id], zd.zone.polygon))
+            for zd in zones
+            if zd.spot
         ]
         self.tracker = Tracker(spots, [invert(self.to_anchor[f.id]) for f in self.feeds])
         self.snapshot: EngineSnapshot = self.engine.snapshot()
@@ -267,7 +272,7 @@ class HomeRuntime:
                 _LOGGER.warning("Zone %s belongs to a radar that is no longer configured", sub.title)
                 continue
             zone = Zone.from_dict({**sub.data, "kind": KIND_INCLUDE})
-            self.zones[zone.id] = ZoneDef(sid, zone, radar_id)
+            self.zones[zone.id] = ZoneDef(sid, zone, radar_id, bool(sub.data.get("spot")))
 
         self.groups: list[GroupRuntime] = []
         self.group_of: dict[str, GroupRuntime] = {}  # radar id -> group

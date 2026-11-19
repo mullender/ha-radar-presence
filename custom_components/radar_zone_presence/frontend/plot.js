@@ -6,7 +6,7 @@
 // changes stored geometry.
 
 import { PointLayer } from './points.js';
-import { EXCLUDE_COLOR, GLYPHS, KIND_STYLE, doorGeometry, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime } from './util.js';
+import { EXCLUDE_COLOR, GLYPHS, KIND_STYLE, styleKind, doorGeometry, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
 const HANDLE_R = 6;
@@ -735,7 +735,7 @@ export class RzpPlot extends HTMLElement {
   }
 
   _zoneColor(z) {
-    const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+    const st = KIND_STYLE[styleKind(z)] || KIND_STYLE.include;
     return this.dark ? st.dark : st.light;
   }
 
@@ -754,19 +754,19 @@ export class RzpPlot extends HTMLElement {
       g.append(svg('defs', {}, cp));
     }
     const order = ['include', 'exclude', 'transient', 'linger', 'exit'];
-    const zones = this.zones.map((z, i) => [z, i]).sort((a, b) => order.indexOf(a[0].kind) - order.indexOf(b[0].kind) || a[1] - b[1]);
+    const zones = this.zones.map((z, i) => [z, i]).sort((a, b) => order.indexOf(styleKind(a[0])) - order.indexOf(styleKind(b[0])) || a[1] - b[1]);
     const selected = [];
     const pills = [];
     const dim = this.editing && this.selectedId;
     for (const [z] of zones) {
-      const st = KIND_STYLE[z.kind] || KIND_STYLE.include;
+      const st = KIND_STYLE[styleKind(z)] || KIND_STYLE.include;
       const color = this._zoneColor(z);
       const on = !!this.zoneStates[z.id];
       const isSel = z.id === this.selectedId;
       const fill = on ? st.on : st.fill;
       const d = this._path(z.polygon);
       const grp = svg('g', dim && !isSel ? { opacity: 0.5 } : {});
-      const room = z.kind === 'include';
+      const room = styleKind(z) === 'include';
       if (room && clipId) {
         grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.4, 'pointer-events': 'none' }));
         grp.append(svg('path', { d, fill: color, 'fill-opacity': fill * 0.6, 'clip-path': `url(#${clipId})`, 'pointer-events': 'none' }));
@@ -821,9 +821,9 @@ export class RzpPlot extends HTMLElement {
     const placed = [];
     const far = this.scale < 0.035;
     for (const [z, color, on, isSel] of items) {
-      if (far && z.kind !== 'include' && !isSel) continue;
+      if (far && styleKind(z) !== 'include' && !isSel) continue;
       const lab = this.labels?.[z.id] || {};
-      const glyph = lab.glyph || (KIND_STYLE[z.kind] || KIND_STYLE.include).glyph;
+      const glyph = lab.glyph || (KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph;
       const occupied = on && (z.kind === 'include' || z.kind === 'linger');
       const text = `${lab.text || z.name}${occupied ? ' · Occupied' : z.kind === 'exit' && on && z.door_entity_id ? ' · open' : ''}`;
       const pts = z.polygon.map(p => this._s(p));

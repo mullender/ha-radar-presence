@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.helpers.device_registry import DeviceEntry, DeviceInfo
 
-from .const import DOMAIN, MANUFACTURER, PANEL_URL, RADAR_MODEL, VERSION, ZONE_MODEL
+from .const import DOMAIN, MANUFACTURER, PANEL_URL, RADAR_MODEL, ROOM_MODEL, SPOT_MODEL, VERSION
 from .engine import Zone
 
 if TYPE_CHECKING:
@@ -23,12 +23,12 @@ def zone_device_name(name: str) -> str:
     return name.strip()
 
 
-def zone_device_info(zone: Zone, radar_id: str, radar_device_id: str | None) -> DeviceInfo:
+def zone_device_info(zone: Zone, radar_id: str, radar_device_id: str | None, spot: bool = False) -> DeviceInfo:
     info = DeviceInfo(
         identifiers={zone_device_identifier(zone.id)},
         name=zone_device_name(zone.name),
         manufacturer=MANUFACTURER,
-        model=ZONE_MODEL,
+        model=SPOT_MODEL if spot else ROOM_MODEL,
         sw_version=VERSION,
         configuration_url=f"homeassistant://{PANEL_URL}#radar={radar_id}&zone={zone.id}",
     )

@@ -15,6 +15,8 @@ export const KIND_STYLE = {
   exit: { label: 'Doorway', light: '#d97706', dark: '#fbbf24', fill: 0.28, on: 0.45, glyph: 'door' },
   exclude: { label: 'Ignored', light: '#64748b', dark: '#94a3b8', fill: 0.16, on: 0.16, glyph: 'ignore' },
 };
+/** The kind a shape is drawn as: a room flagged as a spot (one with an occupancy sensor) is a spot. */
+export const styleKind = z => (z.kind === 'include' && z.spot ? 'linger' : z.kind);
 /** Colour of a kind in the current theme. */
 export const kindTone = (kind, dark = false) => (KIND_STYLE[kind] || KIND_STYLE.include)[dark ? 'dark' : 'light'];
 

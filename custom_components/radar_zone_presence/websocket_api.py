@@ -215,6 +215,9 @@ ZONE_SCHEMA = vol.Schema(
         vol.Required("polygon"): [vol.ExactSequence([vol.Coerce(float), vol.Coerce(float)])],
         vol.Optional("filters", default={}): FILTERS_SCHEMA,
         vol.Optional("area_id"): vol.Any(None, str),
+        # Rooms with an entity: a spot (desk, sofa) rather than a room. Its occupancy sensor is on; it also
+        # keeps people who go still in it (a linger spot). A spot without a sensor is kind "linger".
+        vol.Optional("spot"): bool,
         vol.Optional("door_entity_id"): vol.Any(None, vol.All(str, vol.Match(r"^binary_sensor\.\w+$"))),
         # Exits: the areas this opening leads to, or "outside" (head count).
         vol.Optional("leads_to"): vol.Any(None, [vol.All(str, vol.Length(min=1, max=100))]),
@@ -273,6 +276,7 @@ async def ws_save_zones(hass: HomeAssistant, connection, msg) -> None:
     radar_zones = []
     for z in zones:
         if z["kind"] != KIND_INCLUDE:
+            z.pop("spot", None)
             radar_zones.append(z)
             continue
         data = {k: v for k, v in z.items() if k not in ("kind", "door", "door_entity_id", "leads_to")} | {CONF_RADAR: rid}

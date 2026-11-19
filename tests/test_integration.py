@@ -311,6 +311,34 @@ async def test_ws_read_only_for_people_who_arent_admins(
     assert (await client.receive_json())["error"]["code"] == "unauthorized"
 
 
+async def test_a_spot_with_its_occupancy_sensor_on_and_off(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    """A spot's occupancy sensor is optional: on, it is a zone with a Spot device that also keeps people who go still;
+    off, it is a linger spot on the radar (no device). The id stays, so switching it back on gets the same entity."""
+    entry = await setup_entry(hass, radar_device, [])
+    client = await hass_ws_client(hass)
+    desk = {"id": "zdesk", "name": "Desk", "kind": "include", "spot": True, "polygon": mm(CHAIR_IN), "filters": {"hold_until_exit": True}}
+    await client.send_json_auto_id({"type": f"{DOMAIN}/zones/save", "radar_id": RADAR, "zones": [desk]})
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    entity = eid(hass, "zdesk")
+    assert hass.states.get(entity).attributes["friendly_name"] == "Desk Occupancy"
+    device = dr.async_get(hass).async_get(er.async_get(hass).async_get(entity).device_id)
+    assert device.model == "Spot"
+    runtime = hass.config_entries.async_get_entry(entry.entry_id).runtime_data
+    assert len(runtime.group_of[RADAR].tracker._linger) == 1  # also a linger spot for the tracker
+    await client.send_json_auto_id({"type": f"{DOMAIN}/config", "radar_id": RADAR})
+    assert (await client.receive_json())["result"]["zones"][0]["spot"] is True
+
+    await client.send_json_auto_id({"type": f"{DOMAIN}/zones/save", "radar_id": RADAR, "zones": [{**desk, "kind": "linger"}]})
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert eid(hass, "zdesk") is None
+    saved = hass.config_entries.async_get_entry(entry.entry_id).subentries[RADAR].data["zones"]
+    assert saved[0]["id"] == "zdesk" and saved[0]["kind"] == "linger" and "spot" not in saved[0]
+    runtime = hass.config_entries.async_get_entry(entry.entry_id).runtime_data
+    assert len(runtime.group_of[RADAR].tracker._linger) == 1
+
+
 async def test_ws_config_and_save(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     entry = await setup_entry(hass, radar_device, [zone("chair", "Reading chair", CHAIR_IN)])
     client = await hass_ws_client(hass)

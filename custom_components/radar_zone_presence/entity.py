@@ -20,7 +20,7 @@ class ZoneEntity(Entity):
         self.group: GroupRuntime = runtime.zone_group(zd.zone.id)
         self._attr_unique_id = zd.zone.id if key is None else f"{zd.zone.id}_{key}"
         radar = runtime.feeds[zd.radar_id]
-        self._attr_device_info = zone_device_info(zd.zone, zd.radar_id, radar.device_id)
+        self._attr_device_info = zone_device_info(zd.zone, zd.radar_id, radar.device_id, zd.spot)
 
     @property
     def available(self) -> bool:
