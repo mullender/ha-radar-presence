@@ -1197,3 +1197,36 @@ async def test_settings_are_read_and_saved_from_the_panel(hass: HomeAssistant, r
     assert entry.options["reconnect_grace_s"] == 0  # kept
     await client.send_json_auto_id({"type": f"{DOMAIN}/settings/save", "vacuums": ["light.kitchen"]})
     assert not (await client.receive_json())["success"]
+
+
+@pytest.mark.blueprints
+async def test_blueprints_are_added_and_make_working_automations(hass: HomeAssistant, radar_device: str, tmp_path) -> None:
+    """The three blueprints are copied to the config's blueprints on setup and each makes a valid automation;
+    lights follow a room's occupancy."""
+    from pathlib import Path
+
+    from homeassistant.setup import async_setup_component
+
+    hass.config.config_dir = str(tmp_path)
+    await setup_entry(hass, radar_device, [zone("chair", "Chair", CHAIR_IN)])
+    folder = Path(hass.config.config_dir) / "blueprints" / "automation" / "radar_presence"
+    assert sorted(f.name for f in folder.glob("*.yaml")) == ["everyone_left.yaml", "heat_only_occupied_rooms.yaml", "lights_follow_occupancy.yaml"]
+    occ = eid(hass, "chair")
+    calls = []
+    hass.services.async_register("light", "turn_on", lambda call: calls.append(("on", call.data)))
+    hass.services.async_register("light", "turn_off", lambda call: calls.append(("off", call.data)))
+    hass.services.async_register("climate", "set_temperature", lambda call: calls.append(("temp", call.data)))
+    bp = lambda name, **inputs: {"use_blueprint": {"path": f"radar_presence/{name}.yaml", "input": inputs}}  # noqa: E731
+    assert await async_setup_component(hass, "automation", {"automation": [
+        {"id": "a1", "alias": "lights", **bp("lights_follow_occupancy", occupancy=occ, lights={"entity_id": "light.desk"})},
+        {"id": "a2", "alias": "heat", **bp("heat_only_occupied_rooms", occupancy=occ, climate="climate.office")},
+        {"id": "a3", "alias": "left", **bp("everyone_left", occupants="sensor.home_occupants", actions=[])},
+    ]})
+    await hass.async_block_till_done()
+    for a in ("lights", "heat", "left"):
+        assert hass.states.get(f"automation.{a}").state == "on", a
+    await move(hass, 1, 20, 120)
+    await hass.async_block_till_done()
+    assert hass.states.get(occ).state == "on"
+    assert ("on", {"entity_id": ["light.desk"]}) in calls
+    assert ("temp", {"entity_id": ["climate.office"], "temperature": 20}) in calls

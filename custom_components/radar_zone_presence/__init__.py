@@ -78,9 +78,30 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+def _install_blueprints(config_dir: str) -> list[str]:
+    """Copy the shipped blueprints to <config>/blueprints/automation/radar_presence/ (never over the user's copies)."""
+    import shutil
+    from pathlib import Path
+
+    src = Path(__file__).parent / "blueprints" / "automation"
+    dest = Path(config_dir) / "blueprints" / "automation" / "radar_presence"
+    copied = []
+    for f in sorted(src.glob("*.yaml")):
+        if not (dest / f.name).exists():
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(f, dest / f.name)
+            copied.append(f.name)
+    return copied
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: HomeConfigEntry) -> bool:
     # Runs before the update listener is registered, so these updates do not reload.
     _remember_units(hass, entry)
+    try:
+        if copied := await hass.async_add_executor_job(_install_blueprints, hass.config.config_dir):
+            _LOGGER.info("Added blueprints: %s", ", ".join(copied))
+    except OSError as err:
+        _LOGGER.warning("Could not add the blueprints: %s", err)
     _import_legacy_zones(hass, entry)
     runtime = HomeRuntime(hass, entry)
     for rid, feed in runtime.feeds.items():

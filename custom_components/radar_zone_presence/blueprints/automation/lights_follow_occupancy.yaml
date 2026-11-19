@@ -1,0 +1,84 @@
+blueprint:
+  name: Lights follow occupancy
+  description: >-
+    Turn lights on when a room or spot from Radar Presence becomes occupied, and off
+    when it is clear. The room already waits for people who sit still, so there is no
+    need for a long delay here. Optionally only when it is dark.
+  domain: automation
+  source_url: https://github.com/mullender/ha-radar-presence/blob/main/custom_components/radar_zone_presence/blueprints/automation/lights_follow_occupancy.yaml
+  input:
+    occupancy:
+      name: Room or spot
+      description: Its Occupancy sensor.
+      selector:
+        entity:
+          filter:
+            - integration: radar_zone_presence
+              domain: binary_sensor
+              device_class: occupancy
+    lights:
+      name: Lights
+      selector:
+        target:
+          entity:
+            - domain: light
+    off_delay:
+      name: Wait before turning off
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 600
+          unit_of_measurement: s
+    lux_sensor:
+      name: Light level sensor (optional)
+      default: []
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: illuminance
+    lux_below:
+      name: Only when darker than
+      default: 50
+      selector:
+        number:
+          min: 0
+          max: 1000
+          unit_of_measurement: lx
+
+mode: restart
+
+variables:
+  lux_sensor: !input lux_sensor
+  lux_below: !input lux_below
+
+trigger:
+  - platform: state
+    entity_id: !input occupancy
+    to: "on"
+    id: occupied
+  - platform: state
+    entity_id: !input occupancy
+    to: "off"
+    for:
+      seconds: !input off_delay
+    id: clear
+
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: occupied
+          - condition: template
+            value_template: >-
+              {{ not lux_sensor or states(lux_sensor) | float(0) < lux_below | float(0) }}
+        sequence:
+          - service: light.turn_on
+            target: !input lights
+      - conditions:
+          - condition: trigger
+            id: clear
+        sequence:
+          - service: light.turn_off
+            target: !input lights

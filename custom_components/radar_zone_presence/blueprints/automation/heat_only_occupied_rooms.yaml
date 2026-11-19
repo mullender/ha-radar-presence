@@ -1,0 +1,76 @@
+blueprint:
+  name: Heat only occupied rooms
+  description: >-
+    Set a thermostat to a comfortable temperature while a Radar Presence room is
+    occupied, and back to an economy temperature when it has been clear for a while.
+  domain: automation
+  source_url: https://github.com/mullender/ha-radar-presence/blob/main/custom_components/radar_zone_presence/blueprints/automation/heat_only_occupied_rooms.yaml
+  input:
+    occupancy:
+      name: Room
+      description: Its Occupancy sensor.
+      selector:
+        entity:
+          filter:
+            - integration: radar_zone_presence
+              domain: binary_sensor
+              device_class: occupancy
+    climate:
+      name: Thermostat
+      selector:
+        entity:
+          filter:
+            - domain: climate
+    comfort:
+      name: While occupied
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+          unit_of_measurement: °
+    economy:
+      name: While empty
+      default: 16
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+          unit_of_measurement: °
+    empty_for:
+      name: Empty for
+      description: How long the room must be clear before turning down.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 240
+          unit_of_measurement: min
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input occupancy
+    to: "on"
+    id: occupied
+  - platform: state
+    entity_id: !input occupancy
+    to: "off"
+    for:
+      minutes: !input empty_for
+    id: empty
+
+action:
+  - service: climate.set_temperature
+    target:
+      entity_id: !input climate
+    data:
+      temperature: >-
+        {{ comfort if trigger.id == 'occupied' else economy }}
+
+variables:
+  comfort: !input comfort
+  economy: !input economy

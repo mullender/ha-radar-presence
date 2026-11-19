@@ -16,6 +16,18 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+@pytest.fixture(autouse=True)
+def no_blueprint_install(request):
+    """Setup copies blueprints into the config dir; the shared test config dir must stay clean."""
+    if request.node.get_closest_marker("blueprints"):
+        yield
+        return
+    from unittest.mock import patch
+
+    with patch("custom_components.radar_zone_presence._install_blueprints", return_value=[]):
+        yield
+
+
 SLUG2 = "everything_presence_lite_def456"
 
 

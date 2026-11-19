@@ -1,0 +1,39 @@
+blueprint:
+  name: Everyone left
+  description: >-
+    Run actions when Radar Presence counts nobody home for a while: lights off,
+    heating down, alarm on. While the count is settling (just after someone left, or
+    when it is not sure) the Home occupants sensor is unknown, so this waits.
+  domain: automation
+  source_url: https://github.com/mullender/ha-radar-presence/blob/main/custom_components/radar_zone_presence/blueprints/automation/everyone_left.yaml
+  input:
+    occupants:
+      name: Home occupants
+      selector:
+        entity:
+          filter:
+            - integration: radar_zone_presence
+              domain: sensor
+    empty_for:
+      name: Nobody home for
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: min
+    actions:
+      name: Actions
+      selector:
+        action: {}
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input occupants
+    to: "0"
+    for:
+      minutes: !input empty_for
+
+action: !input actions
