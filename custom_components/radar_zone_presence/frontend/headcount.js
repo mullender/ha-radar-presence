@@ -6,6 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
+import { drawPlan, loadMaps, planFor } from './plan.js';
 import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
@@ -59,6 +60,20 @@ const css = `
 .space .fix button { font: inherit; font-size: 13px; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: 1px solid var(--divider-color, #ccc);
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); cursor: pointer; }
 .space .meta { font-size: 11px; color: var(--secondary-text-color, #777); }
+.plan { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.plan-map { position: relative; width: 100%; max-width: 760px; max-height: 70vh; overflow: hidden; }
+.plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; color: var(--primary-text-color, #222); overflow: hidden; }
+.plan-svg .room.link { cursor: pointer; }
+.plan-svg .room.link:hover { fill-opacity: .18; }
+.space.mini { position: absolute; transform: translate(-50%, -50%); min-width: 0; min-height: 0; width: auto; max-width: 160px; padding: 3px 8px; border-radius: 8px;
+  background: color-mix(in srgb, var(--card-background-color, #fff) 88%, transparent); box-shadow: 0 1px 3px rgba(0,0,0,.12); z-index: 2; }
+.space.mini .count { font-size: 15px; }
+.space.mini .meta, .space.mini .doors { display: none; }
+.space.mini .dots { margin-top: 2px; }
+.space.mini .dots:empty { display: none; }
+.seg { display: inline-flex; margin-top: 8px; border: 1px solid var(--divider-color, #ccc); border-radius: 12px; overflow: hidden; width: max-content; }
+.seg button { font: inherit; font-size: 11px; border: 0; background: none; color: var(--secondary-text-color, #666); padding: 2px 8px; cursor: pointer; }
+.seg button.on { background: var(--primary-color, #03a9f4); color: #fff; }
 .dots { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; min-height: 22px; }
 .dot { font-size: 11px; font-weight: 600; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
   border: 2px solid var(--c); color: var(--c); cursor: pointer; }
@@ -189,6 +204,7 @@ export class RzpHeadcount extends HTMLElement {
       return;
     }
     this.start = start;
+    this.maps = await loadMaps(this.hass).catch(() => []); // room shapes, for floors drawn as a plan
     this.entries = this.data.log;
     this._letters = new Map(); // tokens get letters A, B, C… in the order they show up in this range
     this._index();
@@ -329,13 +345,13 @@ export class RzpHeadcount extends HTMLElement {
     const floors = this.floors.map(f => {
       const doubt = unknownFloors.has(f.level);
       const n = f.areas.reduce((x, a) => x + (per.get(a.id) || 0), 0);
-      return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
-        el('h2', {}, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), f.name),
-        el('div', { class: 'rooms' }, f.areas.map(a => {
+      const plan = planFor(this.maps || [], new Set(f.areas.map(a => a.id)));
+      const mode = plan ? localStorage.getItem(`rzp.plan.${f.level}`) || (innerWidth > 700 ? 'plan' : 'diagram') : 'diagram';
+      const box = (a, mini = false) => {
           const doors = Object.entries(this.data.doors).filter(([, rs]) => rs.some(r => this.regionArea[r] === a.id));
           const radar = a.regions.map(r => this.regionRadars[r]?.[0]).find(Boolean);
           const count = per.get(a.id) || 0;
-          const box = el('div', {
+          const tile = el('div', {
             class: `space${a.observed ? '' : ' blind'}${hit.has(a.id) ? ' hit' : ''}${count ? ' occ' : ''}${radar ? ' link' : ''}`,
             title: radar ? `Open ${a.name} at this moment` : '',
             onclick: e => { if (radar && !e.composedPath().some(n => n.tagName === 'BUTTON' || n.classList?.contains('dot'))) this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar, t: t ?? Date.now() / 1000 } })); },
@@ -353,9 +369,31 @@ export class RzpHeadcount extends HTMLElement {
               return el('span', { class: `chip${open ? ' open' : ''}`, title: `${this._entityName(e)}: ${st}` }, `${this._doorLabel(e)} · ${this._doorWord(st)}`);
             })) : '',
           );
-          this.boxes.set(a.id, box);
-          return box;
-        })));
+          if (!mini) this.boxes.set(a.id, tile);
+          return tile;
+      };
+      const toggle = !plan ? '' : el('div', { class: 'seg' },
+        ['plan', 'diagram'].map(m => el('button', { class: mode === m ? 'on' : '', onclick: () => { localStorage.setItem(`rzp.plan.${f.level}`, m); this.render(); } }, m === 'plan' ? 'Plan' : 'Diagram')));
+      let rooms;
+      if (mode === 'plan') {
+        const dark = !!this.hass?.themes?.darkMode;
+        const radarOf = s => s.radar;
+        const drawn = drawPlan(plan, { occupied: a => per.get(a) || 0, dark, onRoom: s => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(s), t: t ?? Date.now() / 1000 } })) });
+        const labels = [...plan.areas].map(id => this.areas.get(id)).filter(Boolean).map(a => {
+          const at = drawn.place(a.id);
+          const b = box(a, true);
+          b.classList.add('mini');
+          Object.assign(b.style, { left: `${at.x}%`, top: `${at.y}%` });
+          return b;
+        });
+        const others = f.areas.filter(a => !plan.areas.has(a.id));
+        rooms = el('div', { class: 'plan' },
+          el('div', { class: 'plan-map', style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...labels),
+          others.length ? el('div', { class: 'rooms' }, others.map(a => { const b = box(a); b.querySelector('.meta').textContent ||= 'not on this map'; return b; })) : '');
+      } else rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
+      return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
+        el('h2', {}, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), f.name, toggle),
+        rooms);
     });
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     this.svg.setAttribute('class', 'links');
