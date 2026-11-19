@@ -151,8 +151,9 @@ export class RzpTodo extends HTMLElement {
       const names = rooms.map(z => this._zoneName(z, r));
       for (const [k, z] of rooms.entries()) {
         const name = names.filter(n => n === names[k]).length > 1 && names[k] !== z.name ? `${names[k]} (${z.name})` : names[k];
-        const blips = base[z.id].intervals.filter(([a, b]) => b - a < 3).length;
-        if (blips >= 5 && !(z.filters?.on_delay_s > 0)) out.push({ key: `${r.radar_id}:blips:${z.id}`, type: 'blips', radar: r, cfg, hist, zone: z, name, blips, turnedOn: base[z.id].intervals.length });
+        const short = base[z.id].intervals.filter(([a, b]) => b - a < 3);
+        const blips = short.length;
+        if (blips >= 5 && !(z.filters?.on_delay_s > 0)) out.push({ key: `${r.radar_id}:blips:${z.id}`, type: 'blips', radar: r, cfg, hist, zone: z, name, blips, turnedOn: base[z.id].intervals.length, playAt: short[short.length - 1][0] });
         const st = trailStats(hist, z.polygon, { exclusions });
         if (!z.filters?.hold_until_exit && suggestHold(st)) out.push({ key: `${r.radar_id}:hold:${z.id}`, type: 'hold', radar: r, cfg, hist, zone: z, name, stats: st, clear: base[z.id].intervals.length });
       }
@@ -477,6 +478,52 @@ export class RzpTodo extends HTMLElement {
     }
     const [rx, ry] = sx([0, 0]);
     if (rx >= 0 && ry >= 0 && rx <= S && ry <= S) add('circle', { cx: rx, cy: ry, r: 3, fill: 'currentColor' });
+    // Hover: play the busiest 20 s here (twice as fast), as moving dots with short trails.
+    const at = { spot: i.times?.peak, appear: i.peak != null ? i.peak - hist.start : null, blips: i.playAt != null ? i.playAt - (i.playAt > 1e9 ? hist.start : 0) : null }[i.type];
+    if (at != null) {
+      const live = document.createElementNS(SVGNS, 'g');
+      g.append(live);
+      let raf = 0;
+      const collect = half => {
+        const out = [];
+        let q = 0;
+        for (let f = 0; f < hist.frame_t.length; f++) {
+          const t = hist.frame_t[f], n = hist.frame_n[f];
+          if (t >= at - half && t <= at + half) out.push({ t, pts: Array.from({ length: n }, (_, k) => [hist.slot[q + k], ...sx(tf([hist.x[q + k], hist.y[q + k]]))]) });
+          q += n;
+        }
+        return out;
+      };
+      let frames = collect(10);
+      if (frames.length < 8) frames = collect(30); // radars report on change: a quiet stretch has few frames
+      const play = () => {
+        if (!frames.length) return;
+        const t0 = performance.now();
+        const step = now => {
+          const t = frames[0].t + ((now - t0) / 1000) * 2;
+          const upto = frames.filter(f => f.t <= t);
+          const cur = upto.filter((f, k) => f.t > t - 3 || k === upto.length - 1); // the latest frame stays until the next
+          live.replaceChildren();
+          for (const [k, f] of cur.entries()) {
+            const last = k === cur.length - 1;
+            for (const [, x, y] of f.pts) {
+              const c = document.createElementNS(SVGNS, 'circle');
+              c.setAttribute('cx', x.toFixed(1)); c.setAttribute('cy', y.toFixed(1)); c.setAttribute('r', last ? 3.5 : 1.5);
+              c.setAttribute('fill', last ? '#0ea5e9' : '#38bdf8'); c.setAttribute('fill-opacity', last ? 1 : 0.5);
+              live.append(c);
+            }
+          }
+          raf = t < frames[frames.length - 1].t ? requestAnimationFrame(step) : requestAnimationFrame(now2 => { void now2; play(); });
+        };
+        raf = requestAnimationFrame(step);
+      };
+      g.addEventListener('mouseenter', play);
+      g.addEventListener('mouseleave', () => { cancelAnimationFrame(raf); live.replaceChildren(); });
+      g.style.cursor = 'zoom-in';
+      const tip = document.createElementNS(SVGNS, 'title');
+      tip.textContent = 'Hover to play the busiest 20 s here';
+      g.prepend(tip);
+    }
     const scale = 1000 * k;
     add('line', { x1: 8, y1: S - 8, x2: 8 + scale, y2: S - 8, stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-opacity': 0.6 });
     return g;
