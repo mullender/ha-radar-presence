@@ -50,6 +50,26 @@ export const kindDash = () => null;
 export const isSpot = kind => kind === 'linger' || kind === 'transient';
 
 export const slotColor = slot => SLOT_COLORS[(slot - 1) % SLOT_COLORS.length];
+/** Person A, B, C… for a radar's target slot 1, 2, 3 (letters don't read as a ranking or an ID). */
+export const slotLetter = slot => String.fromCharCode(64 + (((slot - 1) % 26) + 1));
+
+/** A shape's name for people: a room with a default name ("Polygon 1", "Whole room") is called by its area. */
+export function roomName(z, areaName) {
+  return areaName && (z.kind === 'include' && !z.spot) && /^(polygon|zone|room|whole room|rectangle)\b/i.test(z.name || '') ? areaName : z.name;
+}
+
+/** "Living Room" -> "the living room", for use inside a sentence. */
+export const the = name => `the ${String(name).toLowerCase()}`;
+
+/** Union of [t0, t1] intervals, sorted. */
+export function mergeIntervals(list) {
+  const out = [];
+  for (const [a, b] of [...list].sort((x, y) => x[0] - y[0])) {
+    if (out.length && a <= out[out.length - 1][1]) out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
 
 export function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);

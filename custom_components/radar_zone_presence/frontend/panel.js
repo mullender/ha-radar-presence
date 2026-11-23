@@ -6,14 +6,14 @@ import './timeline.js';
 import './headcount.js';
 import './todo.js';
 import './settings.js';
-import { fovPolygon, summarize, validatePolygon, pointInPolygon } from './engine.js';
+import { fovPolygon, polygonArea, summarize, validatePolygon, pointInPolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import {
   classify, coverageOf, crossCheck, crossGhost, doorEvents, explainOn, convexHull, doorIntervals, doorPositions, findDwellSpots, fitHull, flappingEdges, offsetConvex, pairDetections, percentile,
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, svg, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor,
+  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, svg, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor, slotLetter, roomName, the, mergeIntervals,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 import { openReportDialog } from './report.js';
@@ -67,6 +67,13 @@ header.edit .save-btn:disabled { opacity: .6; cursor: default; }
 .at-row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .at-row .st { color: var(--secondary-text-color, #777); font-size: 12px; }
 .at-row .st.on { color: var(--primary-text-color, #222); font-weight: 500; }
+.person-row { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; font-size: 13px; line-height: 1.4; }
+.pdot { flex: none; width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; }
+.recent-row { display: flex; gap: 10px; padding: 4px 0; font-size: 13px; }
+.recent-row .tm { color: var(--secondary-text-color, #777); font-variant-numeric: tabular-nums; }
+.recent-row.link { cursor: pointer; }
+.recent-row.link:hover { color: var(--primary-color, #03a9f4); }
+.section.links a { color: var(--primary-color, #03a9f4); text-decoration: none; font-size: 13px; font-weight: 500; }
 .fit-btn { position: absolute; right: 12px; top: 10px; border: 0; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 16px;
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .menu { background: none; border: 0; color: inherit; font-size: 22px; cursor: pointer; padding: 4px 8px; display: none; }
@@ -848,6 +855,7 @@ class RadarZonePresencePanel extends HTMLElement {
       const unfiltered = replay(zones.map(z => ({ ...z, filters: {} })), 0);
       this.preview = {
         radars: peers.length + 1,
+        end: this.hist.end, // intervals still on then end here
         perFrame: res.perFrame,
         summary: summarize(res.transitions, keys, this.hist.start, this.hist.end),
         unfiltered: summarize(unfiltered.transitions, keys, this.hist.start, this.hist.end),
@@ -1662,7 +1670,7 @@ class RadarZonePresencePanel extends HTMLElement {
     }
     this.plot.set({
       dark: !!this.hass?.themes?.darkMode,
-      labels: this._shapeLabels(),
+      labels: this._shapeLabels(states),
       coverage: this._coverage(),
       linked: this._linkedShapes(),
       showGrid: this.editing && this.snap.grid,
@@ -1699,7 +1707,7 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   /** Doorway pills say where they lead: "→ Kitchen", "↑ Bedroom" (another floor), "Outside". */
-  _shapeLabels() {
+  _shapeLabels(states = {}) {
     const out = {};
     const floors = this.hass?.floors || {}, areas = this.hass?.areas || {};
     // Rooms carry their area's name (one room shape per area); a second shape in the same area adds its own name.
@@ -1710,8 +1718,14 @@ class RadarZonePresencePanel extends HTMLElement {
     for (const [z, areaId] of rooms) {
       const area = areas[areaId];
       if (!area) continue;
-      const twins = rooms.filter(([, a]) => a === areaId).length;
-      out[z.id] = { text: twins > 1 && z.name.trim().toLowerCase() !== area.name.toLowerCase() ? `${area.name} · ${z.name}` : area.name };
+      const twins = rooms.filter(([, a]) => a === areaId);
+      if (!this.editing && twins.length > 1) {
+        // Review: one label per room, on its biggest shape, occupied when any of its shapes is.
+        const big = twins.reduce((b, t) => (Math.abs(polygonArea(t[0].polygon)) > Math.abs(polygonArea(b[0].polygon)) ? t : b));
+        out[z.id] = big[0] === z ? { text: area.name, on: twins.some(([t]) => !!states[t.id]) } : { hide: true };
+        continue;
+      }
+      out[z.id] = { text: twins.length > 1 && z.name.trim().toLowerCase() !== area.name.toLowerCase() ? `${area.name} · ${z.name}` : area.name };
     }
     const level = id => floors[areas[id]?.floor_id]?.level;
     const here = level(this.config?.device_area_id);
@@ -1835,8 +1849,8 @@ class RadarZonePresencePanel extends HTMLElement {
         el('button', { class: 'btn', title: 'Load shapes from an exported JSON file. Shapes with the same name are replaced; nothing is saved until you press Save.', onclick: () => this._importZones() }, 'Import…')));
     if (!this.editing) {
       // Review: what is on at the playhead, the selected shape's preview, then suggestions.
-      s.replaceChildren(el('div', { class: 'guide' }), el('div', { class: 'section at' }), this._shapeSummary() || '',
-        ...(this.admin ? [el('div', { class: 'section spots' }), this._doorsSection()] : []));
+      // Suggestions and door sensors to add live in To do now; the review panel only describes.
+      s.replaceChildren(el('div', { class: 'guide' }), el('div', { class: 'at' }), this._shapeSummary() || '');
       this._atKey = null;
       this._renderAt();
     } else {
@@ -1873,34 +1887,123 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'zone-stats' }));
   }
 
-  /** Review: the state of each room, spot and door at the playhead (or now), in words. */
+  /** Rooms seen in this view (its own and linked radars' room shapes), one per area: [{name, zones}]. */
+  _viewRooms() {
+    const areas = this.hass?.areas || {};
+    const groups = new Map();
+    const add = (z, areaId) => {
+      const key = areaId || z.id;
+      if (!groups.has(key)) groups.set(key, { name: areas[areaId]?.name ? roomName({ ...z, name: 'Polygon' }, areas[areaId].name) : z.name, zones: [], areaId });
+      groups.get(key).zones.push(z);
+    };
+    for (const z of this.zones) if (z.kind === 'include' && !z.spot) add(z, z.area_id || this.config?.device_area_id);
+    for (const l of this._linkedShapes()) if (l.zone.kind === 'include' && !l.zone.spot) add(l.zone, l.zone.area_id || this.peers.get(l.radarId)?.cfg.device_area_id);
+    // This radar's own room first.
+    return [...groups.values()].sort((x, y) => (y.areaId === this.config?.device_area_id) - (x.areaId === this.config?.device_area_id));
+  }
+
+  /** Review: the state at the playhead (or now) in words: rooms and spots, the people here, what changed last. */
   _renderAt() {
-    const box = this.side?.querySelector('.section.at');
+    const box = this.side?.querySelector('.at');
     if (!box || !this.config) return;
     const replay = this.mode === 'replay' && this.hist;
-    const states = replay ? this._replayState().states : this.liveStates;
+    const r = replay ? this._replayState() : null;
+    const states = replay ? r.states : this.liveStates;
     const at = replay || this.mode === 'live' ? this.cursor : null;
+    const rooms = this._viewRooms();
     const rows = [];
-    for (const z of this.zones) {
-      if (z.kind === 'include') rows.push([z, states[z.id] ? 'Occupied' : states[z.id] === undefined ? 'not saved yet' : 'Clear', !!states[z.id]]);
-      else if (z.kind === 'exit' && z.door_entity_id) { const o = this._doorOpenAt(z.door_entity_id, replay ? this.cursor : null); rows.push([z, o ? 'Open' : 'Closed', o]); }
+    for (const g of rooms) {
+      const known = g.zones.some(z => states[z.id] !== undefined);
+      if (!known && !g.zones.some(z => this.zones.includes(z))) continue; // a linked radar's room: its history isn't replayed here
+      const on = g.zones.some(z => states[z.id]);
+      rows.push({ glyph: 'include', color: this._zoneColor(g.zones[0]), name: g.name, label: on ? 'Occupied' : known ? 'Clear' : 'not saved yet', on, onclick: () => this._select(g.zones[0].id, null) });
     }
-    if (!replay) { // linked radars' rooms: their state arrives with this group's live updates
-      for (const { zone: z, radarTitle } of this._linkedShapes()) {
-        if (z.kind === 'include' && states[z.id] !== undefined) rows.push([z, states[z.id] ? 'Occupied' : 'Clear', !!states[z.id], radarTitle.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '')]);
-      }
+    const spots = this.zones.filter(z => z.kind === 'include' && z.spot);
+    for (const z of spots) rows.push({ glyph: styleKind(z), color: this._zoneColor(z), name: z.name, label: states[z.id] ? 'Occupied' : states[z.id] === undefined ? 'not saved yet' : 'Clear', on: !!states[z.id], onclick: () => this._select(z.id, null) });
+    for (const z of this.zones) {
+      if (z.kind !== 'exit' || !z.door_entity_id) continue;
+      const o = this._doorOpenAt(z.door_entity_id, replay ? this.cursor : null);
+      rows.push({ glyph: 'exit', color: this._zoneColor(z), name: this._doorName(z.door_entity_id), label: o ? 'Open' : 'Closed', on: o, onclick: () => this._select(z.id, null) });
     }
     const anyone = replay ? this._zoneOnAt('presence', this.cursor) : this.livePresence;
-    const key = JSON.stringify([at == null ? null : Math.floor(at), rows.map(r => r[1]), anyone, this.selectedId]);
+    const targets = replay ? r.targets : this.mode === 'live' || this.live ? this.liveTargets : [];
+    const trails = replay ? r.trails : this.liveTrails;
+    const people = targets.map(([slot, x, y]) => ({ slot, text: this._personSentence(slot, x, y, trails?.get(slot) || [], rooms) }));
+    const recent = this._recentChanges(rooms, spots, at ?? Date.now() / 1000);
+    const key = JSON.stringify([at == null ? null : Math.floor(at), rows.map(q => q.label), anyone, people, recent.map(e => e.t), this.selectedId, this.details]);
     if (key === this._atKey) return;
     this._atKey = key;
+    const row = q => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: q.onclick },
+      glyphSvg((KIND_STYLE[q.glyph] || KIND_STYLE.include).glyph, q.color, 14),
+      el('span', { class: 'nm' }, q.name), el('span', { class: `st${q.on ? ' on' : ''}` }, q.label));
     box.replaceChildren(
-      el('h3', {}, at == null ? 'Now' : `${this.mode === 'live' ? 'Live' : 'At'} ${fmtTime(at)}`),
-      ...rows.map(([z, label, on, via]) => el('div', { class: 'at-row', style: { cursor: 'pointer' }, onclick: () => (this.zones.some(q => q.id === z.id) ? this._select(z.id, null) : this._openLinked(this._linkedShapes().find(l => l.zone.id === z.id)?.radarId, z.id)) },
-        glyphSvg((KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph, this._zoneColor(z), 14),
-        el('span', { class: 'nm' }, z.name, via ? el('span', { class: 'help' }, ` · ${via}`) : ''), el('span', { class: `st${on ? ' on' : ''}` }, label))),
-      el('div', { class: 'at-row' }, el('span', { class: 'nm help' }, 'Anyone in view (not ignored)'), el('span', { class: `st${anyone ? ' on' : ''}` }, anyone ? 'Yes' : 'No')),
-      rows.length ? '' : el('div', { class: 'help' }, 'No rooms on this radar yet. Press Edit to draw one.'));
+      el('div', { class: 'section' },
+        el('h3', {}, at == null ? 'Now' : `${this.mode === 'live' ? 'Live' : 'At'} ${fmtTime(at)}`),
+        ...rows.map(row),
+        this.details ? el('div', { class: 'at-row' }, el('span', { class: 'nm help' }, 'Anyone in view (not ignored)'), el('span', { class: `st${anyone ? ' on' : ''}` }, anyone ? 'Yes' : 'No')) : '',
+        rows.length ? '' : el('div', { class: 'help' }, this.admin ? 'No rooms on this radar yet. Press Edit to draw one.' : 'No rooms on this radar yet.')),
+      people.length ? el('div', { class: 'section' }, el('h3', {}, 'People here'),
+        ...people.map(q => el('div', { class: 'person-row' }, el('span', { class: 'pdot', style: { background: slotColor(q.slot) } }, this.details ? String(q.slot) : slotLetter(q.slot)), el('span', {}, q.text)))) : '',
+      recent.length ? el('div', { class: 'section' }, el('h3', {}, 'Recent'),
+        ...recent.map(e => el('div', { class: `recent-row${replay ? ' link' : ''}`, onclick: replay ? () => this._seek(e.t) : null }, el('span', { class: 'tm' }, fmtTime(e.t)), el('span', {}, e.text)))) : '',
+      el('div', { class: 'section links' }, el('a', { href: '#view=headcount', onclick: ev => { ev.preventDefault(); this._setTab('headcount'); } }, 'Open in House view →')));
+  }
+
+  /** One person in words: "At the desk, still for 3 min", "Walking toward the kitchen". */
+  _personSentence(slot, x, y, trail, rooms) {
+    const inside = z => pointInPolygon(x, y, z.polygon);
+    const room = rooms.find(g => g.zones.some(inside));
+    const spot = this.zones.find(z => z.kind === 'include' && z.spot && inside(z));
+    const pts = trail.length ? trail : [{ x, y, t: 0 }];
+    const last = pts[pts.length - 1];
+    let k = pts.length - 1; // walk back while they stayed within 30 cm
+    while (k > 0 && Math.hypot(pts[k - 1].x - x, pts[k - 1].y - y) < 300) k--;
+    const stillFor = last.t - pts[k].t;
+    const moving = pts.length > 1 && stillFor < 3;
+    if (!moving) {
+      const where = spot ? `At ${the(spot.name)}` : room ? `In ${the(room.name)}` : 'Here';
+      return stillFor >= 60 ? `${where}, still for ${fmtDuration(stillFor)}` : `${where}, standing still`;
+    }
+    // Heading over the last ~2 s; a doorway roughly ahead names where they are going.
+    let j = pts.length - 1;
+    while (j > 0 && last.t - pts[j - 1].t < 2) j--;
+    const hx = x - pts[j].x, hy = y - pts[j].y, hl = Math.hypot(hx, hy);
+    if (hl > 150) {
+      const labels = this._shapeLabels();
+      const doors = [...this.zones, ...this._linkedShapes().map(l => l.zone)].filter(z => z.kind === 'exit');
+      let best = null;
+      for (const z of doors) {
+        const cx = z.polygon.reduce((a, p) => a + p[0], 0) / z.polygon.length, cy = z.polygon.reduce((a, p) => a + p[1], 0) / z.polygon.length;
+        const dx = cx - x, dy = cy - y, d = Math.hypot(dx, dy);
+        const cos = (dx * hx + dy * hy) / (d * hl || 1);
+        if (d < 5000 && cos > 0.8 && (!best || d < best.d)) best = { z, d };
+      }
+      if (best) {
+        const lab = labels[best.z.id]?.text?.replace(/^[→↑↓]\s*/, '');
+        return `Walking toward ${lab ? (lab === 'Outside' ? 'the way out' : the(lab)) : the(best.z.name)}`;
+      }
+    }
+    return room ? `Walking in ${the(room.name)}` : 'Walking';
+  }
+
+  /** The last few changes before t in this view's rooms and spots, newest first: [{t, text}]. */
+  _recentChanges(rooms, spots, t, n = 3) {
+    const sum = this.preview?.summary;
+    if (!sum || !this.hist) return [];
+    const ev = [];
+    const push = (iv, on, off) => {
+      for (const [a, b] of iv) {
+        if (a > this.hist.start + 1 && a <= t) ev.push({ t: a, text: on });
+        if (b <= t && b < (this.preview.end ?? this.hist.end) - 1) ev.push({ t: b, text: off });
+      }
+    };
+    for (const g of rooms) {
+      const iv = mergeIntervals(g.zones.flatMap(z => sum[z.id]?.intervals || []));
+      const name = the(g.name);
+      push(iv, `Someone came into ${name}`, `${name[0].toUpperCase()}${name.slice(1)} went clear`);
+    }
+    for (const z of spots) push(sum[z.id]?.intervals || [], `Someone settled at ${the(z.name)}`, `Someone left ${the(z.name)}`);
+    return ev.sort((a, b) => b.t - a.t).slice(0, n);
   }
 
   _zoneEditor() {

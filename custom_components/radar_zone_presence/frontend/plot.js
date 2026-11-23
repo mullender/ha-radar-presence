@@ -6,7 +6,7 @@
 // changes stored geometry.
 
 import { PointLayer } from './points.js';
-import { EXCLUDE_COLOR, GLYPHS, KIND_STYLE, styleKind, doorGeometry, angleDeg, dist, interiorAngle, lineIntersection, slotColor, snapAngle, snapGrid, svg, fmtTime } from './util.js';
+import { EXCLUDE_COLOR, GLYPHS, KIND_STYLE, styleKind, doorGeometry, angleDeg, dist, interiorAngle, lineIntersection, slotColor, slotLetter, snapAngle, snapGrid, svg, fmtTime } from './util.js';
 import { fovPolygon, pointInPolygon } from './engine.js';
 
 const HANDLE_R = 6;
@@ -838,9 +838,11 @@ export class RzpPlot extends HTMLElement {
     const g = svg('g');
     const placed = [];
     const far = this.scale < 0.035;
-    for (const [z, color, on, isSel] of items) {
+    for (let [z, color, on, isSel] of items) {
       if (far && styleKind(z) !== 'include' && !isSel) continue;
       const lab = this.labels?.[z.id] || {};
+      if (lab.hide && !isSel) continue; // a second shape of the same room: one label per room
+      if (lab.on !== undefined) on = lab.on;
       const glyph = lab.glyph || (KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph;
       const occupied = on && (z.kind === 'include' || z.kind === 'linger');
       const text = `${lab.text || z.name}${occupied ? ' · Occupied' : z.kind === 'exit' && on && z.door_entity_id ? ' · open' : ''}`;
@@ -848,7 +850,8 @@ export class RzpPlot extends HTMLElement {
       let tl = pts[0];
       for (const p of pts) if (p[0] + p[1] < tl[0] + tl[1]) tl = p;
       const w = 26 + this._textWidth(text) + (occupied ? 10 : 0), h = 18;
-      let x = tl[0] + 5, y = tl[1] + 5;
+      // Inside the visible map: a linked radar's room may start off-screen.
+      let x = Math.min(Math.max(tl[0] + 5, 4), (this.clientWidth || 1e4) - w - 4), y = Math.min(Math.max(tl[1] + 5, 4), (this.clientHeight || 1e4) - h - 30);
       for (let k = 0; k < 6 && placed.some(r => x < r.x + r.w && r.x < x + w && y < r.y + r.h && r.y < y + h); k++) y += h + 3;
       placed.push({ x, y, w, h });
       const pill = svg('g', { class: 'pill', transform: `translate(${x.toFixed(1)},${y.toFixed(1)})` });
@@ -935,8 +938,9 @@ export class RzpPlot extends HTMLElement {
     for (const [slot, x, y] of this.targets) {
       const s = this._s([x, y]);
       const tg = svg('g', { class: 'target' });
-      tg.append(svg('circle', { cx: s[0], cy: s[1], r: this.trackNumbers !== false ? 9 : 7, fill: slotColor(slot), stroke: '#fff', 'stroke-width': 2 }));
-      if (this.trackNumbers !== false) tg.append(svg('text', { x: s[0], y: s[1] + 3.5, 'text-anchor': 'middle' }, document.createTextNode(String(slot))));
+      tg.append(svg('circle', { cx: s[0], cy: s[1], r: 9, fill: slotColor(slot), stroke: '#fff', 'stroke-width': 2 }));
+      // Details on: the radar's slot number; otherwise a person letter, as in the side panel.
+      tg.append(svg('text', { x: s[0], y: s[1] + 3.5, 'text-anchor': 'middle' }, document.createTextNode(this.trackNumbers ? String(slot) : slotLetter(slot))));
       g.append(tg);
     }
     return g;
