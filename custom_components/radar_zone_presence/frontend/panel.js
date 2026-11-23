@@ -97,7 +97,30 @@ button.hbtn:disabled { opacity: .45; cursor: default; }
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
 .toolbar label, .transport label { font-size: 12px; color: var(--secondary-text-color, #666); display: flex; align-items: center; gap: 3px; }
 rzp-plot { flex: 1; min-height: 300px; }
-.timeline-wrap { background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); padding: 2px 0; }
+.timeline-wrap { position: relative; background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); padding: 2px 0; }
+/* Transport sits in the timeline's label column, as icon buttons (the proposal's timeline anatomy). */
+.timeline-wrap .transport { position: absolute; left: 4px; top: 4px; z-index: 2; width: 112px; padding: 0; border: 0; background: none; gap: 2px; flex-wrap: nowrap; }
+.transport .play { width: 26px; height: 26px; border-radius: 50%; border: 0; background: var(--primary-color, #03a9f4); color: #fff; cursor: pointer; font-size: 11px; padding: 0; flex: none; }
+.transport .play:disabled { opacity: .4; cursor: default; }
+.transport .step { border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; font-size: 15px; padding: 0 4px; line-height: 1; }
+.transport .step:disabled { opacity: .35; cursor: default; }
+.transport select.speed { border: 0; background: none; font-size: 12px; padding: 0; width: 40px; color: var(--primary-text-color, #222); }
+/* Display chips over the map (top left). */
+.map-chips { position: absolute; left: 12px; top: 10px; z-index: 3; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.mchip { font: inherit; font-size: 13px; border: 0; border-radius: 16px; padding: 5px 12px; cursor: pointer; background: var(--secondary-background-color, #eef0f2); color: var(--primary-text-color, #222);
+  display: inline-flex; align-items: center; gap: 6px; }
+.mchip.on { background: rgba(3,169,244,.14); color: var(--primary-color, #0288d1); }
+.mchip select { font: inherit; font-size: 13px; border: 0; background: none; color: inherit; padding: 0; cursor: pointer; }
+.chip-pop { position: absolute; left: 0; top: 34px; background: var(--card-background-color, #fff); border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.2); padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; min-width: 230px; font-size: 13px; }
+.chip-pop label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.chip-pop .help { font-size: 12px; }
+.live-pill { font: inherit; font-size: 13px; font-weight: 500; border: 0; border-radius: 16px; padding: 5px 12px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--secondary-background-color, #eef0f2); color: var(--primary-text-color, #222); }
+.live-pill:empty { display: none; }
+.live-pill.live { background: rgba(229,57,53,.12); color: #d32f2f; }
+.crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14px; color: var(--secondary-text-color, #666); }
+.crumbs select { font: inherit; font-size: 15px; font-weight: 500; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; max-width: 260px; }
 .status { display: flex; gap: 16px; font-size: 12px; color: var(--secondary-text-color, #666); padding: 3px 10px; background: var(--card-background-color, #fff);
   border-top: 1px solid var(--divider-color, #ddd); min-height: 22px; }
 .status .hint { margin-left: auto; }
@@ -962,13 +985,18 @@ class RadarZonePresencePanel extends HTMLElement {
   }
 
   _replayLabelText() {
-    if (this.mode === 'live') return `● Live ${fmtTime(this.cursor)}`;
-    return `Replay ${fmtDateTime(this.cursor)}.${String(Math.floor((this.cursor % 1) * 1000)).padStart(3, '0')}`;
+    if (this.mode === 'live') return '● Live';
+    if (this.mode === 'replay' && this.cursor != null) return `History · ${fmtTime(this.cursor)}`;
+    return this.hist ? '● Go live' : '';
   }
 
+  /** The Live / History pill in the header: live, the playhead's time, or (all detections) a way back to live. */
   _updateReplayLabel() {
-    const label = this.transport?.querySelector('.replay-label');
-    if (label) label.textContent = this._replayLabelText();
+    const b = this.header?.querySelector('.live-pill');
+    if (!b) return;
+    b.textContent = this._replayLabelText();
+    b.classList.toggle('live', this.mode === 'live');
+    b.title = this.mode === 'live' ? 'Showing what the radar sees now. Click to pause here.' : 'Follow what the radar sees right now';
   }
 
   _exitReplay() {
@@ -1151,6 +1179,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this.editing = false;
       this.tool = 'select';
       this._renderToolbar();
+      this._renderTimeline();
       this._updatePlot();
       this._renderStatus();
       this._renderHeader();
@@ -1202,6 +1231,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.editing = true;
     this._renderHeader();
     this._renderToolbar();
+    this._renderTimeline();
     this._renderSide();
     this._renderStatus();
     this._updatePlot();
@@ -1215,6 +1245,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.plot.cancelDraft();
     this._renderHeader();
     this._renderToolbar();
+    this._renderTimeline();
     this._renderSide();
     this._renderStatus();
     this._updatePlot();
@@ -1284,15 +1315,15 @@ class RadarZonePresencePanel extends HTMLElement {
     this.loadingEl = el('div', { class: 'loading', style: { display: 'none' } }, 'Loading history…');
     this.legendEl = el('div', { class: 'legend', style: { display: 'none' } });
     this.transport = el('div', { class: 'transport' });
+    this.chipsEl = el('div', { class: 'map-chips' });
     this.timeline = document.createElement('rzp-timeline');
     this.framesEl = el('div', { class: 'frames', style: { display: 'none' } });
     this.statusEl = el('div', { class: 'status' });
     this.side = el('div', { class: 'side' });
     const main = el('div', { class: 'main' },
       this.toolbar,
-      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl, el('button', { class: 'fit-btn', title: 'Fit the view (F)', onclick: () => this.plot.fit() }, '⤢')),
-      this.transport,
-      el('div', { class: 'timeline-wrap' }, this.timeline),
+      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl, this.chipsEl, el('button', { class: 'fit-btn', title: 'Fit the view (F)', onclick: () => this.plot.fit() }, '⤢')),
+      el('div', { class: 'timeline-wrap' }, this.transport, this.timeline),
       this.framesEl,
       this.statusEl);
     this.bodyEl = el('div', { class: 'body' }, main, this.side);
@@ -1382,9 +1413,13 @@ class RadarZonePresencePanel extends HTMLElement {
       if (!floors.has(key)) floors.set(key, { name: r.floor || 'No floor', level: r.floor_level ?? -Infinity, radars: [] });
       floors.get(key).radars.push(r);
     }
-    const option = r => el('option', { value: r.radar_id, selected: r.radar_id === this.radarId }, `${r.title}${r.area ? ` · ${r.area}` : ''}`);
+    // Rooms, not radars: a radar is named by its area; a second radar in the same area adds its model line.
+    const short = r => r.title.replace(/^(Everything Presence Lite|Human Sensor 2A)\s*/, '') || r.title;
+    const roomOf = r => (!r.area ? r.title : this.details || this.radars.filter(q => q.area === r.area).length > 1 ? `${r.area} · ${short(r)}` : r.area);
+    const option = r => el('option', { value: r.radar_id, selected: r.radar_id === this.radarId }, roomOf(r));
     const grouped = [...floors.values()].sort((a, b) => b.level - a.level);
-    const sel = el('select', { onchange: e => this._selectRadar(e.target.value), title: 'Radar sensor' },
+    const cur = this.radars.find(r => r.radar_id === this.radarId);
+    const sel = el('select', { onchange: e => this._selectRadar(e.target.value), title: 'Room (its radar)' },
       grouped.length > 1 || grouped[0]?.name !== 'No floor'
         ? grouped.map(f => el('optgroup', { label: f.name }, f.radars.map(option)))
         : this.radars.map(option));
@@ -1392,7 +1427,8 @@ class RadarZonePresencePanel extends HTMLElement {
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
     const tabs = el('div', { class: 'tabs' },
       el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'),
-      el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, 'Radars'),
+      // Rooms open from the house view; a radar without an area keeps a way in.
+      this.tab === 'radars' || this.radars.some(r => !r.area) ? el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, this.tab === 'radars' ? 'Room' : 'Radars') : '',
       !this.admin || !this.radars.length ? '' : el('button', { class: `tab${this.tab === 'todo' ? ' on' : ''}`, onclick: () => this._setTab('todo') }, 'To do',
         this.todoCount ? el('span', { class: 'badge' }, String(this.todoCount)) : ''),
       !this.admin || !this.home ? '' : el('button', { class: `tab${this.tab === 'settings' ? ' on' : ''}`, onclick: () => this._setTab('settings') }, 'Settings'));
@@ -1415,7 +1451,7 @@ class RadarZonePresencePanel extends HTMLElement {
     }
     if (this.editing) {
       h.replaceChildren(
-        el('h1', {}, 'Editing ', el('b', {}, this.config?.title || '')),
+        el('h1', {}, 'Editing ', el('b', {}, this.radars.find(r => r.radar_id === this.radarId)?.area || this.config?.title || '')),
         el('div', { class: 'spacer' }),
         dirty ? el('span', { class: 'dirty' }, 'Unsaved changes') : '',
         el('button', { class: 'ibtn', title: 'Undo (Ctrl+Z)', disabled: !this.undoStack.length, onclick: () => this._undo() }, '↶'),
@@ -1428,13 +1464,14 @@ class RadarZonePresencePanel extends HTMLElement {
       el('button', { class: 'menu', title: 'Menu', onclick: () => this.dispatchEvent(new Event('hass-toggle-menu', { bubbles: true, composed: true })) }, '☰'),
       el('h1', {}, 'Presence'),
       tabs,
-      this.radars.length ? sel : '',
-      this.radars.length ? range : '',
-      this.radars.length ? el('button', { class: 'ibtn', title: 'Reload history', onclick: () => this._loadHistory() }, '⟳') : '',
+      this.radars.length ? el('div', { class: 'crumbs' }, cur?.floor ? el('span', {}, `› ${cur.floor}`) : '', el('span', {}, '›'), sel) : '',
       el('div', { class: 'spacer' }),
+      this.radars.length ? range : '',
+      this.radars.length ? el('button', { class: 'live-pill', onclick: () => (this.mode === 'live' ? this._togglePlay() : this._goLive()) }) : '',
       this.config && this.admin ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎ Edit') : '',
       this.config ? el('button', { class: 'ibtn', title: 'More', onclick: e => this._openMenu(e.currentTarget) }, '⋮') : '',
     );
+    this._updateReplayLabel();
   }
 
   /** Details: coordinates, track numbers, raw readings, technical Activity. A per-user switch. */
@@ -1517,6 +1554,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const item = (label, fn, disabled = false) => el('button', { disabled, onclick: () => { close(); fn(); } }, label);
     const menu = el('div', { class: 'menu-pop', style: { top: `${r.bottom + 4}px`, right: `${Math.max(8, innerWidth - r.right)}px` } },
       item('Copy a link to this moment', () => this._copyLink(), !this.hist),
+      item('Reload history', () => this._loadHistory()),
       !this.admin ? '' : item('Line up with another radar…', () => { this._enterEdit(); this.selectedId = null; this._renderSide(); this.side.querySelector('.align-anchor')?.scrollIntoView({ block: 'center' }); }, this.radars.length < 2),
       !this.admin ? '' : item('Mounting check…', () => openSetup(this)),
       !this.admin ? '' : item('Export shapes…', () => this._exportZones(), !this.zones.length),
@@ -1582,52 +1620,80 @@ class RadarZonePresencePanel extends HTMLElement {
     const t = this.transport;
     if (!t) return;
     this._transportKey = `${this.mode}|${this.playing}`;
-    const replay = this.mode === 'replay' || this.mode === 'live';
     const live = this.mode === 'live';
     t.replaceChildren(
-      el('div', { class: 'group' },
-        this._tb('⏮', false, () => this._stepFrame(-1), 'Previous frame (,) · ← jumps 10 s, Shift+← 1 min', !this.hist),
-        this._tb(this.playing || live ? '⏸' : '▶', this.playing || live, () => this._togglePlay(), live ? 'Pause: freeze at this moment (Space)' : 'Play / pause (Space)', !this.hist),
-        this._tb('⏭', false, () => this._stepFrame(1), 'Next frame (.) · → jumps 10 s, Shift+→ 1 min', !this.hist),
-        el('select', { onchange: e => { this.speed = +e.target.value; }, title: 'Playback speed' },
-          SPEEDS.map(s => el('option', { value: s, selected: s === this.speed }, `${s}×`)))),
-      el('div', { class: 'group' },
-        el('label', {}, 'Trail',
-          el('select', { onchange: e => { this.trailSeconds = +e.target.value; this._updatePlot(); } },
-            [5, 10, 20, 30, 60, 120, 300].map(s => el('option', { value: s, selected: s === this.trailSeconds }, `${s} s`)))),
-        this._tb('Detections', this.showContext, () => { this.showContext = !this.showContext; this._updatePlot(); this._renderTransport(); }, 'Keep all detections in the range visible, faded, behind the trail'),
-        el('input', { type: 'range', class: 'density', min: 0.2, max: 3, step: 0.1, value: this.detOpacity, title: 'Detection density: how strongly detections are drawn',
-          oninput: e => { this.detOpacity = +e.target.value; localStorage.setItem('rzp.detOpacity', this.detOpacity); this._updatePlot(); } }),
-        !this.details ? '' : this._tb('Timestamps', this.trailLabels, () => { this.trailLabels = !this.trailLabels; this._updatePlot(); this._renderTransport(); }, 'Label trail points with their time'),
-        !this.details ? '' : this._tb('Raw readings', this.showFrames, () => { this.showFrames = !this.showFrames; this._renderFrames(); this._renderTransport(); }, 'Show the raw readings around the playhead')),
-      el('div', { class: 'group' },
-        replay
-          ? el('span', { class: `replay-label${live ? ' live' : ''}`, style: { fontVariantNumeric: 'tabular-nums' } }, this._replayLabelText())
-          : el('span', { class: 'help' }, this.hist ? 'Drag the yellow handles to trim the range (point cloud + playback) · drag the red playhead · ←/→ 10 s, Shift 1 min, ,/. one frame · wheel zooms · bars = preview of your edits ▼, dark line = recorded ▲' : ''),
-        !live && this.hist ? this._tb('● Live', false, () => this._goLive(), 'Follow what the radar sees right now') : '',
-        replay ? this._tb('All detections', false, () => { this.preferLive = false; this._exitReplay(); }, 'Show every detection in the range (for drawing), with live detections on top') : '',
-        this.brush ? this._tb('Zoom to trim', false, () => this.timeline.zoomToTrim(), 'Zoom the timeline to the trimmed range') : '',
-        this.hist ? this._tb('🔗 Link', false, () => this._copyLink(), 'Copy a link to this radar at this moment (cursor and timeline zoom), to share') : '',
-        this.brush ? this._tb('Clear trim', false, () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); }, 'Use the whole loaded range') : ''),
-    );
+      el('button', { class: 'play', title: live ? 'Pause: freeze at this moment (Space)' : 'Play / pause (Space)', disabled: !this.hist, onclick: () => this._togglePlay() }, this.playing || live ? '❚❚' : '▶'),
+      el('button', { class: 'step', title: 'Back one frame (,) · ← 10 s, Shift+← 1 min', disabled: !this.hist, onclick: () => this._stepFrame(-1) }, '‹'),
+      el('button', { class: 'step', title: 'Forward one frame (.) · → 10 s, Shift+→ 1 min', disabled: !this.hist, onclick: () => this._stepFrame(1) }, '›'),
+      el('select', { class: 'speed', onchange: e => { this.speed = +e.target.value; }, title: 'Playback speed' },
+        SPEEDS.map(v => el('option', { value: v, selected: v === this.speed }, `${v}×`))));
+    this._renderMapChips();
+    this._updateReplayLabel();
+  }
+
+  /** Display chips over the map: detections (density, all of the range, details extras) and trail length. */
+  _renderMapChips() {
+    const c = this.chipsEl;
+    if (!c) return;
+    const open = this._chipPop;
+    const replay = this.mode === 'replay' || this.mode === 'live';
+    const pop = !open ? '' : el('div', { class: 'chip-pop', onpointerdown: e => e.stopPropagation() },
+      el('label', {}, el('input', { type: 'checkbox', checked: this.showContext, onchange: e => { this.showContext = e.target.checked; this._updatePlot(); } }), 'Show all detections in the range, faded'),
+      el('label', {}, 'Density', el('input', { type: 'range', min: 0.2, max: 3, step: 0.1, value: this.detOpacity, style: { flex: 1 },
+        oninput: e => { this.detOpacity = +e.target.value; localStorage.setItem('rzp.detOpacity', this.detOpacity); this._updatePlot(); } })),
+      !this.details ? '' : el('label', {}, el('input', { type: 'checkbox', checked: this.trailLabels, onchange: e => { this.trailLabels = e.target.checked; this._updatePlot(); } }), 'Time stamps on trails'),
+      !this.details ? '' : el('label', {}, el('input', { type: 'checkbox', checked: this.showFrames, onchange: e => { this.showFrames = e.target.checked; this._renderFrames(); } }), 'Raw readings'),
+      replay ? el('button', { class: 'btn', title: 'Stop playback and show every detection in the range (for drawing)', onclick: () => { this._chipPop = false; this.preferLive = false; this._exitReplay(); } }, 'All detections, no playback') : '');
+    c.replaceChildren(
+      el('div', { style: { position: 'relative' } },
+        el('button', { class: `mchip${open ? ' on' : ''}`, title: 'How detections are drawn', onclick: () => { this._chipPop = !open; this._renderMapChips(); } }, '◐ Detections ▾'), pop),
+      el('label', { class: 'mchip', title: 'How long a trail stays behind each person' }, 'Trails',
+        el('select', { onchange: e => { this.trailSeconds = +e.target.value; this._updatePlot(); } },
+          [5, 10, 20, 30, 60, 120, 300].map(v => el('option', { value: v, selected: v === this.trailSeconds }, `${v} s`)))),
+      this.brush ? el('button', { class: 'mchip on', title: 'Zoom the timeline to the trimmed range', onclick: () => this.timeline.zoomToTrim() }, 'Zoom to trim') : '',
+      this.brush ? el('button', { class: 'mchip', title: 'Use the whole loaded range', onclick: () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); } }, 'Clear trim ✕') : '');
+    if (open && !this._chipAway) {
+      this._chipAway = e => { if (!e.composedPath().includes(c)) { this._chipPop = false; removeEventListener('pointerdown', this._chipAway, true); this._chipAway = null; this._renderMapChips(); } };
+      addEventListener('pointerdown', this._chipAway, true);
+    }
   }
 
   _renderTimeline() {
     if (!this.timeline) return;
     const rows = [];
     const sum = this.preview?.summary || {};
-    this.zones.forEach((z, i) => {
-      if (z.kind === 'exclude' || isSpot(z.kind)) return;
+    const marks = this.details || this.editing;
+    const areas = this.hass?.areas || {};
+    const lane = (z, extra = {}) => ({
+      id: z.id, popover: true, name: z.name, glyph: (KIND_STYLE[styleKind(z)] || KIND_STYLE.include).glyph, color: kindTone(styleKind(z), !!this.hass?.themes?.darkMode),
+      predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]), ...extra,
+    });
+    // Review: one lane per room (its shapes merged) and per spot. Editing: one lane per shape.
+    const roomLanes = new Map();
+    for (const z of this.zones) {
+      if (z.kind === 'exclude' || isSpot(z.kind)) continue;
       if (z.kind === 'exit') {
         const d = z.door_entity_id && this.doors[z.door_entity_id];
-        if (!d || !this.hist) return;
+        if (!d || !this.hist) continue;
         const iv = doorIntervals(d.rows, this.hist.end);
-        rows.push({ id: z.id, name: `🚪 ${z.name}`, color: EXIT_COLOR, predicted: [], actual: iv, triggers: [], actualTriggers: iv.map(v => v[0]) });
-        return;
+        rows.push({ id: z.id, name: this._doorName(z.door_entity_id), glyph: 'door', color: EXIT_COLOR, predicted: iv, actual: [], triggers: [], actualTriggers: [] });
+        continue;
       }
-      rows.push({ id: z.id, popover: true, name: z.name, color: kindTone(styleKind(z)), predicted: sum[z.id]?.intervals || [], actual: this.actual[z.id] || [], triggers: sum[z.id]?.triggers || [], actualTriggers: (this.actual[z.id] || []).map(v => v[0]) });
-    });
-    rows.push({ id: 'presence', name: 'Anyone (not ignored)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
+      const areaId = z.area_id || this.config?.device_area_id;
+      const name = z.spot ? z.name : roomName(z, areas[areaId]?.name);
+      if (z.spot || this.editing) { rows.push(lane(z, { name: this.editing && !z.spot && name !== z.name ? `${name} · ${z.name}` : name })); continue; }
+      const prev = roomLanes.get(areaId);
+      if (!prev) { const r = lane(z, { name }); roomLanes.set(areaId, r); rows.push(r); continue; }
+      // A second shape of the same room: merge into its lane (no popover: it explains one shape).
+      prev.predicted = mergeIntervals([...prev.predicted, ...(sum[z.id]?.intervals || [])]);
+      prev.actual = mergeIntervals([...prev.actual, ...(this.actual[z.id] || [])]);
+      prev.triggers = [...prev.triggers, ...(sum[z.id]?.triggers || [])];
+      prev.actualTriggers = prev.actual.map(v => v[0]);
+      prev.popover = false;
+    }
+    // Spots after rooms, as in the side panel.
+    rows.sort((a, b) => (a.glyph === 'spot') - (b.glyph === 'spot') || (a.glyph === 'door') - (b.glyph === 'door'));
+    if (marks) rows.push({ id: 'presence', name: 'Anyone (not ignored)', color: '#607d8b', predicted: sum.presence?.intervals || [], actual: this.actual.presence || [], triggers: [], actualTriggers: (this.actual.presence || []).map(v => v[0]) });
     this.timeline.set({
       range: this.hist ? { start: this.hist.start, end: this.hist.end } : null,
       frames: this.hist ? { start: this.hist.start, t: this.hist.frame_t, n: this.hist.frame_n } : null,
@@ -1635,6 +1701,7 @@ class RadarZonePresencePanel extends HTMLElement {
       cursor: this.cursor,
       brush: this.brush,
       follow: this.mode === 'live',
+      marks,
       resetView: !!this._resetTimelineView,
     });
     this._resetTimelineView = false;

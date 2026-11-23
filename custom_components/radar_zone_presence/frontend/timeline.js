@@ -4,16 +4,16 @@
 // the point cloud and for playback. Click/drag elsewhere scrubs the playhead,
 // wheel zooms, Shift-drag pans, double-click resets zoom.
 
-import { fmtTime } from './util.js';
+import { GLYPHS, fmtTime } from './util.js';
 
 const AXIS_H = 18;
 const DENSITY_H = 26;
-const ROW_H = 16;
+const ROW_H = 18;
 const LABEL_W = 120;
 const HANDLE_W = 10;
 const TRIM_COLOR = '#f9a825';
 const PLAYHEAD_W = 16; // slide-rule style cursor: wide grab band, hairline in the middle
-const PLAYHEAD_COLOR = '229,57,53';
+const PLAYHEAD_COLOR = '33,150,243'; // HA's blue, as in the proposal
 
 const css = `
 :host { display: block; position: relative; user-select: none; -webkit-user-select: none; }
@@ -33,6 +33,7 @@ export class RzpTimeline extends HTMLElement {
     this.cursor = null;
     this.brush = null; // {t0, t1}
     this.follow = false; // slide a zoomed view along as the range grows (live)
+    this.marks = false; // recorded states and trigger markers (Details on, or editing)
     this._drag = null;
     this._raf = 0;
     this.canvas.addEventListener('pointerdown', e => this._down(e));
@@ -286,7 +287,6 @@ export class RzpTimeline extends HTMLElement {
     const text = style.getPropertyValue('--primary-text-color') || '#222';
     const sub = style.getPropertyValue('--secondary-text-color') || '#777';
     const div = style.getPropertyValue('--divider-color') || '#ddd';
-    const primary = style.getPropertyValue('--primary-color') || '#03a9f4';
     ctx.font = '11px sans-serif';
     if (!this.range || !this.view) {
       ctx.fillStyle = sub;
@@ -307,8 +307,7 @@ export class RzpTimeline extends HTMLElement {
 
     // Density
     const y0 = AXIS_H;
-    ctx.fillStyle = sub;
-    ctx.fillText('activity', 4, y0 + 16);
+    if (this.marks) { ctx.fillStyle = sub; ctx.fillText('activity', 4, y0 + 16); }
     if (this.frames?.t?.length) {
       // Histogram of targets per bucket over the visible view (recomputed per render).
       const n = Math.max(20, Math.floor((w - LABEL_W) / 3));
@@ -322,8 +321,8 @@ export class RzpTimeline extends HTMLElement {
       }
       let max = 0;
       for (const b of buckets) max = Math.max(max, b);
-      ctx.fillStyle = primary;
-      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = sub;
+      ctx.globalAlpha = 0.45;
       for (let i = 0; i < n && max; i++) {
         if (!buckets[i]) continue;
         const bh = Math.max(1.5, (buckets[i] / max) * (DENSITY_H - 4));
@@ -335,8 +334,22 @@ export class RzpTimeline extends HTMLElement {
     // Zone rows
     let ry = AXIS_H + DENSITY_H;
     for (const row of this.rows) {
+      // Lane label: the kind's glyph in its colour, then the name (truncated; the full name is the tooltip).
+      let lx = 4;
+      if (row.glyph && GLYPHS[row.glyph]) {
+        ctx.save();
+        ctx.translate(4, ry + 3); ctx.scale(1.05, 1.05);
+        ctx.strokeStyle = row.color; ctx.lineWidth = 1.3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.stroke(new Path2D(GLYPHS[row.glyph]));
+        ctx.restore();
+        lx = 20;
+      }
       ctx.fillStyle = text;
-      ctx.fillText(row.name.length > 18 ? row.name.slice(0, 17) + '…' : row.name, 4, ry + 12);
+      ctx.font = '12px sans-serif';
+      let name = row.name;
+      while (name.length > 3 && ctx.measureText(name).width > LABEL_W - lx - 6) name = name.slice(0, -2) + '…';
+      ctx.fillText(name, lx, ry + 13);
+      ctx.font = '11px sans-serif';
       for (const [a, b, n, label] of row.steps || []) { // a level per interval (a people count): shade + number
         if (b < this.view.v0 || a > this.view.v1 || !n) continue;
         const x0 = Math.max(LABEL_W, xa(a)), x1 = Math.min(w, xa(b));
@@ -348,14 +361,22 @@ export class RzpTimeline extends HTMLElement {
         if (x1 - x0 > ctx.measureText(txt).width + 6) { ctx.fillStyle = '#fff'; ctx.fillText(txt, x0 + 3, ry + 12); }
       }
       ctx.fillStyle = row.color;
+      ctx.globalAlpha = 0.5;
       for (const [a, b] of row.predicted || []) {
         if (b < this.view.v0 || a > this.view.v1) continue;
-        ctx.fillRect(xa(a), ry + 2, Math.max(1.5, xa(b) - xa(a)), ROW_H - 7);
+        const bx = Math.max(LABEL_W, xa(a)), bw = Math.max(2, Math.min(w, xa(b)) - bx);
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(bx, ry + 3, bw, ROW_H - (this.marks ? 9 : 6), 3) : ctx.rect(bx, ry + 3, bw, ROW_H - 6);
+        ctx.fill();
         if (row.popover && b - a < 3) { // short blips get a marker: the usual cause of "why did the light turn on?"
           const x = xa((a + b) / 2);
-          ctx.beginPath(); ctx.arc(x, ry + ROW_H - 3, 2, 0, Math.PI * 2); ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.beginPath(); ctx.moveTo(x, ry + 1.5); ctx.lineTo(x - 3, ry - 2.5); ctx.lineTo(x + 3, ry - 2.5); ctx.closePath(); ctx.fill();
+          ctx.globalAlpha = 0.5;
         }
       }
+      ctx.globalAlpha = 1;
+      if (!this.marks) { ry += ROW_H; continue; }
       ctx.fillStyle = text;
       ctx.globalAlpha = 0.6;
       for (const [a, b] of row.actual || []) {
@@ -385,12 +406,22 @@ export class RzpTimeline extends HTMLElement {
       ctx.fillStyle = 'rgba(0,0,0,0.28)';
       if (xL > LABEL_W) ctx.fillRect(LABEL_W, AXIS_H, xL - LABEL_W, h - AXIS_H);
       if (xR < w) ctx.fillRect(xR, AXIS_H, w - xR, h - AXIS_H);
-      ctx.strokeStyle = TRIM_COLOR;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(xa(t0), AXIS_H + 1, xa(t1) - xa(t0), h - AXIS_H - 2);
-      ctx.lineWidth = 1;
+      const trimmed = !!this.brush;
+      if (trimmed) {
+        ctx.strokeStyle = TRIM_COLOR;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(xa(t0), AXIS_H + 1, xa(t1) - xa(t0), h - AXIS_H - 2);
+        ctx.lineWidth = 1;
+      }
       const [h0, h1] = this._handleXs();
       for (const [hx, side] of [[h0, -1], [h1, 1]]) {
+        if (!trimmed) { // untrimmed: quiet grips at the ends, still grabbable
+          ctx.fillStyle = div;
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(hx + (side < 0 ? HANDLE_W - 4 : 0), AXIS_H + 4, 4, h - AXIS_H - 8, 2) : ctx.rect(hx, AXIS_H + 4, 4, h - AXIS_H - 8);
+          ctx.fill();
+          continue;
+        }
         ctx.fillStyle = TRIM_COLOR;
         ctx.beginPath();
         ctx.roundRect ? ctx.roundRect(hx, AXIS_H, HANDLE_W, h - AXIS_H, side < 0 ? [5, 0, 0, 5] : [0, 5, 5, 0]) : ctx.rect(hx, AXIS_H, HANDLE_W, h - AXIS_H);
@@ -410,20 +441,7 @@ export class RzpTimeline extends HTMLElement {
       const idle = this.cursor === null;
       const a = idle ? 0.45 : 1;
       const top = 2, bottom = h - 1, half = PLAYHEAD_W / 2;
-      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.14 * a})`;
-      ctx.strokeStyle = `rgba(${PLAYHEAD_COLOR},${0.55 * a})`;
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(px - half, top, PLAYHEAD_W, bottom - top, 4) : ctx.rect(px - half, top, PLAYHEAD_W, bottom - top);
-      ctx.fill();
-      ctx.stroke();
-      // Grip tab at the top
-      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.9 * a})`;
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(px - half, top, PLAYHEAD_W, AXIS_H - 3, [4, 4, 2, 2]) : ctx.rect(px - half, top, PLAYHEAD_W, AXIS_H - 3);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-      ctx.lineWidth = 1;
-      for (const dx of [-3, 0, 3]) { ctx.beginPath(); ctx.moveTo(px + dx + 0.5, top + 4); ctx.lineTo(px + dx + 0.5, AXIS_H - 5); ctx.stroke(); }
+      void half;
       // Hairline
       ctx.strokeStyle = `rgba(${PLAYHEAD_COLOR},${a})`;
       ctx.lineWidth = 1.5;
@@ -431,13 +449,16 @@ export class RzpTimeline extends HTMLElement {
       ctx.lineWidth = 1;
       // Time label beside the tab
       const t = this.cursor ?? this._trim.t1;
-      const label = idle ? `${fmtTime(t)} · drag to replay` : fmtTime(t, true, true);
-      const tw = ctx.measureText(label).width + 8;
-      const lx = px + half + 3 + tw > w ? px - half - 3 - tw : px + half + 3;
-      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.9 * a})`;
-      ctx.fillRect(lx, top, tw, AXIS_H - 3);
+      const label = idle ? `${fmtTime(t)} · drag to replay` : fmtTime(t, true, this.view.v1 - this.view.v0 < 60);
+      // Time pill centred on the playhead (kept inside the lane area); it is also the grip.
+      const tw = ctx.measureText(label).width + 14;
+      const lx = Math.max(LABEL_W, Math.min(w - tw, px - tw / 2));
+      ctx.fillStyle = `rgba(${PLAYHEAD_COLOR},${0.95 * a})`;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(lx, top, tw, AXIS_H - 3, 8) : ctx.rect(lx, top, tw, AXIS_H - 3);
+      ctx.fill();
       ctx.fillStyle = '#fff';
-      ctx.fillText(label, lx + 4, AXIS_H - 6);
+      ctx.fillText(label, lx + 7, AXIS_H - 6);
     }
   }
 }
