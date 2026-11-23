@@ -307,7 +307,6 @@ export class RzpTimeline extends HTMLElement {
 
     // Density
     const y0 = AXIS_H;
-    if (this.marks) { ctx.fillStyle = sub; ctx.fillText('activity', 4, y0 + 16); }
     if (this.frames?.t?.length) {
       // Histogram of targets per bucket over the visible view (recomputed per render).
       const n = Math.max(20, Math.floor((w - LABEL_W) / 3));

@@ -27,6 +27,9 @@ const css = `
 .bar select, .bar button { font: inherit; font-size: 13px; padding: 3px 8px; border: 1px solid var(--divider-color, #ccc); border-radius: 4px;
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); cursor: pointer; }
 .bar button.on { background: var(--error-color, #db4437); color: #fff; border-color: transparent; }
+.bar .live-pill { border: 0; border-radius: 16px; padding: 5px 12px; font-weight: 500; background: var(--secondary-background-color, #eef0f2); font-variant-numeric: tabular-nums; }
+.bar .live-pill.live { background: rgba(229,57,53,.12); color: #d32f2f; }
+.bar select.range { border: 0; border-radius: 16px; padding: 5px 10px; background: var(--secondary-background-color, #eef0f2); }
 .bar .when { font-weight: 500; }
 .bar .home { margin-left: auto; font-size: 15px; }
 .bar .home b { font-size: 20px; }
@@ -35,22 +38,25 @@ const css = `
 .bar .home.settling b, .bar .home .settle { color: var(--warning-color, #d97706); }
 .bar .home .settle { font-size: 13px; animation: settle 2.4s ease-in-out infinite; }
 @keyframes settle { 50% { opacity: .45; } }
-.scroll { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
-:host([narrow]) .scroll { grid-template-columns: 1fr; }
+.scroll { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; }
+:host([narrow]) .scroll { grid-template-columns: 1fr; grid-template-rows: none; }
+.scroll > .side { grid-column: 2; grid-row: 1 / span 2; }
+:host([narrow]) .scroll > .side { grid-column: auto; grid-row: auto; }
 .house { position: relative; padding: 14px; min-width: 0; }
-.floors { position: relative; display: flex; flex-direction: column; gap: 22px; z-index: 1; }
-.floor { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; align-items: start; padding-bottom: 18px; border-bottom: 1px solid var(--divider-color, #e4e4e4); }
-.floor:last-child { border-bottom: 0; }
-.floor .rooms { display: flex; flex-wrap: wrap; gap: 12px; }
-.floor h2 { margin: 6px 0 0; font-size: 13px; font-weight: 500; color: var(--secondary-text-color, #666); display: flex; flex-direction: column; gap: 2px; }
-.floor h2 .n { font-size: 28px; font-weight: 400; color: var(--primary-text-color, #222); }
+.floors { position: relative; display: flex; flex-direction: column; gap: 26px; z-index: 1; }
+.floor { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; align-items: center; }
+.floor .rooms { display: flex; flex-wrap: wrap; gap: 14px 46px; padding: 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; background: var(--card-background-color, #fff); }
+.floor .plan { padding: 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; background: var(--card-background-color, #fff); }
+.floor .plan .rooms { border: 0; padding: 0; }
+.floor h2 { margin: 0; font-size: 13px; font-weight: 400; color: var(--secondary-text-color, #666); display: flex; flex-direction: column; gap: 0; }
+.floor h2 .n { font-size: 26px; font-weight: 500; color: var(--primary-text-color, #222); line-height: 1.2; }
 .floor.doubt h2 .n { color: var(--warning-color, #f9a825); }
-.space { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ddd); border-radius: 10px; padding: 8px 10px;
-  width: 190px; min-height: 84px; transition: box-shadow .2s, background .2s; }
-.space.occ { background: color-mix(in srgb, #3b82f6 10%, var(--card-background-color, #fff)); border-color: color-mix(in srgb, #3b82f6 35%, var(--divider-color, #ddd)); }
+.space { background: var(--card-background-color, #fff); border: 1px solid transparent; border-radius: 10px; padding: 8px 12px;
+  flex: 1 1 150px; max-width: 280px; min-height: 76px; transition: box-shadow .2s, background .2s; }
+.space.occ { background: color-mix(in srgb, #3b82f6 13%, var(--card-background-color, #fff)); }
+.space.blind { border: 1.5px dashed var(--divider-color, #ccc); }
 .space.link { cursor: pointer; }
 .space.link:hover { box-shadow: 0 1px 6px rgba(0,0,0,.15); }
-.space.blind { border-style: dashed; }
 .space.hit { box-shadow: 0 0 0 2px var(--primary-color, #03a9f4); }
 .space .top { display: flex; align-items: baseline; gap: 6px; }
 .space .name { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -59,7 +65,13 @@ const css = `
 .space:hover .fix { display: inline-flex; }
 .space .fix button { font: inherit; font-size: 13px; width: 22px; height: 22px; padding: 0; border-radius: 11px; border: 1px solid var(--divider-color, #ccc);
   background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); cursor: pointer; }
-.space .meta { font-size: 11px; color: var(--secondary-text-color, #777); }
+.space .meta { font-size: 12px; color: var(--secondary-text-color, #777); }
+.space .meta .open { color: #d97706; font-weight: 500; }
+.seam { position: absolute; transform: translate(-50%, -50%); font-size: 11px; padding: 1px 7px; border-radius: 9px; z-index: 2; pointer-events: auto; white-space: nowrap;
+  background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #ccc); color: var(--secondary-text-color, #666); }
+.seam.hot { border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4); }
+.seam.open { border-color: #d97706; color: #d97706; }
+.seam.stairs { border: 0; background: none; padding: 0; }
 .plan { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan-map { position: relative; width: 100%; max-width: 760px; max-height: 70vh; overflow: hidden; }
 .plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; color: var(--primary-text-color, #222); overflow: hidden; }
@@ -85,11 +97,14 @@ const css = `
 .chip { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--secondary-background-color, #eee); color: var(--secondary-text-color, #555); }
 .chip.open { background: #d97706; color: #fff; }
 svg.links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; overflow: visible; }
-svg.links path { fill: none; stroke: var(--divider-color, #bbb); stroke-width: 2; }
-svg.links path.door { stroke-dasharray: 5 4; }
+svg.links path { fill: none; stroke: var(--divider-color, #bbb); stroke-width: 1; opacity: .7; }
+svg.links path.door { stroke-dasharray: 3 3; }
 svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
-.timeline-wrap { grid-column: 1 / -1; background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); padding: 2px 0; }
-.log { border-left: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); overflow-y: auto; height: 100%; max-height: 70vh; font-size: 12px; }
+.timeline-wrap { grid-column: 1; background: var(--card-background-color, #fff); border-top: 1px solid var(--divider-color, #ddd); padding: 2px 0; }
+.log { border-left: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); overflow-y: auto; height: 100%; font-size: 12px; box-sizing: border-box; }
+.scroll > .side { position: relative; }
+.scroll > .side .log { position: absolute; inset: 0; }
+:host([narrow]) .scroll > .side .log { position: static; }
 :host([narrow]) .log { border-left: 0; max-height: 40vh; }
 .log h3 { position: sticky; top: 0; margin: 0; padding: 8px 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666);
   background: var(--card-background-color, #fff); border-bottom: 1px solid var(--divider-color, #ddd); display: flex; gap: 8px; }
@@ -314,13 +329,13 @@ export class RzpHeadcount extends HTMLElement {
     const { per, unknownFloors } = this._counts(snap);
     const total = [...per.values()].reduce((x, y) => x + y, 0);
     const doubt = (snap?.tokens || []).filter(([, , f]) => f.includes('u')).length;
-    const range = el('select', { onchange: e => { this.rangeS = +e.target.value; this.cursor = null; this.load(); } },
+    const range = el('select', { class: 'range', title: 'History range', onchange: e => { this.rangeS = +e.target.value; this.cursor = null; this.load(); } },
       RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
     const live = this.cursor === null;
     this.barEl.replaceChildren(
       range,
-      el('button', { class: live ? 'on' : '', title: 'Follow now', onclick: () => { this.cursor = null; this.render(); } }, live ? '● Live' : 'Go live'),
-      el('span', { class: 'when' }, live ? `Now, ${fmtTime(Date.now() / 1000)}` : fmtDateTime(this.cursor)),
+      el('button', { class: `live-pill${live ? ' live' : ''}`, title: live ? 'Following now' : 'Back to now', onclick: () => { this.cursor = null; this.render(); } },
+        live ? '● Live' : `History · ${fmtTime(this.cursor)}`),
       this.data.log_start && this.start < this.data.log_start ? el('span', { class: 'meta' }, `(log starts ${fmtDateTime(this.data.log_start)})`) : '',
       el('span', { class: `home${unknownFloors.size || doubt ? ' settling' : ''}` }, 'Home ', el('b', {}, unknownFloors.size || doubt ? `${total}+` : String(total)),
         unknownFloors.size || doubt ? el('span', { class: 'settle', title: 'A door to outside is in use: not sure yet who went out' }, 'settling') : '',
@@ -361,13 +376,14 @@ export class RzpHeadcount extends HTMLElement {
                 el('button', { title: 'Correct: one person fewer here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) - 1) }, '−'),
                 el('button', { title: 'Correct: one more person here', onclick: () => this._correct(a.id, (per.get(a.id) || 0) + 1) }, '+')) : '',
               el('span', { class: 'count' }, doubt ? `${per.get(a.id) || 0}?` : String(per.get(a.id) || 0))),
-            el('div', { class: 'meta' }, a.observed ? '' : 'no radar · counted at its doors'),
+            // "radar · ⇥ Front door closed": how the room is counted, then its outside doors.
+            el('div', { class: 'meta' }, a.observed ? 'radar' : 'no radar · counted at its doors',
+              ...doors.flatMap(([e]) => {
+                const st = this._doorAt(e, t);
+                const open = ['on', 'open', 'opening', 'closing', 'unlocked'].includes(st);
+                return [' · ', el('span', { class: open ? 'open' : '', title: `${this._entityName(e)}: ${st}` }, `⇥ ${this._doorLabel(e)} ${this._doorWord(st)}`)];
+              })),
             el('div', { class: 'dots' }, (byArea.get(a.id) || []).sort((x, y) => x[0] - y[0]).map(([id, flags]) => this._dot(id, flags))),
-            doors.length ? el('div', { class: 'doors' }, doors.map(([e]) => {
-              const st = this._doorAt(e, t);
-              const open = ['on', 'open', 'opening', 'closing', 'unlocked'].includes(st);
-              return el('span', { class: `chip${open ? ' open' : ''}`, title: `${this._entityName(e)}: ${st}` }, `${this._doorLabel(e)} · ${this._doorWord(st)}`);
-            })) : '',
           );
           if (!mini) this.boxes.set(a.id, tile);
           return tile;
@@ -392,7 +408,7 @@ export class RzpHeadcount extends HTMLElement {
           others.length ? el('div', { class: 'rooms' }, others.map(a => { const b = box(a); b.querySelector('.meta').textContent ||= 'not on this map'; return b; })) : '');
       } else rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
-        el('h2', {}, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), f.name, toggle),
+        el('h2', {}, f.name, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), toggle),
         rooms);
     });
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -537,7 +553,7 @@ export class RzpHeadcount extends HTMLElement {
     if (!this.svg || !this.boxes) return;
     const base = this.houseEl.getBoundingClientRect();
     const r = id => { const b = this.boxes.get(id)?.getBoundingClientRect(); return b && { l: b.left - base.left, r: b.right - base.left, t: b.top - base.top, b: b.bottom - base.top }; };
-    const paths = [];
+    const paths = [], chips = [];
     for (const { a, b, door } of this.links) {
       const p = r(a), q = r(b);
       if (!p || !q) continue;
@@ -551,15 +567,30 @@ export class RzpHeadcount extends HTMLElement {
         const x1 = (U.l + U.r) / 2, x2 = (D.l + D.r) / 2, my = (U.b + D.t) / 2;
         d = `M${x1},${U.b} C${x1},${my} ${x2},${my} ${x2},${D.t}`;
       }
+      const hot = this._hot?.has([a, b].sort().join('|'));
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', d);
-      path.setAttribute('class', `${door ? 'door' : ''} ${this._hot?.has([a, b].sort().join('|')) ? 'hot' : ''}`);
-      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-      title.textContent = `${this.areas.get(a)?.name} ↔ ${this.areas.get(b)?.name}${door ? ` (door: ${this._entityName(door)})` : ''}`;
-      path.append(title);
+      path.setAttribute('class', `${door ? 'door' : ''} ${hot ? 'hot' : ''}`);
       paths.push(path);
+      // A chip on the seam says what joins the rooms: a door (with its state), an opening, or stairs.
+      const sameRow = Math.abs(p.t - q.t) < 5;
+      const upper = p.t < q.t ? p : q, lower = p.t < q.t ? q : p;
+      const at = sameRow ? [(Math.min(p.r, q.r) + Math.max(p.l, q.l)) / 2, (p.t + p.b) / 2]
+        : [(lower.l + lower.r) / 2, lower.t - 25]; // stairs: in the gap above the lower floor's band
+      const crossFloor = this.areas.get(a)?.level !== this.areas.get(b)?.level;
+      const st = door ? this._doorAt(door, this.cursor) : null;
+      const open = st && ['on', 'open', 'opening', 'closing', 'unlocked'].includes(st);
+      const chip = el('span', {
+        class: `seam${crossFloor ? ' stairs' : ''}${hot ? ' hot' : ''}${open ? ' open' : ''}`,
+        style: { left: `${at[0]}px`, top: `${at[1]}px` },
+        title: `${this.areas.get(a)?.name} ↔ ${this.areas.get(b)?.name}${door ? ` (door: ${this._entityName(door)}, ${this._doorWord(st)})` : ''}`,
+      }, crossFloor ? '↕ stairs' : door ? (open ? 'open' : 'door') : 'opening');
+      chips.push(chip);
     }
     this.svg.replaceChildren(...paths);
+    this.seamsEl?.remove();
+    this.seamsEl = el('div', { class: 'seams' }, chips);
+    this.houseEl.append(this.seamsEl);
   }
 
   _describe(e) {

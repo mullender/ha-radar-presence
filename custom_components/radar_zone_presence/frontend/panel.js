@@ -1681,7 +1681,7 @@ class RadarZonePresencePanel extends HTMLElement {
       }
       const areaId = z.area_id || this.config?.device_area_id;
       const name = z.spot ? z.name : roomName(z, areas[areaId]?.name);
-      if (z.spot || this.editing) { rows.push(lane(z, { name: this.editing && !z.spot && name !== z.name ? `${name} · ${z.name}` : name })); continue; }
+      if (z.spot || this.editing) { rows.push(lane(z, { name: this.editing ? z.name : name })); continue; } // editing: the shape's own (editable) name
       const prev = roomLanes.get(areaId);
       if (!prev) { const r = lane(z, { name }); roomLanes.set(areaId, r); rows.push(r); continue; }
       // A second shape of the same room: merge into its lane (no popover: it explains one shape).
