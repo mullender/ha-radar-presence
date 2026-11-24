@@ -18,3 +18,17 @@ test('planFor: the map holding most of a floor’s rooms, and only with two or m
   assert.equal(planFor([b], new Set(['hall'])), null);
   assert.equal(planFor([a], new Set(['bedroom'])), null);
 });
+
+test('spotLike: a small room shape inside a room is a spot in all but name', async () => {
+  const { spotLike } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const room = { id: 'room', kind: 'include', polygon: [[-3000, 0], [3000, 0], [3000, 5000], [-3000, 5000]] };
+  const desk = { id: 'desk', kind: 'include', polygon: [[0, 1000], [1000, 1000], [1000, 2000], [0, 2000]] };
+  const kitchen = { id: 'kitchen', kind: 'include', polygon: [[4000, 0], [8000, 0], [8000, 4000], [4000, 4000]] };
+  assert.deepEqual([...spotLike([room, desk, kitchen])], ['desk']);
+  assert.deepEqual([...spotLike([room, kitchen])], []); // two rooms side by side
+  const strip = { id: 'strip', kind: 'include', polygon: [[2500, -1000], [3500, -1000], [3500, 1000], [2500, 1000]] }; // extends the room
+  const apart = { id: 'apart', kind: 'include', polygon: [[-1000, 6000], [0, 6000], [0, 7000], [-1000, 7000]] }; // a desk drawn on its own
+  assert.deepEqual([...spotLike([room, strip, apart])], ['apart']);
+  const edge = { id: 'edge', kind: 'include', polygon: [[-1000, -1000], [1000, -1000], [1000, 0], [-1000, 0]] }; // shares the room's edge exactly
+  assert.deepEqual([...spotLike([room, edge])], []);
+});

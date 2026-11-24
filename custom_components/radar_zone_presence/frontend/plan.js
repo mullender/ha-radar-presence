@@ -2,10 +2,28 @@
 // of the linked radars that see it (one map per alignment group). The geometry
 // only; headcount.js puts the room labels (count, people, ±) on top.
 
-import { fovPolygon, polygonArea, validatePolygon } from './engine.js';
-import { KIND_STYLE, SVGNS, affineApply, radarTransforms } from './util.js';
+import { fovPolygon, pointInPolygon, polygonArea, signedDistance, validatePolygon } from './engine.js';
+import { KIND_STYLE, SVGNS, affineApply, radarTransforms, slotColor } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
+const SPOT_MAX_MM2 = 6e6;
+
+/**
+ * Room shapes that are spots in all but name (older spots were drawn as rooms, "Desk"): inside another room shape,
+ * or small (under 6 m²), in the same area as a room shape more than twice as big, and touching no room shape
+ * (a strip that extends a room overlaps it; a desk drawn on its own doesn't). A Set of zone ids. (learning.py: same rule.)
+ */
+export function spotLike(zones) {
+  const rooms = zones.filter(z => z.kind === 'include' && !z.spot && !validatePolygon(z.polygon));
+  const size = z => Math.abs(polygonArea(z.polygon));
+  // Corners within `tol` mm of b (or inside it): shapes drawn with snapping share edges exactly.
+  const near = (a, b, tol) => a.polygon.filter(([x, y]) => signedDistance(x, y, b.polygon) >= -tol).length;
+  const nested = z => rooms.some(o => o !== z && size(o) > size(z) && near(z, o, 50) >= 0.75 * z.polygon.length);
+  const touches = (a, b) => near(a, b, 150) > 0 || near(b, a, 150) > 0;
+  const alone = z => size(z) < SPOT_MAX_MM2 && rooms.some(o => o !== z && (o.area_id || null) === (z.area_id || null) && size(o) > 2 * size(z))
+    && !rooms.some(o => o !== z && touches(z, o));
+  return new Set(rooms.filter(z => nested(z) || alone(z)).map(z => z.id));
+}
 
 /** Every radar's config, grouped by the map (alignment group) it is drawn on. */
 export async function loadMaps(hass) {
@@ -22,18 +40,21 @@ export async function loadMaps(hass) {
   return [...maps.entries()].map(([anchor, radars]) => {
     const T = radarTransforms(anchor, radars.map(({ radar, cfg }) => ({ radar_id: radar.radar_id, aligned_to: cfg.settings?.display?.aligned_to })));
     const at = id => (id === anchor ? p => p : p => affineApply(T.get(id) || [[1, 0, 0], [0, 1, 0]], p));
-    const shapes = [], cones = [];
+    const shapes = [], cones = [], ignores = [];
     for (const { radar, cfg } of radars) {
       const f = at(radar.radar_id);
       cones.push({ radar: radar.radar_id, polygon: fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 24).map(f), origin: f([0, 0]) });
+      const spots = spotLike(cfg.zones);
       for (const z of cfg.zones) {
-        if (validatePolygon(z.polygon) || z.kind === 'exclude' || z.kind === 'transient') continue;
-        const kind = z.kind === 'include' && z.spot ? 'linger' : z.kind;
+        if (validatePolygon(z.polygon) || z.kind === 'transient') continue;
+        if (z.kind === 'exclude') { ignores.push({ radar: radar.radar_id, polygon: z.polygon }); continue; } // radar frame: for hollow points
+        const kind = z.kind === 'include' && (z.spot || spots.has(z.id)) ? 'linger' : z.kind;
         shapes.push({ id: z.id, radar: radar.radar_id, kind, name: z.name, area: kind === 'include' ? z.area_id || cfg.device_area_id : null, polygon: z.polygon.map(f), leads_to: z.leads_to || [] });
       }
     }
     const display = radars.find(x => x.radar.radar_id === anchor)?.cfg.settings?.display || {};
-    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, display };
+    const toAnchor = new Map(radars.map(({ radar }) => [radar.radar_id, at(radar.radar_id)]));
+    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display };
   });
 }
 
@@ -108,5 +129,44 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
     const sz = Math.abs(polygonArea(s.polygon));
     if (!label.has(s.area) || sz > label.get(s.area).sz) label.set(s.area, { x: (100 * cx) / W, y: (100 * cy) / H, sz });
   }
-  return { svg, place: a => label.get(a), aspect: H / W };
+  // Live detections (or those at the playhead), like the room view: a dot per target, a fading trail, hollow when ignored.
+  // Detections go on their own layer above the room labels (headcount.js puts it last), so a label never hides a person.
+  // A canvas: it is redrawn many times a second, and SVG updates there did not repaint reliably.
+  const overlay = document.createElement('canvas');
+  overlay.className = 'plan-overlay';
+  let last = new Map();
+  const setLive = (byRadar = last) => {
+    last = byRadar;
+    const dpr = devicePixelRatio || 1;
+    const cw = overlay.clientWidth, ch = overlay.clientHeight;
+    if (!cw || !ch) { requestAnimationFrame(() => overlay.isConnected && setLive()); return; } // not laid out yet
+    if (overlay.width !== Math.round(cw * dpr) || overlay.height !== Math.round(ch * dpr)) { overlay.width = Math.round(cw * dpr); overlay.height = Math.round(ch * dpr); }
+    const ctx = overlay.getContext('2d');
+    const k = Math.min(cw / W, ch / H), ox = (cw - W * k) / 2, oy = (ch - H * k) / 2; // as the SVG's "meet"
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    const px = p => { const [x, y] = sx(p); return [ox + x * k, oy + y * k]; };
+    for (const [radar, { targets = [], trails = new Map() }] of byRadar) {
+      const f = map.toAnchor.get(radar);
+      if (!f) continue;
+      const ignored = (x, y) => map.ignores.some(g => g.radar === radar && pointInPolygon(x, y, g.polygon));
+      ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const [slot, pts] of trails) {
+        if (pts.length < 2) continue;
+        ctx.strokeStyle = slotColor(slot); ctx.globalAlpha = 0.45;
+        ctx.beginPath();
+        pts.forEach((p, i) => { const [x, y] = px(f([p.x, p.y])); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      for (const [slot, x, y] of targets) {
+        const [cx, cy] = px(f([x, y]));
+        const off = ignored(x, y);
+        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        if (off) { ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5; ctx.stroke(); } // ignored: hollow, as in the room view
+        else { ctx.fillStyle = slotColor(slot); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+      }
+    }
+  };
+  return { svg, overlay, place: a => label.get(a), aspect: H / W, setLive };
 }

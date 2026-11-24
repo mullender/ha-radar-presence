@@ -81,6 +81,7 @@ ${TIME_CHIP_CSS}
 .plan { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan-map { position: relative; width: 100%; max-width: 760px; max-height: 70vh; overflow: hidden; }
 .plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; color: var(--primary-text-color, #222); overflow: hidden; }
+.plan-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .plan-svg .room.link { cursor: pointer; }
 .plan-svg .room.link:hover { fill-opacity: .18; }
 .space.mini { position: absolute; transform: translate(-50%, -50%); min-width: 0; min-height: 0; width: auto; max-width: 160px; padding: 3px 8px; border-radius: 8px;
@@ -176,7 +177,7 @@ export class RzpHeadcount extends HTMLElement {
     this._unsub = null;
     this._timer = 0;
     this.timeline.addEventListener('seek', e => { this.cursor = e.detail.t; this.render(); });
-    this._ro = new ResizeObserver(() => this._drawLinks());
+    this._ro = new ResizeObserver(() => { this._drawLinks(); for (const pl of this._plans || []) pl.drawn.setLive(); }); // the detection canvas follows the map's size
     this._ro.observe(this.houseEl);
   }
 
@@ -195,6 +196,7 @@ export class RzpHeadcount extends HTMLElement {
     this._active = false;
     clearInterval(this._timer);
     this._unsubscribe();
+    this._syncLive(new Set());
   }
 
   /** Show time t, the scrubber zoomed to `span` s around it (deep links). */
@@ -372,6 +374,7 @@ export class RzpHeadcount extends HTMLElement {
     const now = t ?? Date.now() / 1000;
     for (const e of this.entries) if (e.t <= now && e.t > now - CROSS_S && e.region && e.kind !== 'seen') hit.add(this.regionArea[e.region] ?? e.region);
     this.boxes = new Map();
+    this._plans = []; // floors drawn as a plan: their maps get the detections
     const floors = this.floors.map(f => {
       const doubt = unknownFloors.has(f.level);
       const n = f.areas.reduce((x, a) => x + (per.get(a.id) || 0), 0);
@@ -410,6 +413,7 @@ export class RzpHeadcount extends HTMLElement {
         const dark = !!this.hass?.themes?.darkMode;
         const radarOf = s => s.radar;
         const drawn = drawPlan(plan, { occupied: a => per.get(a) || 0, dark, onRoom: s => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(s), t: t ?? Date.now() / 1000 } })) });
+        this._plans.push({ drawn, radars: plan.map.radars });
         const labels = [...plan.areas].map(id => this.areas.get(id)).filter(Boolean).map(a => {
           const at = drawn.place(a.id);
           const b = box(a, true);
@@ -419,7 +423,7 @@ export class RzpHeadcount extends HTMLElement {
         });
         const others = f.areas.filter(a => !plan.areas.has(a.id));
         rooms = el('div', { class: 'plan' },
-          el('div', { class: 'plan-map', style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...labels),
+          el('div', { class: 'plan-map', style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...labels, drawn.overlay),
           others.length ? el('div', { class: 'rooms' }, others.map(a => { const b = box(a); b.querySelector('.meta').textContent ||= 'not on this map'; return b; })) : '');
       } else rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
@@ -434,6 +438,72 @@ export class RzpHeadcount extends HTMLElement {
     this.sheetEl.style.display = this.selected === null ? 'none' : '';
     this._hot = hot;
     requestAnimationFrame(() => this._drawLinks());
+    const want = new Set(this._plans.flatMap(p => p.radars));
+    if (t === null) { this._syncLive(want); this._paintLive(); } else { this._syncLive(new Set()); this._detectionsAt(t, want); }
+  }
+
+  // ------------------------------------------------------------ detections on the plan
+
+  /** Follow the live frames of exactly these radars (those on a floor drawn as a plan). */
+  _syncLive(want) {
+    this._liveSubs ||= new Map();
+    this._live ||= new Map(); // radar -> {targets, trails: Map(slot -> [{x, y, t}])}
+    for (const [id, unsub] of this._liveSubs) if (!want.has(id)) { unsub.then(f => f()).catch(() => {}); this._liveSubs.delete(id); this._live.delete(id); }
+    for (const id of want) {
+      if (this._liveSubs.has(id)) continue;
+      this._live.set(id, { targets: [], trails: new Map() });
+      this._liveSubs.set(id, this.hass.connection.subscribeMessage(ev => {
+        if (ev.closed) { this._liveSubs.get(id)?.then(f => f()).catch(() => {}); this._liveSubs.delete(id); return; }
+        if (!ev.targets || this.cursor !== null) return;
+        const d = this._live.get(id);
+        if (!d) return;
+        d.targets = ev.targets;
+        for (const [slot, x, y] of ev.targets) { if (!d.trails.has(slot)) d.trails.set(slot, []); d.trails.get(slot).push({ x, y, t: ev.t }); }
+        for (const [slot, pts] of d.trails) { while (pts.length && pts[0].t < ev.t - 20) pts.shift(); if (!pts.length) d.trails.delete(slot); }
+        if (!this._livePaint) this._livePaint = requestAnimationFrame(() => { this._livePaint = 0; this._paintLive(); });
+      }, { type: `${DOMAIN}/frames/subscribe`, radar_id: id }));
+    }
+  }
+
+  _paintLive(data = this._live) {
+    for (const p of this._plans || []) p.drawn.setLive(new Map(p.radars.filter(id => data?.has(id)).map(id => [id, data.get(id)])));
+  }
+
+  /** History: the detections at the playhead (the last frame at or before it) and the 20 s before, fetched per radar. */
+  _detectionsAt(t, radars) {
+    if (!radars.size) return;
+    const key = `${Math.round(t * 2)}|${[...radars].join(',')}`;
+    if (key === this._atKey && this._atData) { this._paintLive(this._atData); return; }
+    this._atKey = key;
+    clearTimeout(this._atTimer);
+    this._atTimer = setTimeout(async () => {
+      const range = { start: new Date((t - 20) * 1000).toISOString(), end: new Date((t + 0.5) * 1000).toISOString() };
+      const out = new Map();
+      await Promise.all([...radars].map(async id => {
+        const h = await this.hass.callWS({ type: `${DOMAIN}/frames/history`, radar_id: id, ...range }).catch(() => null);
+        if (!h?.frame_t?.length) return;
+        const trails = new Map();
+        let targets = [], q = 0;
+        for (let f = 0; f < h.frame_t.length; f++) {
+          const ft = h.start + h.frame_t[f], n = h.frame_n[f];
+          if (ft <= t) {
+            targets = [];
+            for (let k = 0; k < n; k++) {
+              const pt = [h.slot[q + k], h.x[q + k], h.y[q + k]];
+              targets.push(pt);
+              if (!trails.has(pt[0])) trails.set(pt[0], []);
+              trails.get(pt[0]).push({ x: pt[1], y: pt[2], t: ft });
+            }
+            if (t - ft > 3) targets = []; // nobody reported for a while: no dot, the trail stays
+          }
+          q += n;
+        }
+        out.set(id, { targets, trails });
+      }));
+      if (this._atKey !== key) return; // the playhead moved on
+      this._atData = out;
+      this._paintLive(out);
+    }, 150);
   }
 
   async _correctHome(n) {

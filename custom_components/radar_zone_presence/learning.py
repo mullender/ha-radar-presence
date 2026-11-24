@@ -23,7 +23,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
-from .engine.geometry import point_in_polygon, polygon_area
+from .engine.geometry import point_in_polygon, polygon_area, signed_distance
 from .engine.zones import KIND_EXCLUDE, KIND_INCLUDE, KIND_LINGER
 
 if TYPE_CHECKING:
@@ -46,17 +46,26 @@ PANEL_URL = "/radar-zones#view=todo"
 SPOT_MAX_MM2 = 6e6  # as the panel's To do: a room shape under 6 m² beside a bigger room is a spot in all but name
 
 
-def spot_like(rooms: list[tuple[tuple[float, float], ...]]) -> list[tuple[tuple[float, float], ...]]:
-    """Room shapes that are spots in all but name (older spots were drawn as rooms, "Desk"):
-    inside another room shape, or small beside a much bigger one."""
-    size = [abs(polygon_area(p)) for p in rooms]
+def spot_like(rooms: list[tuple[tuple[tuple[float, float], ...], str | None]]) -> list[tuple[tuple[float, float], ...]]:
+    """Room shapes (polygon, area id) that are spots in all but name (older spots were drawn as rooms, "Desk"):
+    inside another room shape, or small, in the same area as one more than twice as big, and touching no room
+    shape (a strip that extends a room overlaps it). As the panel's plan.js spotLike."""
+    size = [abs(polygon_area(p)) for p, _ in rooms]
+
+    def near(a: tuple[tuple[float, float], ...], b: tuple[tuple[float, float], ...], tol: float) -> int:
+        # corners within tol mm of b, or inside it: shapes drawn with snapping share edges exactly
+        return sum(signed_distance(x, y, b) >= -tol for x, y in a)
+
     out = []
-    for i, p in enumerate(rooms):
-        nested = any(
-            j != i and size[j] > size[i] and sum(point_in_polygon(x, y, q) for x, y in p) >= 0.75 * len(p)
-            for j, q in enumerate(rooms)
+    for i, (p, area) in enumerate(rooms):
+        others = [(j, q, a) for j, (q, a) in enumerate(rooms) if j != i]
+        nested = any(size[j] > size[i] and near(p, q, 50) >= 0.75 * len(p) for j, q, _ in others)
+        alone = (
+            size[i] < SPOT_MAX_MM2
+            and any(a == area and size[j] > 2 * size[i] for j, _, a in others)
+            and not any(near(p, q, 150) or near(q, p, 150) for _, q, _ in others)
         )
-        if nested or (size[i] < SPOT_MAX_MM2 and any(sz > 2 * size[i] for sz in size)):
+        if nested or alone:
             out.append(p)
     return out
 
@@ -153,7 +162,7 @@ class Learning:
         feed = self.runtime.feeds[radar_id]
         polys = [z.polygon for z in feed.zones if z.kind in (KIND_EXCLUDE, KIND_LINGER)]
         polys += [zd.zone.polygon for zd in self.runtime.zones.values() if zd.radar_id == radar_id and zd.spot]
-        rooms = [zd.zone.polygon for zd in self.runtime.zones.values() if zd.radar_id == radar_id and not zd.spot and zd.zone.kind == KIND_INCLUDE]
+        rooms = [(zd.zone.polygon, zd.zone.area_id) for zd in self.runtime.zones.values() if zd.radar_id == radar_id and not zd.spot and zd.zone.kind == KIND_INCLUDE]
         return polys + spot_like(rooms)
 
     def places(self, radar_id: str, now: float | None = None) -> list[dict[str, Any]]:

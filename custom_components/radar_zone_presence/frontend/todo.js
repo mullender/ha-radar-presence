@@ -7,14 +7,14 @@
 // with a radar) and from the home's layout (rooms nobody can get into, rooms
 // without a radar, radars in one room that are not lined up).
 
-import { fovPolygon, pointInPolygon, polygonArea, summarize, validatePolygon } from './engine.js';
+import { fovPolygon, pointInPolygon, summarize, validatePolygon } from './engine.js';
+import { spotLike as spotLikeIds } from './plan.js';
 import { replayGroup } from './tracker.js';
 import { appearVanishSpots, classify, convexHull, polygonOverlap, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import { KIND_STYLE, SVGNS, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId, roomName, the } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const DAY = 86400;
-const SPOT_MAX_MM2 = 6e6; // a room shape under 6 m² beside a bigger room is a spot in all but name
 
 const css = `
 :host { display: block; height: 100%; overflow: auto; background: var(--primary-background-color, #fafafa); color: var(--primary-text-color, #222); font-size: 14px; }
@@ -140,9 +140,8 @@ export class RzpTodo extends HTMLElement {
     const exclusions = valid.filter(z => z.kind === 'exclude');
     const roomShapes = valid.filter(z => z.kind === 'include' && !z.spot);
     // Older spots were drawn as rooms ("Desk"): a room shape inside another room, or small beside a bigger one, counts as a spot.
-    const size = z => Math.abs(polygonArea(z.polygon));
-    const nested = z => roomShapes.some(o => o !== z && size(o) > size(z) && z.polygon.filter(([x, y]) => pointInPolygon(x, y, o.polygon)).length >= 0.75 * z.polygon.length);
-    const spotLike = roomShapes.filter(z => nested(z) || (size(z) < SPOT_MAX_MM2 && roomShapes.some(o => size(o) > 2 * size(z))));
+    const sl = spotLikeIds(valid);
+    const spotLike = roomShapes.filter(z => sl.has(z.id));
     const rooms = roomShapes.filter(z => !spotLike.includes(z));
     const spots = [...valid.filter(z => z.kind === 'linger' || (z.kind === 'include' && z.spot)), ...spotLike];
     // Places where something stays, not covered by a spot or an ignore area yet. One that overlaps a spot asks to fit that spot instead.
