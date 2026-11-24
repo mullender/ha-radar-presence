@@ -105,6 +105,20 @@ rzp-plot { flex: 1; min-height: 300px; }
 .transport .step { border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; font-size: 15px; padding: 0 4px; line-height: 1; }
 .transport .step:disabled { opacity: .35; cursor: default; }
 .transport select.speed { border: 0; background: none; font-size: 12px; padding: 0; width: 40px; color: var(--primary-text-color, #222); }
+/* Edit tools: a floating vertical rail, like a small vector app (V, R, P, M). */
+.rail { position: absolute; left: 12px; top: 10px; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 10px;
+  background: var(--card-background-color, #fff); box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+.rail button { width: 34px; height: 34px; border: 0; border-radius: 8px; background: none; color: var(--primary-text-color, #222); cursor: pointer; font-size: 17px; line-height: 1; padding: 0; }
+.rail button:hover { background: var(--secondary-background-color, #eee); }
+.rail button.on { background: rgba(3,169,244,.16); color: var(--primary-color, #0288d1); }
+.rail hr { width: 24px; border: 0; border-top: 1px solid var(--divider-color, #ddd); margin: 3px auto; }
+.plot-wrap.editing .map-chips { left: 64px; }
+.chip-pop.menu-like { padding: 6px; gap: 0; min-width: 200px; }
+.chip-pop.menu-like button.mi { text-align: left; font: inherit; font-size: 13px; border: 0; background: none; color: var(--primary-text-color, #222); padding: 7px 10px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; }
+.chip-pop.menu-like button.mi:hover { background: var(--secondary-background-color, #eee); }
+.chip-pop.menu-like button.mi.on { color: var(--primary-color, #0288d1); font-weight: 500; }
+.chip-pop .row2 { display: flex; gap: 6px; align-items: center; }
 /* Display chips over the map (top left). */
 .map-chips { position: absolute; left: 12px; top: 10px; z-index: 3; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .mchip { font: inherit; font-size: 13px; border: 0; border-radius: 16px; padding: 5px 12px; cursor: pointer; background: var(--secondary-background-color, #eef0f2); color: var(--primary-text-color, #222);
@@ -170,6 +184,19 @@ td input { width: 70px; text-align: right; }
 .spot-head { display: flex; gap: 8px; align-items: baseline; }
 .spot-head .badge { margin-left: auto; }
 .check { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
+/* The shape panel (proposal: name, kind, sensor, behaviour, preview, Advanced, delete). */
+.shape-panel .back { display: inline-block; font-size: 12px; color: var(--primary-color, #03a9f4); cursor: pointer; margin-bottom: 6px; }
+.shape-panel .field { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--divider-color, #ccc); border-radius: 6px; padding: 4px 8px; margin-bottom: 10px; }
+.shape-panel .field label { font-size: 11px; color: var(--secondary-text-color, #777); }
+.shape-panel .field input { border: 0; padding: 2px 0; font-size: 14px; background: none; outline: none; }
+.seg-ctl { display: flex; border: 1px solid var(--divider-color, #ccc); border-radius: 6px; overflow: hidden; }
+.seg-ctl button { flex: 1; font: inherit; font-size: 12px; border: 0; border-right: 1px solid var(--divider-color, #ccc); background: none; color: var(--primary-text-color, #222); padding: 6px 4px; cursor: pointer; }
+.seg-ctl button:last-child { border-right: 0; flex: 0 0 30px; }
+.seg-ctl button.on { background: color-mix(in srgb, #0d9488 14%, transparent); font-weight: 500; }
+.shape-panel .sub { border-top: 1px solid var(--divider-color, #e4e4e4); margin-top: 12px; padding-top: 10px; }
+.shape-panel h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--secondary-text-color, #666); }
+.shape-panel details.adv summary { cursor: pointer; font-size: 13px; color: var(--secondary-text-color, #555); margin-bottom: 8px; }
+.del-link { display: block; margin-top: 14px; border: 0; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--error-color, #c62828); cursor: pointer; }
 .check input { width: auto; margin-top: 2px; }
 .trail { margin-top: 10px; }
 .plot-wrap { position: relative; flex: 1; display: flex; min-height: 0; }
@@ -1286,7 +1313,7 @@ class RadarZonePresencePanel extends HTMLElement {
     if (this.tab !== 'radars') return;
     if (k === 'e' && !this.editing) this._enterEdit();
     else if (this.editing && k === 'v') this._setTool('select');
-    else if (this.editing && k === 'd') this._setTool('draw');
+    else if (this.editing && (k === 'd' || k === 'p')) this._setTool('draw');
     else if (this.editing && k === 'r') this._setTool('rect');
     else if (this.editing && k === 'm') this._setTool('measure');
     else if (k === ' ') { e.preventDefault(); this._togglePlay(); }
@@ -1310,7 +1337,7 @@ class RadarZonePresencePanel extends HTMLElement {
     root.innerHTML = '';
     root.append(el('style', {}, css));
     this.header = el('header');
-    this.toolbar = el('div', { class: 'toolbar' });
+    this.toolbar = el('div', { class: 'rail' }); // edit mode's tools, floating on the map
     this.plot = document.createElement('rzp-plot');
     this.loadingEl = el('div', { class: 'loading', style: { display: 'none' } }, 'Loading history…');
     this.legendEl = el('div', { class: 'legend', style: { display: 'none' } });
@@ -1321,8 +1348,7 @@ class RadarZonePresencePanel extends HTMLElement {
     this.statusEl = el('div', { class: 'status' });
     this.side = el('div', { class: 'side' });
     const main = el('div', { class: 'main' },
-      this.toolbar,
-      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl, this.chipsEl, el('button', { class: 'fit-btn', title: 'Fit the view (F)', onclick: () => this.plot.fit() }, '⤢')),
+      el('div', { class: 'plot-wrap' }, this.plot, this.loadingEl, this.legendEl, this.toolbar, this.chipsEl, el('button', { class: 'fit-btn', title: 'Fit the view (F)', onclick: () => this.plot.fit() }, '⤢')),
       el('div', { class: 'timeline-wrap' }, this.transport, this.timeline),
       this.framesEl,
       this.statusEl);
@@ -1575,41 +1601,55 @@ class RadarZonePresencePanel extends HTMLElement {
   _renderToolbar() {
     const t = this.toolbar;
     t.style.display = this.editing ? '' : 'none'; // review mode has no tools
-    const s = this.snap;
-    const gridOpts = this.units.snapSteps.map(v => el('option', { value: v, selected: Math.abs(v - s.gridStep) < 0.01 }, this.units.fmtLong(v)));
+    t.parentElement?.classList.toggle('editing', !!this.editing);
+    const tool = (icon, id, title) => el('button', { class: this.tool === id ? 'on' : '', title, onclick: () => this._setTool(id) }, icon);
     t.replaceChildren(
-      el('div', { class: 'group' },
-        this._tb('Select', this.tool === 'select', () => this._setTool('select'), 'Select / edit (V)'),
-        this._tb('Polygon', this.tool === 'draw', () => this._setTool('draw'), 'Draw polygon (D): click vertices, click the first vertex or press Enter to close'),
-        this._tb('Rectangle', this.tool === 'rect', () => this._setTool('rect'), 'Draw rectangle (R): drag'),
-        this._tb('Measure', this.tool === 'measure', () => this._setTool('measure'), 'Measure distance and angle (M)')),
-      el('div', { class: 'group' },
-        this._tb('Room', this.drawKind === 'include', () => { this.drawKind = 'include'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are rooms (or a part of one with its own occupancy)'),
-        this._tb('Ignore', this.drawKind === 'exclude', () => { this.drawKind = 'exclude'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are ignore areas (a fan, a plant, a reflection)'),
-        this._tb('Doorway', this.drawKind === 'exit', () => { this.drawKind = 'exit'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are doorways (a door, an opening, the top of the stairs)'),
-        this._tb('Spot', this.drawKind === 'linger', () => { this.drawKind = 'linger'; this._updatePlot(); this._renderToolbar(); }, 'New shapes are spots, places people stay (bed, sofa, desk chair): someone the radar loses here is still there'),
-        this._tb(this.drawKind === 'transient' ? 'Walkway' : '⋯', this.drawKind === 'transient', () => { this.drawKind = 'transient'; this._updatePlot(); this._renderToolbar(); }, 'More: walkway, where people only pass through (someone the radar loses here has moved on)')),
-      el('div', { class: 'group' },
-        this._tb('∠ Angles', s.angle, () => { s.angle = !s.angle; this._updatePlot(); this._renderToolbar(); }, 'Snap edges to 45°/90°, relative to the previous edge (hold Shift to disable)'),
-        this._tb('◦ Vertices', s.vertex, () => { s.vertex = !s.vertex; this._updatePlot(); this._renderToolbar(); }, 'Snap to existing vertices'),
-        this._tb('# Grid', s.grid, () => { s.grid = !s.grid; this._updatePlot(); this._renderToolbar(); }, 'Snap to grid'),
-        el('select', { onchange: e => { s.gridStep = +e.target.value; this._updatePlot(); }, title: 'Grid step' }, gridOpts),
-        this._tb('📏', this.showMeasurements, () => { this.showMeasurements = !this.showMeasurements; this._updatePlot(); this._renderToolbar(); }, 'Show edge lengths and angles')),
-      !this.details ? '' : el('div', { class: 'group' },
-        el('label', {}, 'Colour',
-          el('select', { onchange: e => { this.colorMode = +e.target.value; this._updateFlags(); this._updatePlot(); } },
-            el('option', { value: 3, selected: this.colorMode === 3 }, 'detections'),
-            el('option', { value: 0, selected: this.colorMode === 0 }, 'by track'),
-            el('option', { value: 1, selected: this.colorMode === 1 }, 'selected shape'),
-            el('option', { value: 2, selected: this.colorMode === 2 }, 'by age')))),
-      el('div', { class: 'group' },
-        this._tb('Fit', false, () => this.plot.fit(), 'Fit view (F)'),
-        this._tb('⟲', false, () => this._rotate(-90), 'Rotate view'),
-        this._tb('⟳', false, () => this._rotate(90), 'Rotate view'),
-        this._tb('⇋', this.settings.display.mirror, () => this._setDisplay({ mirror: !this.settings.display.mirror }), 'Flip left / right (view only; zones are not moved)'),
-        this._tb('Live', this.live, () => { this.live = !this.live; this._updatePlot(); this._renderToolbar(); }, 'Show live targets'),
-        this.peers?.size && this._peerTransforms().size ? this._tb('Others', this.showPeers, () => { this.showPeers = !this.showPeers; this._updatePlot(); this._renderToolbar(); }, 'Show the linked radars: their view, shapes and live detections') : ''),
-    );
+      tool('↖', 'select', 'Select and edit (V)'),
+      tool('▭', 'rect', `Rectangle (R): drag to draw a ${this._kindWord(this.drawKind)}`),
+      tool('⬠', 'draw', `Polygon (P): click the corners of a ${this._kindWord(this.drawKind)}, click the first corner or press Enter to close`),
+      el('hr'),
+      tool('📏', 'measure', 'Measure a distance and angle (M)'));
+    this._renderMapChips();
+  }
+
+  _kindWord(kind) {
+    return { include: 'room', exclude: 'ignore area', exit: 'doorway', linger: 'spot', transient: 'walkway' }[kind] || 'shape';
+  }
+
+  /** Edit mode's chips: + Add (a kind, then draw), Snap, View. */
+  _editChips() {
+    const s = this.snap;
+    const open = this._chipPop;
+    const pop = (id, ...items) => (open === id ? el('div', { class: 'chip-pop menu-like', onpointerdown: e => e.stopPropagation() }, ...items) : '');
+    const chip = (id, label, title) => el('button', { class: `mchip${open === id ? ' on' : ''}`, title, onclick: () => { this._chipPop = open === id ? false : id; this._renderMapChips(); } }, label);
+    const kind = (k, label) => el('button', {
+      class: `mi${this.drawKind === k ? ' on' : ''}`,
+      onclick: () => { this.drawKind = k; this._chipPop = false; this._setTool(this.tool === 'rect' ? 'rect' : 'draw'); },
+    }, glyphSvg((KIND_STYLE[k] || KIND_STYLE.include).glyph, kindTone(k), 14), label);
+    const tick = on => (on ? '✓' : '✕');
+    const check = (label, on, fn) => el('label', {}, el('input', { type: 'checkbox', checked: on, onchange: e => { fn(e.target.checked); this._updatePlot(); this._renderMapChips(); } }), label);
+    const cfg = this.config;
+    return [
+      el('div', { style: { position: 'relative' } }, chip('add', `+ Add ▾`, 'Choose what to draw'),
+        pop('add', kind('include', 'Room'), kind('linger', 'Spot'), kind('exit', 'Doorway'), kind('exclude', 'Ignore area'), kind('transient', 'More ▸ Walkway'),
+          el('button', { class: 'mi', title: 'A room covering everything the radar sees', onclick: () => { this._chipPop = false; this._addZone(fovPolygon(cfg.fov.max_distance_mm, cfg.fov.half_angle_deg, 12), 'include', 'Whole room'); } }, '⌔ Room = whole view'))),
+      el('div', { style: { position: 'relative' } }, chip('snap', `Snap: shapes ${tick(s.vertex)} · grid ${tick(s.grid)} · 15° ${tick(s.angle)}`, 'Snapping while drawing (hold Shift to bypass)'),
+        pop('snap', el('div', { class: 'chip-pop', style: { position: 'static', boxShadow: 'none', padding: '6px 8px' } },
+          check('To corners of other shapes', s.vertex, v => { s.vertex = v; }),
+          check('Edges at 45°/90° steps', s.angle, v => { s.angle = v; }),
+          el('div', { class: 'row2' }, check('Grid', s.grid, v => { s.grid = v; }),
+            el('select', { onchange: e => { s.gridStep = +e.target.value; this._updatePlot(); }, title: 'Grid step' },
+              this.units.snapSteps.map(v => el('option', { value: v, selected: Math.abs(v - s.gridStep) < 0.01 }, this.units.fmtLong(v))))),
+          check('Show side lengths and angles', this.showMeasurements, v => { this.showMeasurements = v; })))),
+      el('div', { style: { position: 'relative' } }, chip('view', 'View ▾', 'Turn the view, live targets, linked radars'),
+        pop('view', el('div', { class: 'chip-pop', style: { position: 'static', boxShadow: 'none', padding: '6px 8px' } },
+          el('div', { class: 'row2' }, 'Turn', el('button', { class: 'btn', title: 'Rotate the view left', onclick: () => this._rotate(-90) }, '⟲'), el('button', { class: 'btn', title: 'Rotate the view right', onclick: () => this._rotate(90) }, '⟳'),
+            el('button', { class: 'btn', title: 'Flip left / right (the view only; shapes are not moved)', onclick: () => this._setDisplay({ mirror: !this.settings.display.mirror }) }, '⇋ Flip')),
+          check('Live targets on top', this.live, v => { this.live = v; }),
+          this.peers?.size && this._peerTransforms().size ? check('Linked radars: views, shapes, live', this.showPeers, v => { this.showPeers = v; }) : '',
+          !this.details ? '' : el('label', {}, 'Colour', el('select', { onchange: e => { this.colorMode = +e.target.value; this._updateFlags(); this._updatePlot(); } },
+            [[3, 'detections'], [0, 'by track'], [1, 'selected shape'], [2, 'by age']].map(([v, l]) => el('option', { value: v, selected: this.colorMode === v }, l))))))),
+    ];
   }
 
   _rotate(d) {
@@ -1635,7 +1675,7 @@ class RadarZonePresencePanel extends HTMLElement {
   _renderMapChips() {
     const c = this.chipsEl;
     if (!c) return;
-    const open = this._chipPop;
+    const open = this._chipPop === 'det';
     const replay = this.mode === 'replay' || this.mode === 'live';
     const pop = !open ? '' : el('div', { class: 'chip-pop', onpointerdown: e => e.stopPropagation() },
       el('label', {}, el('input', { type: 'checkbox', checked: this.showContext, onchange: e => { this.showContext = e.target.checked; this._updatePlot(); } }), 'Show all detections in the range, faded'),
@@ -1645,14 +1685,15 @@ class RadarZonePresencePanel extends HTMLElement {
       !this.details ? '' : el('label', {}, el('input', { type: 'checkbox', checked: this.showFrames, onchange: e => { this.showFrames = e.target.checked; this._renderFrames(); } }), 'Raw readings'),
       replay ? el('button', { class: 'btn', title: 'Stop playback and show every detection in the range (for drawing)', onclick: () => { this._chipPop = false; this.preferLive = false; this._exitReplay(); } }, 'All detections, no playback') : '');
     c.replaceChildren(
+      ...(this.editing ? this._editChips() : []),
       el('div', { style: { position: 'relative' } },
-        el('button', { class: `mchip${open ? ' on' : ''}`, title: 'How detections are drawn', onclick: () => { this._chipPop = !open; this._renderMapChips(); } }, '◐ Detections ▾'), pop),
+        el('button', { class: `mchip${open ? ' on' : ''}`, title: 'How detections are drawn', onclick: () => { this._chipPop = open ? false : 'det'; this._renderMapChips(); } }, '◐ Detections ▾'), pop),
       el('label', { class: 'mchip', title: 'How long a trail stays behind each person' }, 'Trails',
         el('select', { onchange: e => { this.trailSeconds = +e.target.value; this._updatePlot(); } },
           [5, 10, 20, 30, 60, 120, 300].map(v => el('option', { value: v, selected: v === this.trailSeconds }, `${v} s`)))),
       this.brush ? el('button', { class: 'mchip on', title: 'Zoom the timeline to the trimmed range', onclick: () => this.timeline.zoomToTrim() }, 'Zoom to trim') : '',
       this.brush ? el('button', { class: 'mchip', title: 'Use the whole loaded range', onclick: () => { this.brush = null; this.timeline.set({ brush: null }); this._scheduleAnalysis(); this._updatePlot(); this._renderTransport(); } }, 'Clear trim ✕') : '');
-    if (open && !this._chipAway) {
+    if (this._chipPop && !this._chipAway) {
       this._chipAway = e => { if (!e.composedPath().includes(c)) { this._chipPop = false; removeEventListener('pointerdown', this._chipAway, true); this._chipAway = null; this._renderMapChips(); } };
       addEventListener('pointerdown', this._chipAway, true);
     }
@@ -1922,7 +1963,7 @@ class RadarZonePresencePanel extends HTMLElement {
       this._renderAt();
     } else {
       const z = this.zones.find(q => q.id === this.selectedId);
-      s.replaceChildren(el('div', { class: 'guide' }), zonesSec, ...(z ? [this._zoneEditor() || ''] : [sensor, this._settingsSection(), this._firmwareSection()]), el('div', { class: 'section spots' }), this._doorsSection());
+      s.replaceChildren(el('div', { class: 'guide' }), ...(z ? [this._zoneEditor() || ''] : [zonesSec, sensor, this._settingsSection(), this._firmwareSection(), el('div', { class: 'section spots' }), this._doorsSection()]));
     }
     this._renderLiveBadges();
     this._renderSideStats();
@@ -2081,21 +2122,51 @@ class RadarZonePresencePanel extends HTMLElement {
     const deviceArea = this.hass.areas?.[this.config.device_area_id]?.name;
     const num = (value, onchange, attrs = {}) => el('input', { type: 'number', value, step: 'any', min: 0, ...attrs, onchange });
     const f = z.filters;
-    const editor = el('div', { class: 'section' },
-      el('h3', {}, el('span', { class: 'grow' }, KIND_STYLE[styleKind(z)]?.label === 'Ignored' ? 'Ignore area' : KIND_STYLE[styleKind(z)]?.label || 'Room'),
-        el('button', { class: 'btn danger', onclick: () => this._deleteZone(z.id) }, 'Delete')),
-      el('div', { class: 'form' },
-        el('label', {}, 'Name'),
-        el('input', { type: 'text', value: z.name, onfocus: () => { this._namePrev = JSON.stringify(this.zones); }, oninput: e => { this.zones = this.zones.map(q => (q.id === z.id ? { ...q, name: e.target.value } : q)); this._updatePlot(); this._renderHeader(); this._renderTimeline(); }, onchange: () => { if (this._namePrev) this._pushUndo(this._namePrev); this._namePrev = null; this._renderSide(); } }),
-        el('label', {}, 'Type'),
-        el('select', { onchange: e => this._setKind(z, e.target.value) },
-          el('option', { value: 'include', selected: styleKind(z) === 'include' }, 'Room'),
-          el('option', { value: 'linger', selected: styleKind(z) === 'linger' }, 'Spot (bed, sofa, desk chair)'),
-          el('option', { value: 'exit', selected: z.kind === 'exit' }, 'Doorway (door, opening, stairs)'),
-          el('option', { value: 'exclude', selected: z.kind === 'exclude' }, 'Ignore area (a fan, a plant)'),
-          el('option', { value: 'transient', selected: z.kind === 'transient' }, 'Walkway (passing through)')),
-        styleKind(z) === 'linger' ? this._spotSensorToggle(z) : '',
-        z.kind === 'include' ? [
+    const sk = styleKind(z);
+    const word = this._kindWord(sk === 'linger' ? 'linger' : z.kind);
+    const room = z.kind === 'include' && !z.spot;
+    // Kind first, as a segmented control that recolours the shape live (⋯ holds Walkway).
+    const seg = el('div', { class: 'seg-ctl' }, [['include', 'Room'], ['linger', 'Spot'], ['exit', 'Doorway'], ['exclude', 'Ignore'], ['transient', '⋯']].map(([k, l]) =>
+      el('button', { class: sk === k ? 'on' : '', title: k === 'transient' ? 'More: Walkway, where people only pass through' : '', onclick: () => { if (sk !== k) this._setKind(z, k); } }, k === 'transient' && sk === 'transient' ? 'Walkway' : l)));
+    const advanced = [
+      z.kind === 'include' ? el('div', { class: 'form' },
+          el('label', {}, 'Turn on after (s)'),
+          num(f.on_delay_s, e => this._patchZone(z.id, { filters: { ...f, on_delay_s: Math.max(0, +e.target.value || 0) } })),
+          el('label', {}, 'Turn off after (s)'),
+          num(f.off_delay_s, e => this._patchZone(z.id, { filters: { ...f, off_delay_s: Math.max(0, +e.target.value || 0) } })),
+          el('label', {}, `Edge buffer (${u.label})`),
+          num(Math.round(u.toDisplay(f.edge_margin_mm) * 10) / 10, e => this._patchZone(z.id, { filters: { ...f, edge_margin_mm: Math.max(0, u.fromDisplay(+e.target.value || 0)) } })),
+          el('div', { class: 'help full' }, 'Turn on after ignores short blips (ghosts are often under 2 s). The edge buffer stops flicker at the edge: someone must be this far inside to enter and this far outside to leave.'),
+          f.hold_until_exit ? [
+            el('label', {}, 'Hold limit (min)'),
+            num(Math.round((f.hold_max_s || 0) / 6) / 10, e => this._patchZone(z.id, { filters: { ...f, hold_max_s: Math.max(0, Math.round((+e.target.value || 0) * 60)) } }), { title: '0 = hold until seen leaving, however long' }),
+            el('div', { class: 'help full' }, 'In case someone slips out unseen: a remembered person is forgotten after this long (0 = never).'),
+          ] : '',
+        ) : '',
+      this.hist && z.kind !== 'exit' ? el('div', { class: 'actions' },
+        el('button', {
+          class: 'btn', title: 'Replace this polygon with a hull around where targets dwelt inside it, plus the margin',
+          onmouseenter: () => { this.fitPreview = this._fitZone(z); this._updatePlot(); },
+          onmouseleave: () => { this.fitPreview = null; this._updatePlot(); },
+          onclick: () => {
+            const poly = this._fitZone(z);
+            this.fitPreview = null;
+            if (!poly) { this._toast('Nothing to fit: nobody stayed inside this shape (or the inward margin collapses it).', true); return; }
+            this._patchZone(z.id, { polygon: poly }, { renderSide: true });
+          },
+        }, 'Fit to points'),
+        el('span', { class: 'help', style: { alignSelf: 'center' } }, `margin (${u.label})`),
+        this._marginInput(() => this._renderSide())) : '',
+    ].filter(Boolean);
+    const editor = el('div', { class: 'section shape-panel' },
+      el('a', { class: 'back', onclick: () => this._select(null, null) }, '‹ All shapes'),
+      el('h3', {}, el('span', { class: 'grow' }, KIND_STYLE[sk]?.label === 'Ignored' ? 'Ignore area' : KIND_STYLE[sk]?.label || 'Room')),
+      el('div', { class: 'field' }, el('label', {}, 'Name'),
+        el('input', { type: 'text', value: z.name, onfocus: () => { this._namePrev = JSON.stringify(this.zones); }, oninput: e => { this.zones = this.zones.map(q => (q.id === z.id ? { ...q, name: e.target.value } : q)); this._updatePlot(); this._renderHeader(); this._renderTimeline(); }, onchange: () => { if (this._namePrev) this._pushUndo(this._namePrev); this._namePrev = null; this._renderSide(); } })),
+      seg,
+      sk === 'linger' ? el('div', { class: 'sub' }, this._spotSensorToggle(z)) : '',
+      z.kind === 'include' ? el('div', { class: 'form sub' },
+        ...(room || this.details ? [
           el('label', {}, 'Device'),
           (() => {
             const saved = this.config.zones.find(q => q.id === z.id);
@@ -2123,49 +2194,28 @@ class RadarZonePresencePanel extends HTMLElement {
               `This area already has a room shape: “${t.z.name}”${t.radarTitle ? ` on ${t.radarTitle}` : ''}. An area has one room; draw open-plan parts as one shape, or give this one its own area.`,
               el('div', { class: 'actions' }, el('button', { class: 'btn', onclick: () => (t.radarId ? this._openLinked(t.radarId, t.z.id) : this._select(t.z.id, null)) }, 'Select it')))];
           })(),
-          el('label', {}, 'Turn on after (s)'),
-          num(f.on_delay_s, e => this._patchZone(z.id, { filters: { ...f, on_delay_s: Math.max(0, +e.target.value || 0) } })),
-          el('label', {}, 'Turn off after (s)'),
-          num(f.off_delay_s, e => this._patchZone(z.id, { filters: { ...f, off_delay_s: Math.max(0, +e.target.value || 0) } })),
-          el('label', {}, `Edge buffer (${u.label})`),
-          num(Math.round(u.toDisplay(f.edge_margin_mm) * 10) / 10, e => this._patchZone(z.id, { filters: { ...f, edge_margin_mm: Math.max(0, u.fromDisplay(+e.target.value || 0)) } })),
-          el('div', { class: 'help full' }, 'Turn on after ignores short blips (ghosts are often under 2 s). The edge buffer stops flicker at the edge: someone must be this far inside to enter and this far outside to leave.'),
+        ] : [
+          el('label', {}, 'Device'),
+          (() => { const saved = this.config.zones.find(q => q.id === z.id); return saved?.device_id ? el('a', { href: `/config/devices/device/${saved.device_id}` }, `${z.name.trim()} ↗`) : el('span', { class: 'help' }, 'created when you save'); })(),
+        ])) : '',
+      z.kind === 'exit' ? el('div', { class: 'form sub' }, this._exitEditor(z)) : '',
+      z.kind === 'include' ? el('div', { class: 'sub' }, el('h4', {}, 'Behaviour'),
           el('label', { class: 'check full' },
             el('input', { type: 'checkbox', checked: !!f.hold_until_exit, onchange: e => this._patchZone(z.id, { filters: { ...f, hold_until_exit: e.target.checked, hold_max_s: e.target.checked && !f.hold_max_s ? this._suggestedMaxHold(z) : f.hold_max_s || 0 } }, { renderSide: true }) }),
             el('span', {}, 'Remember people who sit still',
-              el('div', { class: 'help' }, 'Stays occupied until the person is seen leaving. Radars lose people who sit still; with this on, someone who disappears inside keeps it occupied until they are seen again, walking out or turning up near where they disappeared. People lost at the side of the radar\'s view or in a walkway are dropped after 20 s.',
+              el('div', { class: 'help', title: 'Radars lose people who sit still; with this on, someone who disappears inside keeps it occupied until they are seen again, walking out or turning up near where they disappeared. People lost at the side of the radar\'s view or in a walkway are dropped after 20 s.' }, 'Stays occupied until the person is seen leaving.',
                 this.zones.some(q => q.kind === 'exit')
                   ? ` Doorways count: disappearing in one (${this.zones.filter(q => q.kind === 'exit').map(q => q.name).join(', ')}) means they left, and someone appearing in one has just arrived.`
                   : ' Mark the doorways (doors, stairs) to make this work for a whole room.'))),
-          f.hold_until_exit ? [
-            el('label', {}, 'Hold limit (min)'),
-            num(Math.round((f.hold_max_s || 0) / 6) / 10, e => this._patchZone(z.id, { filters: { ...f, hold_max_s: Math.max(0, Math.round((+e.target.value || 0) * 60)) } }), { title: '0 = hold until seen leaving, however long' }),
-            el('div', { class: 'help full' }, 'In case someone slips out unseen: a remembered person is forgotten after this long (0 = never).'),
-          ] : '',
-        ] : z.kind === 'exit' ? this._exitEditor(z)
-          : z.kind === 'linger' ? el('div', { class: 'help full' }, 'A place people stay (a bed, a sofa, a desk chair). Someone the radar loses here is remembered as still being here, so their room stays occupied. Use it where the edge of the radar\'s view would otherwise suggest they left.')
-            : z.kind === 'transient' ? el('div', { class: 'help full' }, 'Where people only pass through (a hallway strip, behind a corner). Someone the radar loses here has most likely moved on: they are forgotten after 20 s.')
-              : el('div', { class: 'help full' }, 'Detections inside an ignore area are dropped before anything else looks at them: a fan, a plant, a curtain, a reflection.'),
-      ),
-      this.hist && z.kind !== 'exit' ? el('div', { class: 'actions' },
-        el('button', {
-          class: 'btn', title: 'Replace this polygon with a hull around where targets dwelt inside it, plus the margin',
-          onmouseenter: () => { this.fitPreview = this._fitZone(z); this._updatePlot(); },
-          onmouseleave: () => { this.fitPreview = null; this._updatePlot(); },
-          onclick: () => {
-            const poly = this._fitZone(z);
-            this.fitPreview = null;
-            if (!poly) { this._toast('Nothing to fit: nobody stayed inside this shape (or the inward margin collapses it).', true); return; }
-            this._patchZone(z.id, { polygon: poly }, { renderSide: true });
-          },
-        }, 'Fit to points'),
-        el('span', { class: 'help', style: { alignSelf: 'center' } }, `margin (${u.label})`),
-        this._marginInput(() => this._renderSide())) : '',
-      el('div', { class: 'trail' }),
-      el('div', { class: 'zone-stats' }),
+        ) : z.kind === 'linger' ? el('div', { class: 'help sub' }, 'A place people stay (a bed, a sofa, a desk chair). Someone the radar loses here is remembered as still being here, so their room stays occupied.')
+        : z.kind === 'transient' ? el('div', { class: 'help sub' }, 'Where people only pass through (a hallway strip, behind a corner). Someone the radar loses here has most likely moved on: they are forgotten after 20 s.')
+          : z.kind === 'exclude' ? el('div', { class: 'help sub' }, 'Detections inside an ignore area are dropped before anything else looks at them: a fan, a plant, a curtain, a reflection.') : '',
+      z.kind !== 'exit' ? el('div', { class: 'sub' }, el('div', { class: 'trail' }), el('div', { class: 'zone-stats' })) : '', // its own heading: Preview · range
+      advanced.length ? el('details', { class: 'adv sub' }, el('summary', {}, z.kind === 'include' ? 'Advanced: turn on/off after, edge buffer, hold limit' : 'Advanced'), ...advanced) : '',
       !this.details ? '' : el('details', { open: z.polygon.length <= 8 },
         el('summary', { class: 'help', style: { cursor: 'pointer', marginTop: '8px' } }, `Vertices (${z.polygon.length}) — ${u.label}`),
         el('div', { class: 'vwrap' })),
+      el('button', { class: 'del-link', onclick: () => this._deleteZone(z.id) }, `Delete ${word}`),
     );
     queueMicrotask(() => this._renderVertexTable());
     return editor;
