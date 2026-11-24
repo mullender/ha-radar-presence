@@ -689,3 +689,34 @@ Plan's side panel (rooms with coverage, connections from doorways, gaps);
 Plan mode looks busy in dev because areas there have several overlapping
 room shapes (the proposal's one shape per area isn't enforced on old data).
 
+
+### 2026-11-23: compared with Radar Map Manager (github.com/Moe8383/radar_map_manager, v1.3.12)
+
+RMM is a live map: every radar's targets fused onto one floor-plan image, with
+zones that fire entities. We answer "who is in which room, and why", with
+history behind every answer.
+
+- Input: RMM polls `sensor.<name>_target_N_x/_y` (or `_distance` for 1D) every
+  0.1 s by naming convention, so any radar that exposes coordinates works; its
+  own firmware can push over UDP. We listen to state changes of known profiles.
+- Placement: RMM puts each radar on a background image (origin, rotation,
+  scale X/Y, mirror). "Freeze" holds your live dot so you drag it to where you
+  stand, which sets the scale. Global map scale by picking two points.
+- Fusion: targets within 0.8 m merge; EMA smoothing; verify delay; entrance
+  zones (optionally "only trust targets that entered there"); an
+  anti-teleport speed cap; IDs kept for 12 h ("hibernation").
+- Zones: per-radar monitor zones; global detect (presence + count entities),
+  exclude, entrance and stationary-hold (per-zone hold time) zones. Its zone
+  "Dly" is in fact a turn-off delay (on until N s after the last hit).
+- 3D: slant-range to ground correction from mounting height; fall alert for
+  radars with height (LD6002B, LD6004).
+- No history: it writes `sensor.rmm_<map>_master` (all targets as attributes)
+  every tick and asks users to exclude it from the recorder. No tests.
+- UI: a Lovelace card with an in-card editor; idles at 0 % CPU when nothing
+  moves.
+
+Worth taking: a background image under the plan with positioning/scaling and
+"freeze"-style calibration; generic radars (pick a device, guess its target
+x/y entities, let the user correct them in dropdowns); a strict "entrance
+only" mode per room; a live-map dashboard card; slant-range correction for
+high wall mounts (check whether our radars report slant range).
