@@ -2,7 +2,8 @@
 
 Home Assistant custom integration that turns the target coordinates of
 LD2450-style mmWave radar sensors (Everything Presence Lite / Pro, Screek
-Human Sensor 2A, other ESPHome LD2450 firmwares) into **room and spot
+Human Sensor 2A, other ESPHome LD2450 firmwares, or any device with target X/Y
+sensors: pick it and choose the entities) into **room and spot
 occupancy** and an **occupant count** for the home, each floor and each
 room. Mostly for automating lights and climate.
 
@@ -34,7 +35,9 @@ nothing is written to the device.
   - **House**: floors and rooms with who is where, and **Activity** in plain
     sentences ("Someone came home through the garage door") with *How we
     know*, *Follow person A* and a jump to the radar at that moment. A floor
-    whose rooms are drawn on one linked map can show as a **Plan**.
+    whose rooms are drawn on one linked map can show as a **Plan**, with live
+    detections and, optionally, your floor-plan image under it (drag, resize,
+    or line up two points; *Where I stand* uses your live dot).
   - **Radars**: the map of what a radar sees (detections, trails, people) with
     a timeline and playhead — live, or back in time. Clicking a bar explains
     why a room was on and offers the fix (ignore that spot, turn on after

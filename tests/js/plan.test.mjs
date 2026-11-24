@@ -32,3 +32,17 @@ test('spotLike: a small room shape inside a room is a spot in all but name', asy
   const edge = { id: 'edge', kind: 'include', polygon: [[-1000, -1000], [1000, -1000], [1000, 0], [-1000, 0]] }; // shares the room's edge exactly
   assert.deepEqual([...spotLike([room, edge])], []);
 });
+
+test('fitBackground: two image points and where they belong give the placement back', async () => {
+  const { fitBackground, imageToPlan, planToImage } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const truth = { image: '/local/p.png', w: 1000, h: 600, x: -3000, y: 7000, scale: 9.5, rotation: 30, opacity: 0.6 };
+  const a = [100, 120], b = [880, 450];
+  const start = { ...truth, x: 0, y: 0, scale: 5, rotation: 0 };
+  const fit = fitBackground(start, [[a, imageToPlan(truth, a)], [b, imageToPlan(truth, b)]]);
+  for (const k of ['x', 'y', 'scale', 'rotation']) assert.ok(Math.abs(fit[k] - truth[k]) < 1e-6, `${k}: ${fit[k]} vs ${truth[k]}`);
+  const back = planToImage(truth, imageToPlan(truth, [321, 77]));
+  assert.ok(Math.abs(back[0] - 321) < 1e-9 && Math.abs(back[1] - 77) < 1e-9);
+  const moved = fitBackground(start, [[a, [500, 500]]]); // one pair: only moves
+  assert.deepEqual(imageToPlan(moved, a).map(Math.round), [500, 500]);
+  assert.equal(moved.scale, 5);
+});

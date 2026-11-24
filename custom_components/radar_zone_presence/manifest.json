@@ -3,6 +3,7 @@
   "name": "Radar Presence",
   "after_dependencies": [
     "esphome",
+    "image_upload",
     "recorder"
   ],
   "categories": [

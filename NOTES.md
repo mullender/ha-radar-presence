@@ -720,3 +720,20 @@ Worth taking: a background image under the plan with positioning/scaling and
 x/y entities, let the user correct them in dropdowns); a strict "entrance
 only" mode per room; a live-map dashboard card; slant-range correction for
 high wall mounts (check whether our radars report slant range).
+
+Built from that list (2026-11-23):
+- Generic radars: *Add radar → Another device* picks a device, guesses each
+  target's X/Y from entity ids and names (`discovery.guess_targets`), and shows
+  the guesses in entity dropdowns limited to that device's sensors, with the
+  current readings so the user can check them. Profile `generic`, up to 3
+  targets.
+- Floor-plan image under the plan (House → floor → Plan → *+ Floor plan
+  image*, admins). Uploaded through HA's image upload (as for person
+  pictures). Placement (`x, y` of the top-left corner in mm, `scale` mm/px,
+  `rotation`, `opacity`) is in the plan's display frame, stored per map
+  (anchor radar) in the To do store (`plans`, `plans/save`), so saving does not
+  reload the integration. Placing it: drag to move, wheel to resize, rotate
+  ±90°/±1°, or *Line up two points*: click a point on the image, then where it
+  is on the plan (or *Where I stand* with the live dot); one pair moves it,
+  two pairs set size and angle as well (`plan.fitBackground`).
+  Not yet: the image in the Radars view, a "freeze" button.

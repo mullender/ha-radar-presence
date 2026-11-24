@@ -6,7 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
-import { drawPlan, loadMaps, planFor } from './plan.js';
+import { drawPlan, fitBackground, imageToPlan, loadMaps, planFor, planToImage } from './plan.js';
 import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp, timeChip, TIME_CHIP_CSS } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
@@ -81,6 +81,17 @@ ${TIME_CHIP_CSS}
 .plan { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan-map { position: relative; width: 100%; max-width: 760px; max-height: 70vh; overflow: hidden; }
 .plan-svg { position: absolute; inset: 0; width: 100%; height: 100%; color: var(--primary-text-color, #222); overflow: hidden; }
+.bg-open { margin-top: 2px; }
+.plan-map.bg-editing { cursor: grab; outline: 2px dashed var(--primary-color, #03a9f4); outline-offset: 2px; touch-action: none; }
+.plan-svg .plan-bg { pointer-events: none; }
+.bg-pin { position: absolute; transform: translate(-50%, -50%); width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 600; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; z-index: 4; pointer-events: none; box-shadow: 0 0 0 2px #fff; }
+.bg-pin.img { background: #d97706; }
+.bg-pin.at { background: #0d9488; }
+.bg-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 10px; background: var(--secondary-background-color, #f3f4f6); font-size: 13px; }
+.bg-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bg-hint { color: var(--secondary-text-color, #555); }
+.bg-op { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; color: var(--secondary-text-color, #555); }
 .plan-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
 .plan-svg .room.link { cursor: pointer; }
 .plan-svg .room.link:hover { fill-opacity: .18; }
@@ -189,7 +200,7 @@ export class RzpHeadcount extends HTMLElement {
     if (this._active) return;
     this._active = true;
     await this.load();
-    this._timer = setInterval(() => { if (this.cursor === null) this.render(); else this._renderTimeline(); }, 5000);
+    this._timer = setInterval(() => { if (this.cursor === null && !this._bgEdit) this.render(); else this._renderTimeline(); }, 5000); // not while placing an image
   }
 
   deactivate() {
@@ -248,7 +259,7 @@ export class RzpHeadcount extends HTMLElement {
         if (msg.closed) { setTimeout(() => this._active && this.load(), 3000); return; } // the home reloaded
         this.entries.push(...msg.log);
         this.data.now = { t: msg.log[msg.log.length - 1].t, tokens: msg.log[msg.log.length - 1].tokens, unknown_floors: msg.log[msg.log.length - 1].unknown_floors };
-        if (this.cursor === null) this.render(); else this._renderTimeline();
+        if (this.cursor === null && !this._bgEdit) this.render(); else this._renderTimeline();
       }, { type: `${DOMAIN}/headcount/subscribe` });
     } catch { /* an older integration: no live updates */ }
   }
@@ -412,7 +423,11 @@ export class RzpHeadcount extends HTMLElement {
       if (mode === 'plan') {
         const dark = !!this.hass?.themes?.darkMode;
         const radarOf = s => s.radar;
-        const drawn = drawPlan(plan, { occupied: a => per.get(a) || 0, dark, onRoom: s => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(s), t: t ?? Date.now() / 1000 } })) });
+        const edit = this._bgEdit?.anchor === plan.map.anchor ? this._bgEdit : null;
+        const drawn = drawPlan(plan, {
+          occupied: a => per.get(a) || 0, dark, background: edit ? edit.draft : plan.map.background,
+          onRoom: edit ? null : s => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(s), t: t ?? Date.now() / 1000 } })),
+        });
         this._plans.push({ drawn, radars: plan.map.radars });
         const labels = [...plan.areas].map(id => this.areas.get(id)).filter(Boolean).map(a => {
           const at = drawn.place(a.id);
@@ -422,8 +437,12 @@ export class RzpHeadcount extends HTMLElement {
           return b;
         });
         const others = f.areas.filter(a => !plan.areas.has(a.id));
+        const mapEl = el('div', { class: `plan-map${edit ? ' bg-editing' : ''}`, style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...(edit ? [] : labels), drawn.overlay);
+        if (edit) this._bgEditor(edit, drawn, mapEl, plan.map);
         rooms = el('div', { class: 'plan' },
-          el('div', { class: 'plan-map', style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...labels, drawn.overlay),
+          mapEl,
+          edit ? edit.bar : this.admin ? el('div', { class: 'bg-open' }, el('button', { class: 'fchip', onclick: () => this._bgStart(plan.map, drawn) },
+            plan.map.background ? 'Floor plan image…' : '+ Floor plan image')) : '',
           others.length ? el('div', { class: 'rooms' }, others.map(a => { const b = box(a); b.querySelector('.meta').textContent ||= 'not on this map'; return b; })) : '');
       } else rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
@@ -440,6 +459,167 @@ export class RzpHeadcount extends HTMLElement {
     requestAnimationFrame(() => this._drawLinks());
     const want = new Set(this._plans.flatMap(p => p.radars));
     if (t === null) { this._syncLive(want); this._paintLive(); } else { this._syncLive(new Set()); this._detectionsAt(t, want); }
+  }
+
+  // ------------------------------------------------------------ floor-plan image
+
+  /** Start placing the floor-plan image under a map (admins). Without one yet, ask for the file first. */
+  _bgStart(map, drawn) {
+    const draft = map.background ? { ...map.background } : null;
+    this._bgEdit = { anchor: map.anchor, draft, saved: map.background, step: null, pairs: [], pending: null };
+    if (!draft) { this._bgPick(drawn); return; }
+    this.render();
+  }
+
+  /** Upload an image (HA's image upload, as for person pictures) and fit it over the rooms drawn so far. */
+  _bgPick(drawn) {
+    const input = el('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      input.remove();
+      if (!file) { if (!this._bgEdit?.draft) this._bgEdit = null; this.render(); return; }
+      try {
+        const body = new FormData();
+        body.append('file', file);
+        const res = this.hass.fetchWithAuth ? await this.hass.fetchWithAuth('/api/image/upload', { method: 'POST', body })
+          : await fetch('/api/image/upload', { method: 'POST', body, headers: { Authorization: `Bearer ${this.hass.auth.data.access_token}` } });
+        if (!res.ok) throw new Error(`upload failed (${res.status})`);
+        const { id } = await res.json();
+        const image = `/api/image/serve/${id}/original`;
+        const img = new Image();
+        img.src = image;
+        await img.decode();
+        const { x0, x1, y1 } = drawn.extent;
+        const prev = this._bgEdit.draft;
+        this._bgEdit.draft = prev ? { ...prev, image, w: img.naturalWidth, h: img.naturalHeight, scale: prev.scale * prev.w / img.naturalWidth }
+          : { image, w: img.naturalWidth, h: img.naturalHeight, x: x0, y: y1, scale: (x1 - x0) / img.naturalWidth, rotation: 0, opacity: 0.6 };
+      } catch (err) {
+        alert(`Could not use that image: ${err.message || err}`);
+        if (!this._bgEdit?.draft) this._bgEdit = null;
+      }
+      this.render();
+    });
+    this.shadowRoot.append(input);
+    input.click();
+  }
+
+  /** Change the draft's scale or rotation around the image's centre. */
+  _bgAround(change) {
+    const e = this._bgEdit, d = e.draft, c = [d.w / 2, d.h / 2];
+    const before = imageToPlan(d, c);
+    const next = { ...d, ...change(d) };
+    const after = imageToPlan(next, c);
+    e.draft = { ...next, x: next.x + before[0] - after[0], y: next.y + before[1] - after[1] };
+  }
+
+  /** The editing toolbar and pointer handling for the map being edited (drag to move, wheel to scale, line up two points). */
+  _bgEditor(edit, drawn, mapEl, map) {
+    const d = edit.draft;
+    if (!d) { edit.bar = el('div', { class: 'bg-bar' }, 'Choose an image…'); return; }
+    const rerender = () => this.render();
+    // Markers for the points being lined up (image points move with the image).
+    for (const [k, [img, at]] of edit.pairs.entries()) {
+      for (const [p, cls] of [[imageToPlan(d, img), 'img'], [at, 'at']]) {
+        const [fx, fy] = drawn.toFrac(p);
+        mapEl.append(el('span', { class: `bg-pin ${cls}`, style: { left: `${fx * 100}%`, top: `${fy * 100}%` } }, String(k + 1)));
+      }
+    }
+    if (edit.pending) {
+      const [fx, fy] = drawn.toFrac(imageToPlan(d, edit.pending));
+      mapEl.append(el('span', { class: 'bg-pin img', style: { left: `${fx * 100}%`, top: `${fy * 100}%` } }, String(edit.pairs.length + 1)));
+    }
+    let drag = null;
+    drawn.svg.addEventListener('pointerdown', e => {
+      const p = drawn.toPlan(e.clientX, e.clientY);
+      if (!p) return;
+      drawn.svg.setPointerCapture(e.pointerId);
+      drag = { p, x: d.x, y: d.y, moved: false };
+    });
+    drawn.svg.addEventListener('pointermove', e => {
+      if (!drag || edit.step) return;
+      const p = drawn.toPlan(e.clientX, e.clientY);
+      if (!p) return;
+      if (Math.hypot(p[0] - drag.p[0], p[1] - drag.p[1]) > 30) drag.moved = true;
+      edit.draft = { ...edit.draft, x: drag.x + p[0] - drag.p[0], y: drag.y + p[1] - drag.p[1] };
+      drawn.setBackground(edit.draft);
+    });
+    drawn.svg.addEventListener('pointerup', e => {
+      const was = drag;
+      drag = null;
+      if (!was) return;
+      if (edit.step && !was.moved) { // a click while lining up: an image point, or where it belongs
+        const p = drawn.toPlan(e.clientX, e.clientY);
+        if (edit.step === 'image') { edit.pending = planToImage(edit.draft, p); edit.step = 'plan'; }
+        else this._bgPair(p);
+      }
+      rerender();
+    });
+    drawn.svg.addEventListener('wheel', e => {
+      e.preventDefault();
+      const p = drawn.toPlan(e.clientX, e.clientY);
+      const k = Math.exp(-e.deltaY * 0.0015);
+      const img = planToImage(edit.draft, p);
+      const next = { ...edit.draft, scale: edit.draft.scale * k };
+      const now = imageToPlan(next, img); // keep the point under the pointer still
+      edit.draft = { ...next, x: next.x + p[0] - now[0], y: next.y + p[1] - now[1] };
+      drawn.setBackground(edit.draft);
+      clearTimeout(this._bgWheel);
+      this._bgWheel = setTimeout(rerender, 400);
+    }, { passive: false });
+    // Where I stand: the first person the plan's radars see right now.
+    const standing = () => {
+      for (const id of map.radars) {
+        const t = this._live?.get(id)?.targets?.[0];
+        if (t) return drawn.fromRadar(id, [t[1], t[2]]);
+      }
+      return null;
+    };
+    const step = edit.step;
+    const hint = step === 'image' ? `Point ${edit.pairs.length + 1}: click a spot on the image you can find on the plan too (a room corner, a door).`
+      : step === 'plan' ? `Now click where that spot is on the plan, or stand there and use "Where I stand".`
+        : edit.pairs.length === 1 ? 'The image moved to match point 1. Add point 2 (far from point 1) to set its size and angle.'
+          : 'Drag the image to move it, scroll to resize it, or line up two points.';
+    const btn = (label, onclick, title = '', cls = 'fchip') => el('button', { class: cls, title, onclick }, label);
+    edit.bar = el('div', { class: 'bg-bar' },
+      el('div', { class: 'bg-hint' }, hint),
+      el('div', { class: 'bg-row' },
+        step === 'plan' ? btn('Where I stand', () => { const p = standing(); if (p) { this._bgPair(p); rerender(); } else alert('Nobody is in view of these radars right now.'); }, 'Use your own position, as the radars see it now') : '',
+        !step ? btn(edit.pairs.length === 1 ? 'Add point 2' : 'Line up two points', () => { if (edit.pairs.length >= 2) edit.pairs = []; edit.step = 'image'; rerender(); }) : btn('Stop', () => { edit.step = null; edit.pending = null; rerender(); }),
+        btn('⟲ 90°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 270) % 360 })); rerender(); }, 'Rotate a quarter turn left'),
+        btn('↺ 1°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 359) % 360 })); rerender(); }),
+        btn('↻ 1°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 1) % 360 })); rerender(); }),
+        btn('⟳ 90°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 90) % 360 })); rerender(); }, 'Rotate a quarter turn right'),
+        btn('−', () => { this._bgAround(b => ({ scale: b.scale / 1.05 })); rerender(); }, 'Smaller'),
+        btn('+', () => { this._bgAround(b => ({ scale: b.scale * 1.05 })); rerender(); }, 'Larger'),
+        el('label', { class: 'bg-op' }, 'Opacity', el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: d.opacity ?? 0.6,
+          oninput: e => { edit.draft = { ...edit.draft, opacity: +e.target.value }; drawn.setBackground(edit.draft); } }))),
+      el('div', { class: 'bg-row' },
+        btn('Replace image…', () => this._bgPick(drawn)),
+        edit.saved ? btn('Remove image', async () => { if (!confirm('Remove the floor plan image from this map?')) return; await this._bgSave(map, null); }) : '',
+        el('span', { style: { flex: 1 } }),
+        btn('Cancel', () => { this._bgEdit = null; rerender(); }),
+        btn('Save', () => this._bgSave(map, edit.draft), '', 'fchip on')));
+  }
+
+  /** The point just clicked (or stood on) is where the pending image point belongs; with two pairs, fit size and angle. */
+  _bgPair(at) {
+    const e = this._bgEdit;
+    if (!e?.pending || !at) return;
+    e.pairs = [...e.pairs, [e.pending, at]];
+    e.pending = null;
+    e.draft = fitBackground(e.draft, e.pairs.slice(-2));
+    e.step = null;
+  }
+
+  async _bgSave(map, plan) {
+    try {
+      await this.hass.callWS({ type: `${DOMAIN}/plans/save`, anchor: map.anchor, plan: plan && { image: plan.image, w: plan.w, h: plan.h, x: plan.x, y: plan.y, scale: plan.scale, rotation: plan.rotation || 0, opacity: plan.opacity ?? 0.6 } });
+      map.background = plan;
+      this._bgEdit = null;
+    } catch (err) {
+      alert(`Could not save: ${err.message || err.code}`);
+    }
+    this.render();
   }
 
   // ------------------------------------------------------------ detections on the plan

@@ -28,6 +28,7 @@ export function spotLike(zones) {
 /** Every radar's config, grouped by the map (alignment group) it is drawn on. */
 export async function loadMaps(hass) {
   const list = await hass.callWS({ type: `${DOMAIN}/list` });
+  const plans = (await hass.callWS({ type: `${DOMAIN}/plans` }).catch(() => ({ plans: {} }))).plans || {};
   const cfgs = await Promise.all(list.radars.map(r => hass.callWS({ type: `${DOMAIN}/config`, radar_id: r.radar_id }).catch(() => null)));
   const maps = new Map(); // anchor -> [{radar, cfg}]
   list.radars.forEach((r, i) => {
@@ -54,7 +55,7 @@ export async function loadMaps(hass) {
     }
     const display = radars.find(x => x.radar.radar_id === anchor)?.cfg.settings?.display || {};
     const toAnchor = new Map(radars.map(({ radar }) => [radar.radar_id, at(radar.radar_id)]));
-    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display };
+    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display, background: plans[anchor] || null };
   });
 }
 
@@ -80,17 +81,52 @@ export function centroid(poly) {
   return [x / (3 * a), y / (3 * a)];
 }
 
+/** Image pixel (u, v) -> display-frame mm, for a background placed at (x, y) with `scale` mm/px, rotated clockwise. */
+export function imageToPlan(bg, [u, v]) {
+  const r = ((bg.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+  return [bg.x + bg.scale * (u * c - v * s), bg.y - bg.scale * (u * s + v * c)];
+}
+
+/** Display-frame mm -> image pixel (the inverse of imageToPlan). */
+export function planToImage(bg, [px, py]) {
+  const r = ((bg.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+  const dx = (px - bg.x) / bg.scale, dy = (bg.y - py) / bg.scale;
+  return [dx * c + dy * s, -dx * s + dy * c];
+}
+
+/**
+ * Two image points and where they belong on the plan -> the placement that puts them there (scale, rotation, position).
+ * pairs: [[[u, v], [px, py]], [[u, v], [px, py]]]. Keeps `bg`'s other fields. One pair only moves the image.
+ */
+export function fitBackground(bg, pairs) {
+  if (pairs.length === 1) {
+    const [[img, at]] = pairs, now = imageToPlan(bg, img);
+    return { ...bg, x: bg.x + at[0] - now[0], y: bg.y + at[1] - now[1] };
+  }
+  const [[i1, p1], [i2, p2]] = pairs;
+  // Display frame with y down (as the image), so rotation is the same sense as the image's.
+  const a = [i2[0] - i1[0], i2[1] - i1[1]], b = [p2[0] - p1[0], -(p2[1] - p1[1])];
+  const la = Math.hypot(...a), lb = Math.hypot(...b);
+  if (la < 1 || lb < 1) return bg;
+  const rotation = (((Math.atan2(b[1], b[0]) - Math.atan2(a[1], a[0])) * 180) / Math.PI + 360) % 360;
+  const out = { ...bg, scale: lb / la, rotation };
+  const now = imageToPlan(out, i1);
+  return { ...out, x: out.x + p1[0] - now[0], y: out.y + p1[1] - now[1] };
+}
+
 /**
  * Draw a floor plan. `occupied(area)` -> count. Returns {svg, place(area) -> [x%, y%] of the room's label, size}.
  * Rooms of other floors on the same map are left out; doorways and spots are kept when they touch a room drawn.
  */
-export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null } = {}) {
+export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null, background = plan.map.background } = {}) {
   const { map, areas } = plan;
   const d = map.display || {};
   const r = ((d.rotation || 0) * Math.PI) / 180, m = d.mirror ? -1 : 1;
   const tf = ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y];
   const rooms = map.shapes.filter(s => s.kind === 'include' && areas.has(s.area));
-  const roomPts = rooms.flatMap(s => s.polygon.map(tf));
+  // The floor-plan image counts towards the extent: it shows the whole floor, also what no radar sees.
+  const bgPts = background ? [[0, 0], [background.w, 0], [background.w, background.h], [0, background.h]].map(p => imageToPlan(background, p)) : [];
+  const roomPts = [...rooms.flatMap(s => s.polygon.map(tf)), ...bgPts];
   const xs = roomPts.map(p => p[0]), ys = roomPts.map(p => p[1]);
   const pad = 400;
   const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
@@ -104,6 +140,27 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
   const add = (tag, attrs, parent = svg) => { const n = document.createElementNS(SVGNS, tag); for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v); parent.append(n); return n; };
   const pts = poly => poly.map(p => sx(p).map(v => v.toFixed(0)).join(',')).join(' ');
   const tone = k => KIND_STYLE[k][dark ? 'dark' : 'light'];
+  // The floor-plan image, under everything. Placed in the display frame, so svg = (x - x0, y1 - y).
+  const bgEl = add('image', { preserveAspectRatio: 'none', class: 'plan-bg' });
+  const setBackground = bg => {
+    if (!bg) { bgEl.setAttribute('display', 'none'); return; }
+    bgEl.removeAttribute('display');
+    bgEl.setAttribute('href', bg.image);
+    bgEl.setAttribute('width', bg.w);
+    bgEl.setAttribute('height', bg.h);
+    bgEl.setAttribute('opacity', bg.opacity ?? 0.6);
+    bgEl.setAttribute('transform', `translate(${(bg.x - x0).toFixed(1)},${(y1 - bg.y).toFixed(1)}) rotate(${(bg.rotation || 0).toFixed(2)}) scale(${bg.scale})`);
+  };
+  setBackground(background);
+  /** A pointer position -> display-frame mm (for dragging and picking points on the plan). */
+  const toPlan = (clientX, clientY) => {
+    const m = svg.getScreenCTM();
+    if (!m) return null;
+    const q = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+    return [q.x + x0, y1 - q.y];
+  };
+  /** Display-frame mm -> where it is in the map element, as fractions (for markers over the plan). */
+  const toFrac = ([px, py]) => [(px - x0) / W, (y1 - py) / H];
   // What the radars see: a soft wash.
   for (const c of map.cones) add('polygon', { points: pts(c.polygon), fill: 'currentColor', 'fill-opacity': 0.035 });
   for (const s of rooms) {
@@ -168,5 +225,7 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
       }
     }
   };
-  return { svg, overlay, place: a => label.get(a), aspect: H / W, setLive };
+  /** A radar's own coordinates -> display-frame mm ("where I stand" when lining up the image). */
+  const fromRadar = (radar, p) => { const f = map.toAnchor.get(radar); return f ? tf(f(p)) : null; };
+  return { svg, overlay, place: a => label.get(a), aspect: H / W, setLive, setBackground, toPlan, toFrac, fromRadar, extent: { x0, x1, y0, y1 } };
 }
