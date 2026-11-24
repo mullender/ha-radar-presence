@@ -31,7 +31,7 @@ const css = `
 :host { display: block; height: 100%; background: var(--primary-background-color, #fafafa); color: var(--primary-text-color, #222);
   font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); font-size: 14px; }
 * { box-sizing: border-box; }
-.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.app { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; }
 header { display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 56px; background: var(--app-header-background-color, var(--primary-color, #03a9f4));
   color: var(--app-header-text-color, #fff); }
 header h1 { font-size: 20px; font-weight: 400; margin: 0 12px 0 0; white-space: nowrap; }
@@ -41,7 +41,7 @@ header select option { color: #222; }
 header .spacer { flex: 1; }
 header .tabs { flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 header .tabs .tab { white-space: nowrap; }
-@media (max-width: 600px) { header h1 { display: none; } header { gap: 6px; padding: 0 6px; } header .tabs .tab { padding: 5px 8px; } }
+@media (max-width: 600px) { header h1 { display: none; } header { gap: 6px; padding: 0 6px; } header .tabs .tab { padding: 5px 8px; } header .tabs .tab.room, .crumbs > span, header .pill-btn .lbl { display: none; } header .tabs { flex: 0 1 auto; min-width: 64px; } }
 .tabs { display: flex; gap: 2px; background: rgba(255,255,255,.12); border-radius: 6px; padding: 2px; }
 .tabs .tab { background: none; border: 0; color: inherit; padding: 5px 12px; border-radius: 4px; cursor: pointer; opacity: .8; }
 .tabs .tab.on { background: rgba(255,255,255,.25); opacity: 1; font-weight: 500; }
@@ -119,8 +119,8 @@ rzp-plot { flex: 1; min-height: 300px; }
   background: var(--secondary-background-color, #eef0f2); color: var(--primary-text-color, #222); }
 .live-pill:empty { display: none; }
 .live-pill.live { background: rgba(229,57,53,.12); color: #d32f2f; }
-.crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 14px; color: var(--secondary-text-color, #666); }
-.crumbs select { font: inherit; font-size: 15px; font-weight: 500; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; max-width: 260px; }
+.crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; font-size: 14px; color: var(--secondary-text-color, #666); }
+.crumbs select { font: inherit; font-size: 15px; font-weight: 500; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; max-width: 260px; min-width: 0; }
 .status { display: flex; gap: 16px; font-size: 12px; color: var(--secondary-text-color, #666); padding: 3px 10px; background: var(--card-background-color, #fff);
   border-top: 1px solid var(--divider-color, #ddd); min-height: 22px; }
 .status .hint { margin-left: auto; }
@@ -1428,7 +1428,7 @@ class RadarZonePresencePanel extends HTMLElement {
     const tabs = el('div', { class: 'tabs' },
       el('button', { class: `tab${this.tab === 'headcount' ? ' on' : ''}`, onclick: () => this._setTab('headcount') }, 'House'),
       // Rooms open from the house view; a radar without an area keeps a way in.
-      this.tab === 'radars' || this.radars.some(r => !r.area) ? el('button', { class: `tab${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, this.tab === 'radars' ? 'Room' : 'Radars') : '',
+      this.tab === 'radars' || this.radars.some(r => !r.area) ? el('button', { class: `tab room${this.tab === 'radars' ? ' on' : ''}`, onclick: () => this._setTab('radars') }, this.tab === 'radars' ? 'Room' : 'Radars') : '',
       !this.admin || !this.radars.length ? '' : el('button', { class: `tab${this.tab === 'todo' ? ' on' : ''}`, onclick: () => this._setTab('todo') }, 'To do',
         this.todoCount ? el('span', { class: 'badge' }, String(this.todoCount)) : ''),
       !this.admin || !this.home ? '' : el('button', { class: `tab${this.tab === 'settings' ? ' on' : ''}`, onclick: () => this._setTab('settings') }, 'Settings'));
@@ -1468,7 +1468,7 @@ class RadarZonePresencePanel extends HTMLElement {
       el('div', { class: 'spacer' }),
       this.radars.length ? range : '',
       this.radars.length ? el('button', { class: 'live-pill', onclick: () => (this.mode === 'live' ? this._togglePlay() : this._goLive()) }) : '',
-      this.config && this.admin ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎ Edit') : '',
+      this.config && this.admin ? el('button', { class: 'pill-btn', title: 'Edit the shapes and settings of this radar (E)', onclick: () => this._enterEdit() }, '✎', el('span', { class: 'lbl' }, ' Edit')) : '',
       this.config ? el('button', { class: 'ibtn', title: 'More', onclick: e => this._openMenu(e.currentTarget) }, '⋮') : '',
     );
     this._updateReplayLabel();

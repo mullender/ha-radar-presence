@@ -49,6 +49,7 @@ const css = `
 .floor .plan { padding: 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; background: var(--card-background-color, #fff); }
 .floor .plan .rooms { border: 0; padding: 0; }
 .floor h2 { margin: 0; font-size: 13px; font-weight: 400; color: var(--secondary-text-color, #666); display: flex; flex-direction: column; gap: 0; }
+@media (max-width: 600px) { .floor { grid-template-columns: minmax(0, 1fr); gap: 6px; } .floor h2 { flex-direction: row; align-items: baseline; gap: 8px; } .floor .seg { margin-top: 0; margin-left: auto; } .house { padding: 10px; } }
 .floor h2 .n { font-size: 26px; font-weight: 500; color: var(--primary-text-color, #222); line-height: 1.2; }
 .floor.doubt h2 .n { color: var(--warning-color, #f9a825); }
 .space { background: var(--card-background-color, #fff); border: 1px solid transparent; border-radius: 10px; padding: 8px 12px;
