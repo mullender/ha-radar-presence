@@ -10,7 +10,7 @@
 import { pointInPolygon, summarize, validatePolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
 import { appearVanishSpots, classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
-import { KIND_STYLE, SVGNS, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId } from './util.js';
+import { KIND_STYLE, SVGNS, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId, roomName, the } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const DAY = 86400;
@@ -24,13 +24,16 @@ const css = `
 .head a { margin-left: auto; color: var(--primary-color, #03a9f4); cursor: pointer; font-size: 13px; }
 .bar { height: 4px; border-radius: 2px; background: var(--divider-color, #e0e0e0); margin-bottom: 14px; overflow: hidden; }
 .bar div { height: 100%; background: var(--primary-color, #03a9f4); }
-.card { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; padding: 16px 18px; }
+.card { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #e0e0e0); border-radius: 12px; overflow: hidden; }
+.card .body { padding: 16px 18px; }
 .card h2 { margin: 0 0 6px; font-size: 17px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .card .why { color: var(--secondary-text-color, #666); line-height: 1.45; margin-bottom: 12px; }
 .card .q { font-weight: 500; margin: 10px 0 8px; }
-.cols { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; align-items: start; }
-.ev { width: 150px; height: 150px; border-radius: 10px; background: var(--secondary-background-color, #f3f4f6); color: var(--primary-text-color, #222); }
-@media (max-width: 560px) { .wrap { padding: 12px 10px 30px; } .cols { grid-template-columns: minmax(0, 1fr); } .ev { width: 100%; height: auto; max-width: 240px; } }
+/* The evidence fills the card's left side, as in the proposal. */
+.cols { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: stretch; }
+.ev { display: block; width: 100%; height: 100%; min-height: 260px; background: color-mix(in srgb, #3b82f6 5%, var(--card-background-color, #fff)); color: var(--primary-text-color, #222);
+  border-right: 1px solid var(--divider-color, #e0e0e0); }
+@media (max-width: 640px) { .wrap { padding: 12px 10px 30px; } .cols { grid-template-columns: minmax(0, 1fr); } .ev { height: 200px; min-height: 0; border-right: 0; border-bottom: 1px solid var(--divider-color, #e0e0e0); } }
 .ans { display: flex; flex-direction: column; gap: 8px; }
 .ans button { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; padding: 10px 12px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
@@ -39,7 +42,7 @@ const css = `
 .ans button .tag { font-size: 11px; color: #0d9488; border: 1px solid #0d9488; border-radius: 8px; padding: 0 6px; }
 .picks { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 10px; }
 .picks small { color: var(--secondary-text-color, #888); }
-.impact { margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--secondary-background-color, #f4f4f4); font-size: 13px; line-height: 1.4; }
+.impact { margin-top: 12px; padding: 9px 12px; border-radius: 8px; background: color-mix(in srgb, var(--secondary-background-color, #f4f4f4) 55%, var(--card-background-color, #fff)); font-size: 13px; line-height: 1.45; }
 .acts { display: flex; gap: 8px; margin-top: 12px; }
 .acts button { font: inherit; font-size: 13px; border: 1px solid var(--divider-color, #ccc); background: none; color: var(--primary-color, #03a9f4); border-radius: 16px; padding: 5px 12px; cursor: pointer; }
 .next { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 14px; }
@@ -192,8 +195,7 @@ export class RzpTodo extends HTMLElement {
 
   /** A room's name: its area's when the shape still has a default name ("Polygon 1"). */
   _zoneName(z, r = null) {
-    const area = this.hass.areas?.[z.area_id]?.name || r?.area;
-    return area && /^(polygon|zone|room)\b/i.test(z.name) ? area : z.name;
+    return roomName(z, this.hass.areas?.[z.area_id]?.name || r?.area);
   }
 
   /** Change one zone's filters; returns an undo. */
@@ -279,7 +281,7 @@ export class RzpTodo extends HTMLElement {
     this.wrap.replaceChildren(
       el('div', { class: 'head' }, el('b', {}, group), el('span', { class: 'muted' }, `${n} of ${inGroup.length}${open.length > 1 ? ` · ${open.length} open in all` : ''}`),
         el('a', { onclick: () => { this.skipped.add(item.key); this.render(); this._emitCount(); } }, 'Skip for now')),
-      el('div', { class: 'bar' }, el('div', { style: { width: `${(100 * doneInGroup) / inGroup.length}%` } })),
+      el('div', { class: 'bar' }, el('div', { style: { width: `${(100 * n) / (inGroup.length + 1)}%` } })), // where we are in this room's questions
       this._card(item),
       open.length > 1 ? el('div', { class: 'next' }, open.slice(1, 4).map((i, k) => el('div', {}, el('b', {}, `${k ? 'Then' : 'Next'} · ${this._short(i)}`), el('span', {}, this._hint(i))))) : '');
   }
@@ -436,7 +438,7 @@ export class RzpTodo extends HTMLElement {
     }
     const main = [...body, acts.length ? el('div', { class: 'acts' }, ...acts) : ''];
     const ev = this._evidence(i);
-    return el('div', { class: 'card' }, ev ? el('div', { class: 'cols' }, ev, el('div', {}, ...main)) : main);
+    return el('div', { class: 'card' }, ev ? el('div', { class: 'cols' }, ev, el('div', { class: 'body' }, ...main)) : el('div', { class: 'body' }, ...main));
   }
 
   /** What the card is about, as a cropped map: the last day's detections around it and the shapes involved. */
@@ -456,13 +458,14 @@ export class RzpTodo extends HTMLElement {
     const tf = ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y]; // as the radar view draws it
     const focus = shapes.find(s => s[2])[0].map(tf);
     const xs = focus.map(p => p[0]), ys = focus.map(p => p[1]);
-    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) + 2400;
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) + 1800;
     const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
     const S = 150, k = S / span;
     const sx = ([x, y]) => [S / 2 + (x - cx) * k, S / 2 - (y - cy) * k];
     const g = document.createElementNS(SVGNS, 'svg');
     g.setAttribute('viewBox', `0 0 ${S} ${S}`);
     g.setAttribute('class', 'ev');
+    g.setAttribute('preserveAspectRatio', 'xMidYMid slice'); // fill the pane; the focus stays in the middle
     const add = (tag, attrs) => { const n = document.createElementNS(SVGNS, tag); for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v); g.append(n); return n; };
     for (const [poly, kind, main] of shapes.filter(s => !s[2]).concat(shapes.filter(s => s[2]))) {
       const st = KIND_STYLE[kind];
@@ -544,8 +547,8 @@ export class RzpTodo extends HTMLElement {
         const a = count(base), b = count(withSpot);
         const gone = a.intervals.length - b.intervals.length;
         box.replaceChildren(el('b', {}, '▶ The last day with this spot: '),
-          gone > 0 ? `${room.name.toLowerCase()} would have gone clear ${gone} time${gone === 1 ? '' : 's'} less while someone sat still (occupied ${fmtDuration(b.occupied)} instead of ${fmtDuration(a.occupied)}).`
-            : `${room.name.toLowerCase()} would have behaved the same: it did not lose anyone here.`);
+          gone > 0 ? `${the(this._zoneName(room, i.radar))} would have gone clear ${gone} time${gone === 1 ? '' : 's'} less while someone sat still (occupied ${fmtDuration(b.occupied)} instead of ${fmtDuration(a.occupied)}).`
+              : `${the(this._zoneName(room, i.radar))} would have behaved the same: it did not lose anyone here.`);
       } catch (err) {
         box.replaceChildren(`(Could not replay: ${err.message})`);
       }
