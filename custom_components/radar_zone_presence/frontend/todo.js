@@ -7,13 +7,14 @@
 // with a radar) and from the home's layout (rooms nobody can get into, rooms
 // without a radar, radars in one room that are not lined up).
 
-import { pointInPolygon, summarize, validatePolygon } from './engine.js';
+import { fovPolygon, pointInPolygon, polygonArea, summarize, validatePolygon } from './engine.js';
 import { replayGroup } from './tracker.js';
-import { appearVanishSpots, classify, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
+import { appearVanishSpots, classify, convexHull, polygonOverlap, doorEvents, doorPositions, findDwellSpots, offsetConvex, placeExit, spotTimes, suggestHold, suggestMaxHold, trailStats } from './analysis.js';
 import { KIND_STYLE, SVGNS, el, fmtDuration, fmtTime, glyphSvg, kindTone, newZoneId, roomName, the } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
 const DAY = 86400;
+const SPOT_MAX_MM2 = 6e6; // a room shape under 6 m² beside a bigger room is a spot in all but name
 
 const css = `
 :host { display: block; height: 100%; overflow: auto; background: var(--primary-background-color, #fafafa); color: var(--primary-text-color, #222); font-size: 14px; }
@@ -31,9 +32,11 @@ const css = `
 .card .q { font-weight: 500; margin: 10px 0 8px; }
 /* The evidence fills the card's left side, as in the proposal. */
 .cols { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: stretch; }
-.ev { display: block; width: 100%; height: 100%; min-height: 260px; background: color-mix(in srgb, #3b82f6 5%, var(--card-background-color, #fff)); color: var(--primary-text-color, #222);
-  border-right: 1px solid var(--divider-color, #e0e0e0); }
-@media (max-width: 640px) { .wrap { padding: 12px 10px 30px; } .cols { grid-template-columns: minmax(0, 1fr); } .ev { height: 200px; min-height: 0; border-right: 0; border-bottom: 1px solid var(--divider-color, #e0e0e0); } }
+.evwrap { position: relative; border-right: 1px solid var(--divider-color, #e0e0e0); min-height: 260px; }
+.ev { display: block; position: absolute; inset: 0; width: 100%; height: 100%; background: color-mix(in srgb, #3b82f6 5%, var(--card-background-color, #fff)); color: var(--primary-text-color, #222); }
+.evwrap .zoom { position: absolute; right: 8px; top: 8px; font: inherit; font-size: 12px; border: 0; border-radius: 14px; padding: 3px 10px; cursor: pointer;
+  background: var(--card-background-color, #fff); color: var(--primary-color, #03a9f4); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+@media (max-width: 640px) { .wrap { padding: 12px 10px 30px; } .cols { grid-template-columns: minmax(0, 1fr); } .evwrap { height: 220px; min-height: 0; border-right: 0; border-bottom: 1px solid var(--divider-color, #e0e0e0); } }
 .ans { display: flex; flex-direction: column; gap: 8px; }
 .ans button { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; padding: 10px 12px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--divider-color, #ddd); background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); }
@@ -135,12 +138,27 @@ export class RzpTodo extends HTMLElement {
     const out = [];
     const valid = cfg.zones.filter(z => !validatePolygon(z.polygon));
     const exclusions = valid.filter(z => z.kind === 'exclude');
-    const rooms = valid.filter(z => z.kind === 'include' && !z.spot);
-    const spots = valid.filter(z => z.kind === 'linger' || (z.kind === 'include' && z.spot));
-    // Places where something stays, not covered by a spot or an ignore area yet.
+    const roomShapes = valid.filter(z => z.kind === 'include' && !z.spot);
+    // Older spots were drawn as rooms ("Desk"): a room shape inside another room, or small beside a bigger one, counts as a spot.
+    const size = z => Math.abs(polygonArea(z.polygon));
+    const nested = z => roomShapes.some(o => o !== z && size(o) > size(z) && z.polygon.filter(([x, y]) => pointInPolygon(x, y, o.polygon)).length >= 0.75 * z.polygon.length);
+    const spotLike = roomShapes.filter(z => nested(z) || (size(z) < SPOT_MAX_MM2 && roomShapes.some(o => size(o) > 2 * size(z))));
+    const rooms = roomShapes.filter(z => !spotLike.includes(z));
+    const spots = [...valid.filter(z => z.kind === 'linger' || (z.kind === 'include' && z.spot)), ...spotLike];
+    // Places where something stays, not covered by a spot or an ignore area yet. One that overlaps a spot asks to fit that spot instead.
+    const adjusted = new Set();
     for (const sp of findDwellSpots(hist, { exclusions })) {
       const [cx, cy] = sp.centroid;
-      if (spots.some(z => pointInPolygon(cx, cy, z.polygon))) continue;
+      const best = spots.map(z => ({ z, inside: polygonOverlap(sp.hull, z.polygon) })).sort((a, b) => b.inside - a.inside)[0];
+      if (best && best.inside >= 0.8) continue; // already a spot
+      if (best && (best.inside >= 0.2 || pointInPolygon(cx, cy, best.z.polygon))) {
+        if (adjusted.has(best.z.id)) continue;
+        adjusted.add(best.z.id);
+        const times = spotTimes(hist, sp.hull, { exclusions });
+        out.push({ key: `${r.radar_id}:adjust:${best.z.id}`, type: 'adjust', radar: r, cfg, hist, sp, zone: best.z, outside: 1 - best.inside,
+          polygon: convexHull([...best.z.polygon, ...sp.hull]), peak: times?.peak != null ? hist.start + times.peak : null });
+        continue;
+      }
       const key = `${r.radar_id}:spot:${Math.round(cx / 300)},${Math.round(cy / 300)}`;
       const polygon = offsetConvex(sp.hull, 300) || sp.hull;
       const stats = trailStats(hist, polygon, { exclusions });
@@ -149,20 +167,24 @@ export class RzpTodo extends HTMLElement {
       out.push({ key, type: 'spot', radar: r, cfg, hist, sp, polygon, stats, cls, times, room: rooms.find(z => pointInPolygon(cx, cy, z.polygon)) });
     }
     // Rooms: short blips that turn them on, and people who sit still and are lost.
-    if (rooms.length) {
-      const base = this._replay(hist, valid, rooms.map(z => z.id));
-      const names = rooms.map(z => this._zoneName(z, r));
-      for (const [k, z] of rooms.entries()) {
+    if (roomShapes.length) {
+      const base = this._replay(hist, valid, roomShapes.map(z => z.id));
+      const names = roomShapes.map(z => this._zoneName(z, r));
+      for (const [k, z] of roomShapes.entries()) {
         const name = names.filter(n => n === names[k]).length > 1 && names[k] !== z.name ? `${names[k]} (${z.name})` : names[k];
         const short = base[z.id].intervals.filter(([a, b]) => b - a < 3);
         const blips = short.length;
         if (blips >= 5 && !(z.filters?.on_delay_s > 0)) out.push({ key: `${r.radar_id}:blips:${z.id}`, type: 'blips', radar: r, cfg, hist, zone: z, name, blips, turnedOn: base[z.id].intervals.length, playAt: short[short.length - 1][0] });
         const st = trailStats(hist, z.polygon, { exclusions });
-        if (!z.filters?.hold_until_exit && suggestHold(st)) out.push({ key: `${r.radar_id}:hold:${z.id}`, type: 'hold', radar: r, cfg, hist, zone: z, name, stats: st, clear: base[z.id].intervals.length });
+        // The moment to show: the last time it went clear and came back within 5 min (someone sat still and was lost).
+        const iv = base[z.id].intervals;
+        let lostAt = null;
+        for (let j = 0; j + 1 < iv.length; j++) if (iv[j + 1][0] - iv[j][1] < 300) lostAt = iv[j][1];
+        if (!z.filters?.hold_until_exit && suggestHold(st)) out.push({ key: `${r.radar_id}:hold:${z.id}`, type: 'hold', radar: r, cfg, hist, zone: z, name, stats: st, clear: base[z.id].intervals.length, playAt: lostAt });
       }
     }
     // Places where people appear and vanish (walking): a doorway not marked yet, or the edge of the view.
-    const skip = valid.filter(z => ['exit', 'linger', 'transient'].includes(z.kind) || z.spot).map(z => z.polygon);
+    const skip = [...valid.filter(z => ['exit', 'linger', 'transient'].includes(z.kind) || z.spot), ...spotLike].map(z => z.polygon);
     for (const c of appearVanishSpots(hist, { exclusions, skip })) {
       const polygon = placeExit(c.points);
       if (!polygon) continue;
@@ -174,7 +196,10 @@ export class RzpTodo extends HTMLElement {
     // Ignore areas people walk through.
     for (const z of exclusions) {
       const st = trailStats(hist, z.polygon, { exclusions: exclusions.filter(q => q !== z) });
-      if (st.walkIn >= 10 && st.walkOut >= st.walkIn / 2) out.push({ key: `${r.radar_id}:walked:${z.id}`, type: 'walked', radar: r, cfg, hist, zone: z, walkIn: st.walkIn });
+      if (st.walkIn >= 10 && st.walkOut >= st.walkIn / 2) {
+        const times = spotTimes(hist, z.polygon, { exclusions: exclusions.filter(q => q !== z) });
+        out.push({ key: `${r.radar_id}:walked:${z.id}`, type: 'walked', radar: r, cfg, hist, zone: z, walkIn: st.walkIn, peak: times?.peak != null ? hist.start + times.peak : null });
+      }
     }
     // Door sensors that line up with this radar and are not a doorway yet.
     const linked = new Set(valid.filter(z => z.kind === 'exit').map(z => z.door_entity_id).filter(Boolean));
@@ -182,7 +207,7 @@ export class RzpTodo extends HTMLElement {
       if (linked.has(id) || rows.length < 4) continue;
       const pos = doorPositions(hist, doorEvents(rows), { exclusions });
       if (!pos.events || pos.hits / pos.events < 0.5 || pos.events < 3 || !pos.points.length) continue;
-      out.push({ key: `${r.radar_id}:door:${id}`, type: 'door', radar: r, cfg, hist, door: id, pos });
+      out.push({ key: `${r.radar_id}:door:${id}`, type: 'door', radar: r, cfg, hist, door: id, pos, at: doorEvents(rows).at(-1)?.t ?? null });
     }
     return out;
   }
@@ -291,12 +316,13 @@ export class RzpTodo extends HTMLElement {
   _group(i) { return i.radar ? this._room(i.radar) : i.title || 'House'; }
 
   _short(i) {
-    return { hints: 'Switches as hints?', appear: 'A doorway?', blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
+    return { hints: 'Switches as hints?', appear: 'A doorway?', blips: `Short blips in the ${i.name?.toLowerCase()}`, hold: `People sit still in the ${i.name?.toLowerCase()}`, spot: i.cls?.kind === 'ghost' ? 'Something still?' : 'A place people stay?', adjust: `Fit ${i.zone?.name}?`, walked: 'An ignore area people walk through', door: 'A doorway?', noradar: `${i.title}`, nodoor: `${i.title}`, unlinked: `${i.title}: two radars` }[i.type];
   }
 
   _hint(i) {
     if (i.type === 'spot') return `${fmtDuration(i.sp.dwell)} in the last day, ${this._room(i.radar)}.`;
     if (i.type === 'hints') return `${i.picks.length} switched by hand in the last day.`;
+    if (i.type === 'adjust') return `People sit partly outside it (${Math.round(i.outside * 100)}% of the time).`;
     if (i.type === 'appear') return `People appear and vanish here ${i.c.births + i.c.deaths}× a day.`;
     if (i.type === 'blips') return `Turned on for under 3 s ${i.blips}× in a day.`;
     if (i.type === 'hold') return 'Goes clear while someone sits still.';
@@ -338,6 +364,24 @@ export class RzpTodo extends HTMLElement {
         this._impactEl(i),
       ];
       if (peak) acts.push(show(i.radar.radar_id, peak));
+    } else if (i.type === 'adjust') {
+      const nm = i.zone.name;
+      body = [
+        el('h2', {}, glyphSvg('spot', kindTone('linger'), 18), `${nm} misses part of where people sit`),
+        el('div', { class: 'why' }, `About ${fmtDuration(i.sp.dwell)} in the last day here, and about ${Math.round(i.outside * 100)}% of it is outside “${nm}”. Someone sitting there may not count as at ${the(nm)}.`),
+        el('div', { class: 'ans' },
+          el('button', { class: 'rec', onclick: () => this._answer(i, 'fit', () => this._saveZones(i.radar.radar_id, zones => zones.map(z => (z.id === i.zone.id ? { ...z, polygon: i.polygon } : z)))) },
+            glyphSvg('spot', kindTone('linger'), 16), `Fit ${the(nm)} to where people sit`, el('span', { class: 'tag' }, 'likely')),
+          el('button', { onclick: () => this._answer(i, 'keep') }, `Keep ${the(nm)} as it is`)),
+        i.zone.kind === 'include' ? this._later(() => {
+          const zones = i.cfg.zones.filter(z => !validatePolygon(z.polygon));
+          const a = this._replay(i.hist, zones, [i.zone.id])[i.zone.id];
+          const b = this._replay(i.hist, zones.map(z => (z.id === i.zone.id ? { ...z, polygon: i.polygon } : z)), [i.zone.id])[i.zone.id];
+          const same = Math.abs(a.occupied - b.occupied) < 60 && a.intervals.length === b.intervals.length;
+          return [el('b', {}, `▶ The last day with the wider ${nm.toLowerCase()}: `), same ? `${the(nm)} would have behaved the same.`
+            : `occupied ${fmtDuration(b.occupied)} instead of ${fmtDuration(a.occupied)}, turned on ${b.intervals.length}× instead of ${a.intervals.length}×.`];
+        }) : '',
+      ];
     } else if (i.type === 'blips') {
       const room = i.name.toLowerCase();
       body = [
@@ -436,14 +480,29 @@ export class RzpTodo extends HTMLElement {
           el('button', { onclick: () => { this.skipped.add(i.key); this.render(); } }, 'Later')),
       ];
     }
+    // Every card about a radar can open it at a moment that shows the evidence.
+    const moment = { blips: i.playAt, hold: i.playAt, walked: i.peak, adjust: i.peak, door: i.at }[i.type];
+    if (!acts.length && i.radar && moment != null) acts.push(show(i.radar.radar_id, moment > 1e9 ? moment : i.hist.start + moment));
     const main = [...body, acts.length ? el('div', { class: 'acts' }, ...acts) : ''];
-    const ev = this._evidence(i);
+    const ev = this._evidencePane(i);
     return el('div', { class: 'card' }, ev ? el('div', { class: 'cols' }, ev, el('div', { class: 'body' }, ...main)) : el('div', { class: 'body' }, ...main));
   }
 
   /** What the card is about, as a cropped map: the last day's detections around it and the shapes involved. */
-  _evidence(i) {
+  /** The evidence pane: the whole room first (where is this?), with a toggle to zoom in on the place. */
+  _evidencePane(i) {
+    let wide = true;
+    const first = this._evidence(i, true);
+    if (!first) return null;
+    const pane = el('div', { class: 'evwrap' });
+    const btn = el('button', { class: 'zoom', onclick: () => { wide = !wide; pane.replaceChild(this._evidence(i, wide), pane.firstChild); btn.textContent = wide ? 'Zoom in' : 'Whole room'; } }, 'Zoom in');
+    pane.append(first, btn);
+    return pane;
+  }
+
+  _evidence(i, wide = true) {
     const shapes = {
+      adjust: () => [[i.polygon, 'linger', true], [i.zone.polygon, 'linger']], // the wider shape over the current one
       spot: () => [[i.polygon, i.cls?.kind === 'ghost' ? 'exclude' : 'linger', true], i.room && [i.room.polygon, 'include']],
       appear: () => [[i.polygon, 'exit', true], i.room && [i.room.polygon, 'include']],
       door: () => [[placeExit(i.pos.points), 'exit', true]],
@@ -457,16 +516,34 @@ export class RzpTodo extends HTMLElement {
     const r = ((d.rotation || 0) * Math.PI) / 180, m = d.mirror ? -1 : 1;
     const tf = ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y]; // as the radar view draws it
     const focus = shapes.find(s => s[2])[0].map(tf);
-    const xs = focus.map(p => p[0]), ys = focus.map(p => p[1]);
-    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) + 1800;
+    // Whole room: frame the radar's room shapes (or its view) and the radar itself; zoomed in: the place and 0.9 m around it.
+    const valid = (i.cfg?.zones || []).filter(z => !validatePolygon(z.polygon));
+    const roomPolys = valid.filter(z => z.kind === 'include' && !z.spot).map(z => z.polygon);
+    const ctx = !wide ? [] : (roomPolys.length ? roomPolys.flat() : i.cfg?.fov ? fovPolygon(i.cfg.fov.max_distance_mm, i.cfg.fov.half_angle_deg, 12) : []).concat([[0, 0]]).map(tf);
+    const frame = [...focus, ...ctx];
+    const xs = frame.map(p => p[0]), ys = frame.map(p => p[1]);
+    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) + (wide ? 800 : 1800);
     const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
     const S = 150, k = S / span;
     const sx = ([x, y]) => [S / 2 + (x - cx) * k, S / 2 - (y - cy) * k];
     const g = document.createElementNS(SVGNS, 'svg');
     g.setAttribute('viewBox', `0 0 ${S} ${S}`);
     g.setAttribute('class', 'ev');
-    g.setAttribute('preserveAspectRatio', 'xMidYMid slice'); // fill the pane; the focus stays in the middle
+    g.setAttribute('preserveAspectRatio', wide ? 'xMidYMid meet' : 'xMidYMid slice'); // whole room: all of it; zoomed in: fill the pane
     const add = (tag, attrs) => { const n = document.createElementNS(SVGNS, tag); for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v); g.append(n); return n; };
+    // The radar's other shapes, faint and named, so the place can be found in the room.
+    const own = new Set(shapes.map(s => s[0]));
+    const labels = [];
+    for (const z of valid) {
+      if (own.has(z.polygon) || (i.zone && z.id === i.zone.id)) continue;
+      const kind = z.kind === 'include' && z.spot ? 'linger' : z.kind;
+      const st = KIND_STYLE[kind];
+      if (!st) continue;
+      const pts = z.polygon.map(p => sx(tf(p)));
+      add('polygon', { points: pts.map(p => p.join(',')).join(' '), fill: st.light, 'fill-opacity': st.fill, stroke: st.light, 'stroke-width': 0.6, 'stroke-opacity': kind === 'include' ? 0.5 : 0.3 });
+      if (wide && kind !== 'include') labels.push([z.name, pts]);
+      if (wide && kind === 'include') labels.push([this._zoneName(z, i.radar), pts]);
+    }
     for (const [poly, kind, main] of shapes.filter(s => !s[2]).concat(shapes.filter(s => s[2]))) {
       const st = KIND_STYLE[kind];
       add('polygon', { points: poly.map(p => sx(tf(p)).join(',')).join(' '), fill: st.light, 'fill-opacity': main ? st.fill * 1.6 : st.fill, stroke: st.light, 'stroke-width': main ? 1.5 : 0.8, 'stroke-opacity': main ? 0.9 : 0.4 });
@@ -478,6 +555,13 @@ export class RzpTodo extends HTMLElement {
       if (x < 0 || y < 0 || x > S || y > S) continue;
       add('circle', { cx: x.toFixed(1), cy: y.toFixed(1), r: 0.9, fill: 'currentColor', 'fill-opacity': 0.35 });
       shown++;
+    }
+    for (const [name, pts] of labels) { // top-left corner inside, like the map's pills
+      let tl = pts[0];
+      for (const p of pts) if (p[0] + p[1] < tl[0] + tl[1]) tl = p;
+      if (tl[0] < 0 || tl[1] < 0 || tl[0] > S - 10 || tl[1] > S - 6) continue;
+      const t = add('text', { x: (tl[0] + 2).toFixed(1), y: (tl[1] + 6).toFixed(1), 'font-size': 5, fill: 'currentColor', 'fill-opacity': 0.7 });
+      t.textContent = name;
     }
     const [rx, ry] = sx([0, 0]);
     if (rx >= 0 && ry >= 0 && rx <= S && ry <= S) add('circle', { cx: rx, cy: ry, r: 3, fill: 'currentColor' });

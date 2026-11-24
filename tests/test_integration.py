@@ -1184,6 +1184,26 @@ async def test_learning_finished_tells_once_when_a_radar_has_suggestions(hass: H
         assert create.call_count == 1  # once
 
 
+async def test_learning_counts_a_small_room_shape_inside_a_room_as_a_spot(hass: HomeAssistant, radar_device: str) -> None:
+    """Older spots were drawn as room shapes ("Desk" inside the living room): a place there is covered already."""
+    from types import SimpleNamespace
+
+    from custom_components.radar_zone_presence import learning as lm
+
+    room = [[-200, 0], [200, 0], [200, 300], [-200, 300]]
+    desk = [[30, 30], [70, 30], [70, 70], [30, 70]]
+    entry = await setup_entry(hass, radar_device, [zone("room", "Living room", room), zone("desk", "Desk", desk)])
+    lr = entry.runtime_data.learning
+    st = lr.state[RADAR]
+    st["grid"], st["since"] = {}, st["since"] - 3.5 * lm.DAY
+    at_desk, sofa = (50 * 25.4, 50 * 25.4), (-1500, 4000)
+    t = 0.0
+    for _ in range(3 * 3600 // 20):
+        lr.observe(RADAR, t, tuple(SimpleNamespace(x=x, y=y) for x, y in (at_desk, sofa)))
+        t += 20
+    assert [(p["x"] // 300, p["y"] // 300) for p in lr.places(RADAR)] == [(-5, 13)]  # the sofa; the desk has a shape
+
+
 async def test_settings_are_read_and_saved_from_the_panel(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
     """The panel's Settings page: the options form's fields, validated by domain; a save reloads the home."""
     entry = await setup_entry(hass, radar_device, [])

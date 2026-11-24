@@ -59,6 +59,22 @@ export function dwellGrid(hist, { cell = 100, exclusions = [], window, inside = 
   return grid;
 }
 
+/** Share (0..1) of polygon a's area that lies inside polygon b, by sampling a 24×24 grid over a. */
+export function polygonOverlap(a, b) {
+  const xs = a.map(p => p[0]), ys = a.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  let n = 0, hit = 0;
+  for (let i = 0; i < 24; i++) {
+    for (let j = 0; j < 24; j++) {
+      const x = x0 + ((i + 0.5) * (x1 - x0)) / 24, y = y0 + ((j + 0.5) * (y1 - y0)) / 24;
+      if (!pointInPolygon(x, y, a)) continue;
+      n++;
+      if (pointInPolygon(x, y, b)) hit++;
+    }
+  }
+  return n ? hit / n : 0;
+}
+
 /** Andrew's monotone chain. Returns CCW hull without repeating the first point. */
 export function convexHull(points) {
   const pts = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);

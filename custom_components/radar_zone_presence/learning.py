@@ -23,8 +23,8 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN
-from .engine.geometry import point_in_polygon
-from .engine.zones import KIND_EXCLUDE, KIND_LINGER
+from .engine.geometry import point_in_polygon, polygon_area
+from .engine.zones import KIND_EXCLUDE, KIND_INCLUDE, KIND_LINGER
 
 if TYPE_CHECKING:
     from .home import HomeRuntime
@@ -43,6 +43,22 @@ MAX_PLACES = 6
 SAVE_EVERY_S = 600
 CHECK_EVERY = timedelta(hours=1)
 PANEL_URL = "/radar-zones#view=todo"
+SPOT_MAX_MM2 = 6e6  # as the panel's To do: a room shape under 6 m² beside a bigger room is a spot in all but name
+
+
+def spot_like(rooms: list[tuple[tuple[float, float], ...]]) -> list[tuple[tuple[float, float], ...]]:
+    """Room shapes that are spots in all but name (older spots were drawn as rooms, "Desk"):
+    inside another room shape, or small beside a much bigger one."""
+    size = [abs(polygon_area(p)) for p in rooms]
+    out = []
+    for i, p in enumerate(rooms):
+        nested = any(
+            j != i and size[j] > size[i] and sum(point_in_polygon(x, y, q) for x, y in p) >= 0.75 * len(p)
+            for j, q in enumerate(rooms)
+        )
+        if nested or (size[i] < SPOT_MAX_MM2 and any(sz > 2 * size[i] for sz in size)):
+            out.append(p)
+    return out
 
 
 def places(grid: dict[str, float], days: float, covered: list[tuple[tuple[float, float], ...]]) -> list[dict[str, Any]]:
@@ -137,7 +153,8 @@ class Learning:
         feed = self.runtime.feeds[radar_id]
         polys = [z.polygon for z in feed.zones if z.kind in (KIND_EXCLUDE, KIND_LINGER)]
         polys += [zd.zone.polygon for zd in self.runtime.zones.values() if zd.radar_id == radar_id and zd.spot]
-        return polys
+        rooms = [zd.zone.polygon for zd in self.runtime.zones.values() if zd.radar_id == radar_id and not zd.spot and zd.zone.kind == KIND_INCLUDE]
+        return polys + spot_like(rooms)
 
     def places(self, radar_id: str, now: float | None = None) -> list[dict[str, Any]]:
         st = self._radar(radar_id)

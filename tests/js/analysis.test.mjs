@@ -294,3 +294,11 @@ test('appearVanishSpots: people appear and vanish at a door, not at the seat whe
   const doorway = [[1500, 2500], [2500, 2500], [2500, 3500], [1500, 3500]];
   assert.equal(appearVanishSpots(h, { skip: [doorway] }).length, 0);
 });
+
+test('polygonOverlap: the share of one shape inside another', async () => {
+  const { polygonOverlap } = await import('../../custom_components/radar_zone_presence/frontend/analysis.js');
+  const a = [[0, 0], [100, 0], [100, 100], [0, 100]];
+  assert.ok(Math.abs(polygonOverlap(a, [[50, -10], [200, -10], [200, 200], [50, 200]]) - 0.5) < 0.05); // the right half
+  assert.equal(polygonOverlap(a, [[-10, -10], [110, -10], [110, 110], [-10, 110]]), 1);
+  assert.equal(polygonOverlap(a, [[300, 300], [400, 300], [400, 400]]), 0);
+});
