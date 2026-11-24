@@ -216,3 +216,52 @@ def async_resolve_units(
 def common_unit(units: dict[str, str | None]) -> str | None:
     known = [u for u in units.values() if u]
     return max(set(known), key=known.count) if known else None
+
+
+# Any radar that reports per-target coordinates, whatever its entities are called: "Target 1 X",
+# "person2_y", "t3 x coordinate", "x1". Used to suggest entities; the user confirms or corrects them.
+_SLOT_AXIS_RES = (
+    re.compile(r"(?:target|person|people|human|tgt|t|p)\s*(?P<slot>\d)\s*(?P<axis>x|y)\b"),
+    re.compile(r"(?:target|person|human|tgt)\s*(?P<axis>x|y)\s*(?P<slot>\d)\b"),
+    re.compile(r"\b(?P<axis>x|y)\s*(?P<slot>\d)\b"),
+    re.compile(r"\b(?P<slot>\d)\s*(?P<axis>x|y)\b"),
+)
+_SINGLE_AXIS_RE = re.compile(r"(?:^|\s)(?:target\s*|position\s*|coordinate\s*)?(?P<axis>x|y)(?:\s*(?:coordinate|position|distance))?(?:\s|$)")
+
+
+def guess_targets(entities: list[tuple[str, str | None]]) -> dict[int, dict[str, str]]:
+    """Per-target X/Y sensors among a device's entities ((entity_id, name)): {slot: {"x": id, "y": id}}.
+    Reads the entity id and the name; a lone "x"/"y" pair is target 1. Speed, angle, distance and
+    resolution sensors are skipped."""
+    out: dict[int, dict[str, str]] = {}
+    lone: dict[str, str] = {}
+    for entity_id, name in entities:
+        if not entity_id.startswith("sensor."):
+            continue
+        text = f"{entity_id.split('.', 1)[1]} {name or ''}".lower()
+        if re.search(r"speed|angle|resolution|distance_resolution|count|energy|gate|still|move", text):
+            continue
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        text = re.sub(r"([a-z])(\d)", r"\1 \2", text)  # target1x -> target 1x
+        text = re.sub(r"(\d)([a-z])", r"\1 \2", text)  # 1x -> 1 x
+        for rx in _SLOT_AXIS_RES:
+            if m := rx.search(text):
+                out.setdefault(int(m["slot"]), {}).setdefault(m["axis"], entity_id)
+                break
+        else:
+            if m := _SINGLE_AXIS_RE.search(text):
+                lone.setdefault(m["axis"], entity_id)
+    if not out and len(lone) == 2:
+        out[1] = lone
+    return {slot: axes for slot, axes in sorted(out.items()) if "x" in axes and "y" in axes}
+
+
+@callback
+def async_device_sensors(hass: HomeAssistant, device_id: str) -> list[tuple[str, str | None]]:
+    """A device's enabled sensor entities: (entity_id, name)."""
+    ent_reg = er.async_get(hass)
+    out = []
+    for entry in er.async_entries_for_device(ent_reg, device_id):
+        if entry.disabled_by is None and entry.domain == "sensor":
+            out.append((entry.entity_id, entry.name or entry.original_name))
+    return sorted(out)

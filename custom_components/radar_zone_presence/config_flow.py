@@ -37,11 +37,21 @@ from .const import (
     CONF_VACUUMS,
     CONF_ZONES,
     DOMAIN,
+    PROFILE_GENERIC,
     SUBENTRY_RADAR,
     SUBENTRY_ZONE,
 )
-from .discovery import RadarDevice, async_device_geometry, async_find_radars, async_legacy_polygons, async_resolve_units, common_unit
-from .engine import KIND_INCLUDE, validate_polygon
+from .discovery import (
+    RadarDevice,
+    async_device_geometry,
+    async_device_sensors,
+    async_find_radars,
+    async_legacy_polygons,
+    async_resolve_units,
+    common_unit,
+    guess_targets,
+)
+from .engine import KIND_INCLUDE, TargetEntities, validate_polygon
 from .engine.geometry import fov_polygon
 
 
@@ -97,6 +107,8 @@ def _radar_label(hass, radar: RadarDevice) -> str:
 
 
 DEFAULT_ZONE_POLYGON = [[-500.0, 1000.0], [500.0, 1000.0], [500.0, 2000.0], [-500.0, 2000.0]]
+OTHER_DEVICE = "__other__"  # the radar list's last option: any device, its coordinate sensors picked by hand
+MAX_GENERIC_TARGETS = 3
 
 
 class RadarZonePresenceConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -135,15 +147,18 @@ class RadarSubentryFlow(ConfigSubentryFlow):
     def __init__(self) -> None:
         self._radar: RadarDevice | None = None
         self._legacy: list[dict[str, Any]] = []
+        self._device_id: str = ""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         entry = self._get_entry()
         configured = {s.data.get(CONF_DEVICE_ID) for s in entry.subentries.values() if s.subentry_type == SUBENTRY_RADAR}
         radars = {r.device_id: r for r in async_find_radars(self.hass) if r.device_id not in configured}
         if not radars:
-            return self.async_abort(reason="no_devices")
+            return await self.async_step_device()
 
         if user_input is not None:
+            if user_input[CONF_DEVICE_ID] == OTHER_DEVICE:
+                return await self.async_step_device()
             self._radar = radars[user_input[CONF_DEVICE_ID]]
             self._legacy = _legacy_zones(self.hass, self._radar)
             if self._legacy:
@@ -151,6 +166,7 @@ class RadarSubentryFlow(ConfigSubentryFlow):
             return self._create([])
 
         options = [selector.SelectOptionDict(value=r.device_id, label=_radar_label(self.hass, r)) for r in radars.values()]
+        options.append(selector.SelectOptionDict(value=OTHER_DEVICE, label="Another device: pick its coordinate sensors"))
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
@@ -160,6 +176,86 @@ class RadarSubentryFlow(ConfigSubentryFlow):
                     )
                 }
             ),
+        )
+
+    async def async_step_device(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Any radar: pick its device; its per-target X/Y sensors are guessed next and can be corrected."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            device_id = user_input[CONF_DEVICE_ID]
+            configured = {s.data.get(CONF_DEVICE_ID) for s in self._get_entry().subentries.values() if s.subentry_type == SUBENTRY_RADAR}
+            if device_id in configured:
+                errors["base"] = "already_configured"
+            elif not async_device_sensors(self.hass, device_id):
+                errors["base"] = "no_sensors"
+            else:
+                self._device_id = device_id
+                return await self.async_step_targets()
+        return self.async_show_form(
+            step_id="device",
+            data_schema=vol.Schema({vol.Required(CONF_DEVICE_ID): selector.DeviceSelector()}),
+            errors=errors,
+        )
+
+    async def async_step_targets(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """The X and Y sensor of each target the radar tracks: guessed from their names, picked from the device's sensors."""
+        sensors = async_device_sensors(self.hass, self._device_id)
+        ids = [e for e, _ in sensors]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            targets, used = [], set()
+            for n in range(1, MAX_GENERIC_TARGETS + 1):
+                x, y = user_input.get(f"target_{n}_x"), user_input.get(f"target_{n}_y")
+                if not x and not y:
+                    continue
+                if not x or not y:
+                    errors["base"] = "incomplete_target"
+                elif x == y or x in used or y in used:
+                    errors["base"] = "duplicate_entity"
+                else:
+                    targets.append(TargetEntities(n, x, y))
+                    used |= {x, y}
+            if not targets and not errors:
+                errors["base"] = "no_targets"
+            if not errors:
+                device = dr.async_get(self.hass).async_get(self._device_id)
+                name = (device.name_by_user or device.name) if device else "Radar"
+                self._radar = RadarDevice(
+                    device_id=self._device_id,
+                    name=name or "Radar",
+                    area_id=device.area_id if device else None,
+                    profile=PROFILE_GENERIC,
+                    slug=targets[0].x.split(".", 1)[1].rsplit("_", 1)[0],
+                    targets=[TargetEntities(i + 1, t.x, t.y) for i, t in enumerate(targets)],
+                )
+                self._legacy = _legacy_zones(self.hass, self._radar)
+                if self._legacy:
+                    return await self.async_step_import_legacy()
+                return self._create([])
+        guess = guess_targets(sensors)
+        pick = selector.EntitySelector(selector.EntitySelectorConfig(include_entities=ids))
+        schema: dict[Any, Any] = {}
+        for n in range(1, MAX_GENERIC_TARGETS + 1):
+            for axis in ("x", "y"):
+                key = f"target_{n}_{axis}"
+                suggested = (user_input or {}).get(key) if user_input else guess.get(n, {}).get(axis)
+                schema[vol.Optional(key, description={"suggested_value": suggested})] = pick
+        # What the guessed sensors read now, so a wrong pick shows (walk in front of the radar and reopen).
+        now = []
+        for n, axes in guess.items():
+            vals = []
+            for axis in ("x", "y"):
+                st = self.hass.states.get(axes[axis])
+                vals.append(f"{axis} = {st.state} {st.attributes.get('unit_of_measurement') or ''}".strip() if st else f"{axis} = ?")
+            now.append(f"target {n}: {', '.join(vals)}")
+        return self.async_show_form(
+            step_id="targets",
+            data_schema=vol.Schema(schema),
+            errors=errors,
+            description_placeholders={
+                "found": f"Guessed {len(guess)} target{'s' if len(guess) != 1 else ''} from the sensor names" + (f" ({'; '.join(now)})." if now else ".")
+                if guess else "No coordinate sensors recognised by name: pick them below.",
+            },
         )
 
     async def async_step_import_legacy(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:

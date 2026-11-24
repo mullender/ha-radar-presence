@@ -122,9 +122,46 @@ async def test_config_flow_imports_legacy_polygons(hass: HomeAssistant, radar_de
     radar = next(s for s in entry.subentries.values() if s.subentry_type == "radar")
     assert z.data["radar"] == radar.subentry_id and "import_zones" not in radar.data
     assert hass.states.get(eid(hass, z.data["id"])).attributes["friendly_name"] == "Polygon 1 Occupancy"
-    # The radar cannot be added twice.
+    # The radar cannot be added twice: with no other radar found, the flow asks for any device instead.
     result = await start_radar_flow(hass)
-    assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_devices"
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "device"
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {"device_id": radar_device})
+    assert result["errors"] == {"base": "already_configured"}
+
+
+async def test_any_radar_can_be_added_by_picking_its_coordinate_sensors(hass: HomeAssistant, radar_device: str) -> None:
+    """A radar whose entities don't follow the usual naming: pick its device, check the guessed X/Y sensors, done."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    source = MockConfigEntry(domain="zha", title="Zigbee")
+    source.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(config_entry_id=source.entry_id, identifiers={("zha", "radar1")}, name="Hall radar")
+    ent_reg = er.async_get(hass)
+    for uid, object_id, name in [("p1x", "hall_radar_person1x", "Person1 X"), ("p1y", "hall_radar_person1y", "Person1 Y"),
+                                 ("p2x", "hall_radar_person2x", "Person2 X"), ("p2y", "hall_radar_person2y", "Person2 Y"),
+                                 ("p1s", "hall_radar_person1_speed", "Person1 Speed")]:
+        ent_reg.async_get_or_create("sensor", "zha", uid, suggested_object_id=object_id, device_id=device.id, original_name=name)
+        hass.states.async_set(f"sensor.{object_id}", "0.5" if object_id.endswith("x") else "2.0", {"unit_of_measurement": "m"})
+    result = await start_radar_flow(hass)
+    assert result["step_id"] == "user"  # the EP Lite is found by name; the hall radar is "another device"
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {"device_id": "__other__"})
+    assert result["step_id"] == "device"
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {"device_id": device.id})
+    assert result["step_id"] == "targets"
+    schema = {str(k): k.description["suggested_value"] for k in result["data_schema"].schema}
+    assert schema["target_1_x"] == "sensor.hall_radar_person1x" and schema["target_2_y"] == "sensor.hall_radar_person2y"
+    assert schema["target_3_x"] is None
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {"target_1_x": "sensor.hall_radar_person1x"})
+    assert result["errors"] == {"base": "incomplete_target"}
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {
+        "target_1_x": "sensor.hall_radar_person1x", "target_1_y": "sensor.hall_radar_person1y",
+        "target_2_x": "sensor.hall_radar_person2x", "target_2_y": "sensor.hall_radar_person2y"})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    (entry,) = hass.config_entries.async_entries(DOMAIN)
+    radar = next(s for s in entry.subentries.values() if s.subentry_type == "radar")
+    assert radar.title == "Hall radar" and radar.data["profile"] == "generic" and radar.data["unit"] == "m"
+    assert [t["x"] for t in radar.data["targets"]] == ["sensor.hall_radar_person1x", "sensor.hall_radar_person2x"]
 
 
 async def test_a_new_radar_has_presence_in_its_room_right_away(hass: HomeAssistant, radar_device: str) -> None:
@@ -180,7 +217,8 @@ async def test_config_flow_labels_show_area_floor_and_live_targets(hass: HomeAss
     def label():
         schema = result["data_schema"].schema
         (sel,) = schema.values()
-        (opt,) = sel.config["options"]
+        opt, other = sel.config["options"]
+        assert other["value"] == "__other__"  # any other device, its sensors picked by hand
         return opt["label"]
 
     async def labelled():
@@ -201,10 +239,9 @@ async def test_config_flow_labels_show_area_floor_and_live_targets(hass: HomeAss
     assert (await labelled()).endswith("— Office (Upstairs) · 1 target now")
 
 
-async def test_config_flow_no_devices(hass: HomeAssistant) -> None:
+async def test_config_flow_without_known_radars_asks_for_any_device(hass: HomeAssistant) -> None:
     result = await start_radar_flow(hass)
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "no_devices"
+    assert result["type"] is FlowResultType.FORM and result["step_id"] == "device"
 
 
 async def test_zone_presence_and_exclusion(hass: HomeAssistant, radar_device: str) -> None:

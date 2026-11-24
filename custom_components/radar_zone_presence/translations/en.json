@@ -19,7 +19,7 @@
       "step": {
         "user": {
           "title": "Pick a radar sensor",
-          "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). The room gets presence right away; spots, doorways and ignore areas are drawn afterwards in the Presence panel.",
+          "description": "Devices that expose per-target X/Y coordinate sensors (Everything Presence Lite/Pro, Screek 2A, other LD2450 firmwares). Area, floor and the number of targets each radar sees right now are shown to tell them apart (walk in front of one and reopen to check). Another radar: pick \"Another device\" and choose its coordinate sensors. The room gets presence right away; spots, doorways and ignore areas are drawn afterwards in the Presence panel.",
           "data": {
             "device_id": "Radar sensor"
           }
@@ -30,10 +30,36 @@
           "data": {
             "import": "Import polygons"
           }
+        },
+        "device": {
+          "title": "Pick the radar's device",
+          "description": "Any device whose sensors report where each person is (X and Y, in m, cm, mm or inches). Its sensors are suggested next.",
+          "data": {
+            "device_id": "Device"
+          }
+        },
+        "targets": {
+          "title": "Coordinate sensors",
+          "description": "{found} Check each target's X (left/right) and Y (distance from the radar) sensor; leave targets the radar doesn't track empty.",
+          "data": {
+            "target_1_x": "Target 1 X",
+            "target_1_y": "Target 1 Y",
+            "target_2_x": "Target 2 X",
+            "target_2_y": "Target 2 Y",
+            "target_3_x": "Target 3 X",
+            "target_3_y": "Target 3 Y"
+          }
         }
       },
       "abort": {
         "no_devices": "No unconfigured radar sensors with per-target X/Y entities were found."
+      },
+      "error": {
+        "already_configured": "This device is already added as a radar.",
+        "no_sensors": "This device has no sensors.",
+        "incomplete_target": "Each target needs both an X and a Y sensor.",
+        "duplicate_entity": "A sensor is picked twice.",
+        "no_targets": "Pick the X and Y sensor of at least one target."
       }
     },
     "zone": {

@@ -95,3 +95,17 @@ def test_a_range_without_a_unit_is_read_by_its_size() -> None:
     assert _distance_mm(6, None) == 6000
     assert _distance_mm(6000, None) == 6000
     assert _distance_mm(600, "cm") == 6000
+
+
+def test_coordinate_sensors_are_guessed_from_many_naming_styles() -> None:
+    from custom_components.radar_zone_presence.discovery import guess_targets
+
+    assert guess_targets([("sensor.r_target_1_x", "Target 1 X"), ("sensor.r_target_1_y", "Target 1 Y"), ("sensor.r_target_1_speed", "Target 1 Speed")]) == {
+        1: {"x": "sensor.r_target_1_x", "y": "sensor.r_target_1_y"}
+    }
+    assert guess_targets([("sensor.a_person2x", None), ("sensor.a_person2y", None)]) == {2: {"x": "sensor.a_person2x", "y": "sensor.a_person2y"}}
+    assert guess_targets([("sensor.z_x1", None), ("sensor.z_y1", None), ("sensor.z_x2", None)]) == {1: {"x": "sensor.z_x1", "y": "sensor.z_y1"}}  # x2 alone: no pair
+    assert guess_targets([("sensor.m_x", "X coordinate"), ("sensor.m_y", "Y coordinate"), ("sensor.m_distance", "Distance")]) == {
+        1: {"x": "sensor.m_x", "y": "sensor.m_y"}
+    }
+    assert guess_targets([("sensor.m_temperature", "Temperature"), ("binary_sensor.m_target_1_x", None)]) == {}
