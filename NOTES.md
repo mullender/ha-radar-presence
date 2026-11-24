@@ -647,3 +647,45 @@ To do also asks per room: short blips (5+ turn-ons under 3 s in a day → turn
 on after 2 s) and people who sit still (analysis.suggestHold → remember them,
 max from suggestMaxHold), each with a replayed impact line (tracker.replayGroup
 on the radar's own day, no peers).
+
+### 2026-11-23: matching the mockups (screenshot comparison)
+
+Compared the proposal's 14 mockups with dev screenshots. To do was closest; the
+room view and House view differed most (layout and words, not features).
+Changed, one commit each:
+
+- Room view, review: side panel is "At <time>" with one row per room (shapes of
+  an area merged, linked radars' rooms included), spots, door sensors; "People
+  here" with person letters (slot → A, B, C; the map's dots carry the same
+  letter, Details shows slot numbers) and a sentence (at a spot / still for N /
+  walking toward a doorway's room); "Recent" changes from the preview;
+  "Open in House view". Suggestions and door-sensor offers left the review
+  panel (they are in To do; edit mode keeps them). One map label per room.
+- Timeline: glyph + kind colour per lane, one lane per room in review (per
+  shape while editing), rounded bars, blip marker on top, blue time pill as
+  the playhead, trimmer only drawn once trimmed, recorded states / triggers /
+  "Anyone" only with Details or in edit mode. Transport (play, ‹ ›, speed)
+  sits in the timeline's label column; Detections ▾ and Trails chips on the
+  map; Live/History pill and breadcrumb (floor › room ▾) in the header;
+  rooms are named by area (radar model only when two share an area).
+- Time chip (◀ Today 15:38 – 15:53 ▾ ▶) in the room and House views
+  (util.timeChip): past windows load with an end (`windowEnd`), don't grow
+  and don't subscribe; Live goes back to now.
+- House view: a band per floor (name above count), tiles fill the row, door /
+  opening chips on the seams and "↕ stairs" between floors, door states in the
+  tile's line ("radar · ⇥ Front door closed"), timeline under the floors with
+  Activity full height beside them.
+- To do: evidence map fills the card's left side; progress bar shows position.
+- Edit mode: floating tool rail (V R P M), "+ Add ▾" (kind, then draw),
+  "Snap: shapes ✓ · grid ✕ · 15° ✕", "View ▾" (turn, flip, live, linked
+  radars); shape panel = ‹ All shapes, name, kind segmented control, sensor,
+  Behaviour, preview, Advanced (delays, edge buffer, hold limit, fit), Delete.
+- Phones: no horizontal overflow (grid column minmax(0, 1fr)).
+
+Still different from the mockups: bar counts and hatched "remembered"
+stretches in room lanes; "Recent" says "Someone" (the mockup attributes to
+person letters, which needs the tracker's ids in the preview); the floor
+Plan's side panel (rooms with coverage, connections from doorways, gaps);
+Plan mode looks busy in dev because areas there have several overlapping
+room shapes (the proposal's one shape per area isn't enforced on old data).
+
