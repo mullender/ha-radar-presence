@@ -125,6 +125,19 @@ export function fmtDateTime(epochS) {
   return `${day} ${fmtTime(epochS)}`;
 }
 
+/** "Today 07:40 – 07:55", "Yesterday 23:10 – 23:25", "Mon 3 Nov 07:40 – 09:40": a window in the proposal's time chip. */
+export function fmtWindow(start, end) {
+  const day = t => {
+    const d = new Date(t * 1000), today = new Date();
+    const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() / 1000;
+    if (t >= midnight) return 'Today';
+    if (t >= midnight - 86400) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  const a = day(start), b = day(end);
+  return a === b ? `${a} ${fmtTime(start, false)} – ${fmtTime(end, false)}` : `${a} ${fmtTime(start, false)} – ${b} ${fmtTime(end, false)}`;
+}
+
 export function fmtDuration(s) {
   if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`;
   if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
