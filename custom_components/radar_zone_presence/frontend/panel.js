@@ -13,7 +13,7 @@ import {
   placeExit, registerRigid, spotTimes, suggestHold, suggestMaxHold, trailStats, viewToMatch,
 } from './analysis.js';
 import {
-  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, svg, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor, slotLetter, roomName, the, mergeIntervals, fmtWindow,
+  EXCLUDE_COLOR, EXIT_COLOR, KIND_STYLE, ZONE_COLORS, affineApply, glyphSvg, kindTone, styleKind, svg, isSpot, kindColor, doorGeometry, radarTransforms, clone, el, normalizeDisplay, fmtDateTime, fmtDuration, fmtTime, makeUnits, newZoneId, slotColor, slotLetter, roomName, the, mergeIntervals, fmtWindow, timeChip, TIME_CHIP_CSS,
 } from './util.js';
 import { exportFilename, exportZones, mergeZones, parseImport } from './transfer.js';
 import { openReportDialog } from './report.js';
@@ -132,17 +132,7 @@ rzp-plot { flex: 1; min-height: 300px; }
 .live-pill { font: inherit; font-size: 13px; font-weight: 500; border: 0; border-radius: 16px; padding: 5px 12px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums;
   background: var(--secondary-background-color, #eef0f2); color: var(--primary-text-color, #222); }
 .live-pill:empty { display: none; }
-.time-chip { position: relative; display: inline-flex; align-items: center; border-radius: 16px; background: var(--secondary-background-color, #eef0f2); white-space: nowrap; }
-.time-chip button { font: inherit; font-size: 13px; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; padding: 5px 8px; }
-.time-chip button.step { font-size: 10px; padding: 5px 6px 5px 10px; }
-.time-chip button.step:last-of-type:not(:first-child) { padding: 5px 10px 5px 6px; }
-.time-pop { position: absolute; top: 36px; right: 0; z-index: 30; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0,0,0,.2); padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 250px; }
-.time-pop .presets { display: flex; flex-wrap: wrap; gap: 4px; }
-.time-pop .presets button { border: 1px solid var(--divider-color, #ccc); border-radius: 14px; padding: 3px 10px; }
-.time-pop .presets button.on { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
-.time-pop label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--secondary-text-color, #666); }
-.time-pop input { font: inherit; font-size: 13px; padding: 4px; }
+${TIME_CHIP_CSS}
 .live-pill.live { background: rgba(229,57,53,.12); color: #d32f2f; }
 .crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 1; font-size: 14px; color: var(--secondary-text-color, #666); }
 .crumbs select { font: inherit; font-size: 15px; font-weight: 500; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; max-width: 260px; min-width: 0; }
@@ -1521,32 +1511,17 @@ class RadarZonePresencePanel extends HTMLElement {
 
   /** The proposal's time chip: ◀ Today 07:40 – 07:55 ▾ ▶ — step back or forward a window, or pick a length and an end time. */
   _timeChip() {
-    const now = Date.now() / 1000;
-    const end = this.windowEnd === 'now' ? now : this.windowEnd;
-    const go = (endAt, len = this.rangeS) => {
-      this.rangeS = len;
-      this.windowEnd = endAt == null || endAt >= Date.now() / 1000 - 5 ? 'now' : endAt;
-      this.preferLive = this.windowEnd === 'now' && this.preferLive;
-      this._exitReplay();
-      this._renderHeader();
-      this._loadHistory();
-    };
-    const open = this._timePop;
-    const local = t => { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
-    const pop = !open ? '' : el('div', { class: 'time-pop', onpointerdown: e => e.stopPropagation() },
-      el('div', { class: 'presets' }, RANGES.map(([label, sec]) => el('button', { class: sec === this.rangeS ? 'on' : '', onclick: () => { this._timePop = false; go(this.windowEnd === 'now' ? null : this.windowEnd, sec); } }, label))),
-      el('label', {}, 'Ending at', el('input', { type: 'datetime-local', value: local(end), max: local(now),
-        onchange: e => { const t = new Date(e.target.value).getTime() / 1000; if (Number.isFinite(t)) { this._timePop = false; go(t); } } })),
-      el('button', { class: 'btn', onclick: () => { this._timePop = false; go(null); } }, 'Now'));
-    if (open && !this._timeAway) {
-      this._timeAway = e => { if (!e.composedPath().some(n => n.classList?.contains('time-chip'))) { this._timePop = false; removeEventListener('pointerdown', this._timeAway, true); this._timeAway = null; this._renderHeader(); } };
-      addEventListener('pointerdown', this._timeAway, true);
-    }
-    return el('div', { class: 'time-chip' },
-      el('button', { class: 'step', title: 'The window before', onclick: () => go(end - this.rangeS) }, '◀'),
-      el('button', { class: 'label', title: 'Pick the length and the end of the window', onclick: () => { this._timePop = !open; this._renderHeader(); } }, `${fmtWindow(end - this.rangeS, end)} ▾`),
-      this.windowEnd !== 'now' ? el('button', { class: 'step', title: 'The window after', onclick: () => go(end + this.rangeS) }, '▶') : '',
-      pop);
+    return timeChip({
+      end: this.windowEnd === 'now' ? Date.now() / 1000 : this.windowEnd, len: this.rangeS, past: this.windowEnd !== 'now', ranges: RANGES, state: this, rerender: () => this._renderHeader(),
+      go: (endAt, len) => {
+        this.rangeS = len;
+        this.windowEnd = endAt == null ? 'now' : endAt;
+        this.preferLive = this.windowEnd === 'now' && this.preferLive;
+        this._exitReplay();
+        this._renderHeader();
+        this._loadHistory();
+      },
+    });
   }
 
   /** Details: coordinates, track numbers, raw readings, technical Activity. A per-user switch. */

@@ -7,10 +7,10 @@
 
 import './timeline.js';
 import { drawPlan, loadMaps, planFor } from './plan.js';
-import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp } from './util.js';
+import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp, timeChip, TIME_CHIP_CSS } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
-const RANGES = [['1 hour', 3600], ['6 hours', 21600], ['24 hours', 86400], ['3 days', 259200]];
+const RANGES = [['15m', 900], ['1h', 3600], ['6h', 21600], ['24h', 86400], ['3d', 259200]];
 const COLORS = ['#1e88e5', '#43a047', '#8e24aa', '#f4511e', '#00897b', '#6d4c41', '#3949ab', '#c0ca33', '#d81b60'];
 const KINDS = {
   moved: ['→', 'moved'], arrived: ['⇥', 'arrived'], left: ['⇤', 'left'], unknown: ['?', 'settling'], back: ['✓', 'back'],
@@ -21,6 +21,7 @@ const KINDS = {
 const CROSS_S = 30; // a doorway glows this long after someone crossed it
 
 const css = `
+${TIME_CHIP_CSS}
 :host { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--primary-text-color, #222); }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; background: var(--card-background-color, #fff);
   border-bottom: 1px solid var(--divider-color, #ddd); font-size: 13px; }
@@ -29,6 +30,10 @@ const css = `
 .bar button.on { background: var(--error-color, #db4437); color: #fff; border-color: transparent; }
 .bar .live-pill { border: 0; border-radius: 16px; padding: 5px 12px; font-weight: 500; background: var(--secondary-background-color, #eef0f2); font-variant-numeric: tabular-nums; }
 .bar .live-pill.live { background: rgba(229,57,53,.12); color: #d32f2f; }
+.bar .time-pop { left: 0; right: auto; }
+.bar .time-chip button { border: 0; background: none; border-radius: 16px; padding: 5px 8px; }
+.bar .time-chip .time-pop button { border: 1px solid var(--divider-color, #ccc); border-radius: 14px; padding: 3px 10px; }
+.bar .time-chip .time-pop button.on { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
 .bar select.range { border: 0; border-radius: 16px; padding: 5px 10px; background: var(--secondary-background-color, #eef0f2); }
 .bar .when { font-weight: 500; }
 .bar .home { margin-left: auto; font-size: 15px; }
@@ -162,6 +167,7 @@ export class RzpHeadcount extends HTMLElement {
     this.timeline = document.createElement('rzp-timeline');
     root.append(this.barEl, el('div', { class: 'scroll' }, this.houseEl, el('div', { class: 'side' }, this.logEl, this.sheetEl), el('div', { class: 'timeline-wrap' }, this.timeline)));
     this.rangeS = 21600;
+    this.windowEnd = null; // null: the window ends now and follows; else an epoch (s) from the time chip
     this.data = null;
     this.entries = [];
     this.cursor = null; // null: now (live)
@@ -195,7 +201,8 @@ export class RzpHeadcount extends HTMLElement {
   async showTime(t, span = 600) {
     const ago = Date.now() / 1000 - t;
     const fit = RANGES.find(([, s]) => s >= ago + span / 2);
-    if (fit && fit[1] !== this.rangeS) { this.rangeS = fit[1]; await this.load(); }
+    if (fit && (fit[1] !== this.rangeS || this.windowEnd)) { this.rangeS = fit[1]; this.windowEnd = null; await this.load(); }
+    else if (!fit) { this.rangeS = 86400; this.windowEnd = Math.min(Date.now() / 1000, t + span); await this.load(); } // older: a day ending just after it
     this.cursor = t;
     this.timeline.focus(t - span / 2, t + span / 2);
     this.render();
@@ -209,11 +216,14 @@ export class RzpHeadcount extends HTMLElement {
     return q;
   }
 
+  /** The end of the loaded window: now, or the past moment picked in the time chip. */
+  _end() { return this.windowEnd ?? Date.now() / 1000; }
+
   async load() {
     this._unsubscribe();
-    const start = Date.now() / 1000 - this.rangeS;
+    const start = this._end() - this.rangeS;
     try {
-      this.data = await this.hass.callWS({ type: `${DOMAIN}/headcount/history`, start });
+      this.data = await this.hass.callWS({ type: `${DOMAIN}/headcount/history`, start, ...(this.windowEnd ? { end: this.windowEnd } : {}) });
     } catch (err) {
       this.data = null;
       this.houseEl.replaceChildren(el('div', { class: 'empty' }, `No occupant count: ${err.message || err.code}`));
@@ -224,8 +234,9 @@ export class RzpHeadcount extends HTMLElement {
     this.entries = this.data.log;
     this._letters = new Map(); // tokens get letters A, B, C… in the order they show up in this range
     this._index();
-    this._subscribe();
-    this.timeline.set({ range: { start, end: Date.now() / 1000 }, resetView: true });
+    if (this.windowEnd) this.cursor ??= this.windowEnd; // a past window: show its end, and don't follow
+    else this._subscribe();
+    this.timeline.set({ range: { start, end: this._end() }, resetView: true });
     this.render();
   }
 
@@ -330,12 +341,15 @@ export class RzpHeadcount extends HTMLElement {
     const { per, unknownFloors } = this._counts(snap);
     const total = [...per.values()].reduce((x, y) => x + y, 0);
     const doubt = (snap?.tokens || []).filter(([, , f]) => f.includes('u')).length;
-    const range = el('select', { class: 'range', title: 'History range', onchange: e => { this.rangeS = +e.target.value; this.cursor = null; this.load(); } },
-      RANGES.map(([label, s]) => el('option', { value: s, selected: s === this.rangeS }, `Last ${label}`)));
+    const range = timeChip({
+      end: this._end(), len: this.rangeS, past: !!this.windowEnd, ranges: RANGES, state: this, rerender: () => this._renderBar(this._stateAt(this.cursor)),
+      go: (endAt, len) => { this.rangeS = len; this.windowEnd = endAt; this.cursor = endAt; this.load(); },
+    });
     const live = this.cursor === null;
     this.barEl.replaceChildren(
       range,
-      el('button', { class: `live-pill${live ? ' live' : ''}`, title: live ? 'Following now' : 'Back to now', onclick: () => { this.cursor = null; this.render(); } },
+      el('button', { class: `live-pill${live ? ' live' : ''}`, title: live ? 'Following now' : 'Back to now',
+        onclick: () => { this.cursor = null; if (this.windowEnd) { this.windowEnd = null; this.load(); } else this.render(); } },
         live ? '● Live' : `History · ${fmtTime(this.cursor)}`),
       this.data.log_start && this.start < this.data.log_start ? el('span', { class: 'meta' }, `(log starts ${fmtDateTime(this.data.log_start)})`) : '',
       el('span', { class: `home${unknownFloors.size || doubt ? ' settling' : ''}` }, 'Home ', el('b', {}, unknownFloors.size || doubt ? `${total}+` : String(total)),
@@ -754,7 +768,7 @@ export class RzpHeadcount extends HTMLElement {
 
   _renderTimeline() {
     if (!this.data) return;
-    const end = Date.now() / 1000;
+    const end = this._end();
     const snaps = [this.data.before, ...this.entries].filter(Boolean);
     const step = fn => { // [[a, b, n, label]] of fn(snapshot) over the range
       const out = [];

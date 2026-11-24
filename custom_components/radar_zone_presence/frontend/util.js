@@ -369,3 +369,43 @@ export function correctionFollowUp({ hass, t, from, to, floors = [], onClose = (
   box.addEventListener('pointerenter', () => clearTimeout(timer));
   return box;
 }
+
+export const TIME_CHIP_CSS = `
+.time-chip { position: relative; display: inline-flex; align-items: center; border-radius: 16px; background: var(--secondary-background-color, #eef0f2); white-space: nowrap; }
+.time-chip button { font: inherit; font-size: 13px; border: 0; background: none; color: var(--primary-text-color, #222); cursor: pointer; padding: 5px 8px; }
+.time-chip button.step { font-size: 10px; padding: 5px 6px 5px 10px; }
+.time-chip button.step:last-of-type:not(:first-child) { padding: 5px 10px 5px 6px; }
+.time-pop { position: absolute; top: 36px; right: 0; z-index: 30; background: var(--card-background-color, #fff); color: var(--primary-text-color, #222); border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.2); padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 250px; }
+.time-pop .presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.time-pop .presets button { border: 1px solid var(--divider-color, #ccc); border-radius: 14px; padding: 3px 10px; }
+.time-pop .presets button.on { background: var(--primary-color, #03a9f4); color: #fff; border-color: transparent; }
+.time-pop label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--secondary-text-color, #666); }
+.time-pop input { font: inherit; font-size: 13px; padding: 4px; }
+`;
+
+/**
+ * The proposal's time chip: ◀ Today 07:40 – 07:55 ▾ ▶. `go(end | null, len)` loads a window (null: up to now);
+ * `state._timePop` holds whether the picker is open, `rerender()` redraws the chip's host.
+ */
+export function timeChip({ end, len, past, ranges, go, state, rerender }) {
+  const now = Date.now() / 1000;
+  const to = (endAt, l = len) => go(endAt == null || endAt >= Date.now() / 1000 - 5 ? null : endAt, l);
+  const open = state._timePop;
+  const local = t => { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  const close = () => { state._timePop = false; };
+  const pop = !open ? '' : el('div', { class: 'time-pop', onpointerdown: e => e.stopPropagation() },
+    el('div', { class: 'presets' }, ranges.map(([label, sec]) => el('button', { class: sec === len ? 'on' : '', onclick: () => { close(); to(past ? end : null, sec); } }, label))),
+    el('label', {}, 'Ending at', el('input', { type: 'datetime-local', value: local(end), max: local(now),
+      onchange: e => { const t = new Date(e.target.value).getTime() / 1000; if (Number.isFinite(t)) { close(); to(t); } } })),
+    el('button', { class: 'btn', onclick: () => { close(); to(null); } }, 'Now'));
+  if (open && !state._timeAway) {
+    state._timeAway = e => { if (!e.composedPath().some(n => n.classList?.contains('time-chip'))) { close(); removeEventListener('pointerdown', state._timeAway, true); state._timeAway = null; rerender(); } };
+    addEventListener('pointerdown', state._timeAway, true);
+  }
+  return el('div', { class: 'time-chip' },
+    el('button', { class: 'step', title: 'The window before', onclick: () => to(end - len) }, '◀'),
+    el('button', { class: 'label', title: 'Pick the length and the end of the window', onclick: () => { state._timePop = !open; rerender(); } }, `${fmtWindow(end - len, end)} ▾`),
+    past ? el('button', { class: 'step', title: 'The window after', onclick: () => to(end + len) }, '▶') : '',
+    pop);
+}
