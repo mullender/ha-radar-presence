@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { centroid, planFor } from '../../custom_components/radar_zone_presence/frontend/plan.js';
+import { centroid, planFor, ownRoom } from '../../custom_components/radar_zone_presence/frontend/plan.js';
 
 test('centroid: the centre of an L-shaped room lies by its area, not its corner count', () => {
   assert.deepEqual(centroid([[0, 0], [2, 0], [2, 2], [0, 2]]), [1, 1]);
@@ -45,4 +45,22 @@ test('fitBackground: two image points and where they belong give the placement b
   const moved = fitBackground(start, [[a, [500, 500]]]); // one pair: only moves
   assert.deepEqual(imageToPlan(moved, a).map(Math.round), [500, 500]);
   assert.equal(moved.scale, 5);
+});
+
+test('ownRoom: the part of a radar view where it is the nearest radar, outside other rooms', () => {
+  const sq = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Two radars 6 m apart facing each other along x; each sees a 6 m x 4 m box.
+  const cones = [
+    { radar: 'a', origin: [0, 0], polygon: sq(0, -2000, 6000, 2000) },
+    { radar: 'b', origin: [6000, 0], polygon: sq(0, -2000, 6000, 2000) },
+  ];
+  const own = ownRoom('a', cones, []);
+  const xs = own.polygon.map(p => p[0]);
+  assert.ok(Math.max(...xs) <= 3000 && Math.max(...xs) > 2700, 'cut halfway between the radars');
+  assert.ok(own.label[0] > 1000 && own.label[0] < 2000);
+  // A room shape over the near half leaves nothing worth drawing.
+  assert.equal(ownRoom('a', cones, [{ polygon: sq(-100, -2100, 3100, 2100) }]), null);
+  // Where the other radar does not look, it stays ours.
+  const lone = ownRoom('a', [cones[0], { radar: 'b', origin: [6000, 0], polygon: sq(5000, -500, 6000, 500) }], []);
+  assert.ok(Math.max(...lone.polygon.map(p => p[0])) > 5500);
 });

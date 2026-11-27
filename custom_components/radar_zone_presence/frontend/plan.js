@@ -4,6 +4,7 @@
 
 import { fovPolygon, pointInPolygon, polygonArea, signedDistance, validatePolygon } from './engine.js';
 import { KIND_STYLE, SVGNS, affineApply, radarTransforms, slotColor } from './util.js';
+import { convexHull } from './analysis.js';
 
 const DOMAIN = 'radar_zone_presence';
 const SPOT_MAX_MM2 = 6e6;
@@ -53,10 +54,43 @@ export async function loadMaps(hass) {
         shapes.push({ id: z.id, radar: radar.radar_id, kind, name: z.name, area: kind === 'include' ? z.area_id || cfg.device_area_id : null, polygon: z.polygon.map(f), leads_to: z.leads_to || [] });
       }
     }
+    // A radar without a shape for its own room: the engine counts a person there in that room wherever this
+    // radar is the nearest one that sees them (engine/rooms.py). Draw that part of its view, so the room is on
+    // the map (and a floor with it can be a plan).
+    for (const { radar, cfg } of radars) {
+      const area = cfg.device_area_id;
+      if (!area || shapes.some(s => s.kind === 'include' && s.area === area)) continue;
+      const own = ownRoom(radar.radar_id, cones, shapes.filter(s => s.kind === 'include'), ignores.map(g => ({ polygon: g.polygon.map(at(g.radar)) })));
+      if (own) shapes.push({ id: `own:${radar.radar_id}`, radar: radar.radar_id, kind: 'include', implicit: true, name: radar.area || area, area, polygon: own.polygon, labelAt: own.label, leads_to: [] });
+    }
     const display = radars.find(x => x.radar.radar_id === anchor)?.cfg.settings?.display || {};
     const toAnchor = new Map(radars.map(({ radar }) => [radar.radar_id, at(radar.radar_id)]));
     return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display, background: plans[anchor] || null };
   });
+}
+
+/**
+ * The part of radar `id`'s view that is its own room (anchor frame): the points where it is the nearest radar
+ * that sees them, outside other rooms' shapes and ignore areas. {polygon (convex hull), label (centre of the
+ * points)} or null when too little is left. Sampled on a grid, as engine/rooms.py decides per point.
+ */
+export function ownRoom(id, cones, rooms, ignores = [], step = 150) {
+  const mine = cones.find(c => c.radar === id);
+  if (!mine) return null;
+  const xs = mine.polygon.map(p => p[0]), ys = mine.polygon.map(p => p[1]);
+  const kept = [];
+  for (let x = Math.min(...xs); x <= Math.max(...xs); x += step) {
+    for (let y = Math.min(...ys); y <= Math.max(...ys); y += step) {
+      if (!pointInPolygon(x, y, mine.polygon)) continue;
+      if (rooms.some(r => pointInPolygon(x, y, r.polygon)) || ignores.some(g => pointInPolygon(x, y, g.polygon))) continue;
+      const d = Math.hypot(x - mine.origin[0], y - mine.origin[1]);
+      if (cones.some(c => c !== mine && pointInPolygon(x, y, c.polygon) && Math.hypot(x - c.origin[0], y - c.origin[1]) < d)) continue;
+      kept.push([x, y]);
+    }
+  }
+  if (kept.length * step * step < 1e6) return null; // under 1 m²
+  const label = [kept.reduce((s, p) => s + p[0], 0) / kept.length, kept.reduce((s, p) => s + p[1], 0) / kept.length];
+  return { polygon: convexHull(kept), label };
 }
 
 /** The best map for a floor: the one holding most of its rooms (at least two). {map, areas: Set} or null. */
@@ -163,12 +197,14 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
   const toFrac = ([px, py]) => [(px - x0) / W, (y1 - py) / H];
   // What the radars see: a soft wash.
   for (const c of map.cones) add('polygon', { points: pts(c.polygon), fill: 'currentColor', 'fill-opacity': 0.035 });
-  for (const s of rooms) {
+  for (const s of [...rooms].sort((a, b) => !!b.implicit - !!a.implicit)) { // a room without a shape (a radar's own view) underneath
     const n = occupied(s.area);
     const g = add('polygon', {
       points: pts(s.polygon), fill: tone('include'), 'fill-opacity': n ? 0.26 : 0.08, stroke: tone('include'), 'stroke-opacity': 0.55, 'stroke-width': W / 300,
+      ...(s.implicit ? { 'stroke-dasharray': `${W / 80} ${W / 120}` } : {}),
       class: onRoom ? 'room link' : 'room',
     });
+    if (s.implicit) add('title', {}, g).textContent = `${s.name} has no room shape: this is the part of its radar's view counted as ${s.name}. Draw the room in that radar's Edit mode to fit it to the walls.`;
     if (onRoom) g.addEventListener('click', () => onRoom(s));
   }
   for (const s of map.shapes) {
@@ -182,8 +218,8 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
   // Label position per area: the biggest shape's centre.
   const label = new Map();
   for (const s of rooms) {
-    const [cx, cy] = sx(centroid(s.polygon));
-    const sz = Math.abs(polygonArea(s.polygon));
+    const [cx, cy] = sx(s.labelAt || centroid(s.polygon));
+    const sz = Math.abs(polygonArea(s.polygon)) * (s.implicit ? 0.01 : 1); // a drawn shape wins
     if (!label.has(s.area) || sz > label.get(s.area).sz) label.set(s.area, { x: (100 * cx) / W, y: (100 * cy) / H, sz });
   }
   // Live detections (or those at the playhead), like the room view: a dot per target, a fading trail, hollow when ignored.
