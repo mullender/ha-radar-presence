@@ -64,3 +64,54 @@ test('ownRoom: the part of a radar view where it is the nearest radar, outside o
   const lone = ownRoom('a', [cones[0], { radar: 'b', origin: [6000, 0], polygon: sq(5000, -500, 6000, 500) }], []);
   assert.ok(Math.max(...lone.polygon.map(p => p[0])) > 5500);
 });
+
+test('placeOnFloor / floorToMap round trip, and fitPlacement lines a map up without scaling it', async () => {
+  const { placeOnFloor, floorToMap, fitPlacement } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps, `${a} vs ${b}`);
+  const place = { x: 1000, y: -500, rotation: 30, mirror: true };
+  for (const p of [[0, 0], [1200, 300], [-400, 2500]]) near(floorToMap(place, placeOnFloor(place, p)), p);
+  near(placeOnFloor({ x: 0, y: 0, rotation: 90 }, [1000, 0]), [0, -1000]); // a quarter turn clockwise
+  near(placeOnFloor({ x: 0, y: 0, rotation: 0, mirror: true }, [1000, 0]), [-1000, 0]);
+  // Two map points and where they are on the floor: turned and moved, never scaled.
+  const truth = { x: 3000, y: 2000, rotation: 75, mirror: false };
+  const a = [500, 800], b = [4200, 1300];
+  const fit = fitPlacement({}, [[a, placeOnFloor(truth, a)], [b, placeOnFloor(truth, b)]]);
+  near([fit.x, fit.y], [truth.x, truth.y], 1e-3);
+  assert.ok(Math.abs(fit.rotation - 75) < 1e-6);
+  // Mirrored maps keep their mirror.
+  const mt = { ...truth, mirror: true };
+  const fm = fitPlacement({ mirror: true }, [[a, placeOnFloor(mt, a)], [b, placeOnFloor(mt, b)]]);
+  near(placeOnFloor(fm, [0, 0]), placeOnFloor(mt, [0, 0]), 1e-3);
+});
+
+test('a mirrored image: imageToPlan / planToImage invert, fitBackground honours the mirror', async () => {
+  const { imageToPlan, planToImage, fitBackground } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const bg = { w: 800, h: 500, x: 100, y: 900, scale: 4, rotation: 20, mirror: true };
+  const p = imageToPlan(bg, [120, 40]);
+  const back = planToImage(bg, p);
+  assert.ok(Math.abs(back[0] - 120) < 1e-6 && Math.abs(back[1] - 40) < 1e-6);
+  assert.ok(Math.abs(imageToPlan(bg, [800, 0])[0] - 100) < 1e-9); // the right edge is now where the left was
+  const goal = { ...bg, x: -300, y: 50, scale: 6, rotation: 300 };
+  const i1 = [10, 10], i2 = [700, 450];
+  const fit = fitBackground({ ...bg }, [[i1, imageToPlan(goal, i1)], [i2, imageToPlan(goal, i2)]]);
+  for (const k of ['x', 'y', 'scale', 'rotation']) assert.ok(Math.abs(fit[k] - goal[k]) < 1e-6, k);
+});
+
+test('floorPlan: a saved floor puts several maps on one plan; without one, the best map', async () => {
+  const { floorPlan } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const room = (id, area) => ({ id, kind: 'include', area, polygon: [[0, 0], [3000, 0], [3000, 3000], [0, 3000]] });
+  const maps = [
+    { anchor: 'entry', shapes: [room('e', 'entry')], cones: [], toAnchor: new Map() },
+    { anchor: 'garage', shapes: [room('g', 'garage')], cones: [], toAnchor: new Map() },
+  ];
+  const areas = new Set(['entry', 'garage']);
+  assert.equal(floorPlan(maps, areas), null); // one room per map: no plan on its own
+  const saved = { primary: 'entry', maps: { garage: { x: 0, y: -4000, rotation: 0 } }, image: null, items: [{ id: 'i1', entity_id: 'lock.front', x: 10, y: 20 }] };
+  const plan = floorPlan(maps, areas, saved);
+  assert.deepEqual([...plan.areas].sort(), ['entry', 'garage']);
+  assert.equal(plan.parts.length, 2);
+  assert.equal(plan.items.length, 1);
+  assert.deepEqual(plan.unplaced, []);
+  const partial = floorPlan(maps, areas, { primary: 'entry', maps: {} });
+  assert.deepEqual(partial.unplaced.map(m => m.anchor), ['garage']);
+});

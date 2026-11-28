@@ -6,7 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
-import { drawPlan, fitBackground, imageToPlan, loadMaps, planFor, planToImage } from './plan.js';
+import { drawPlan, fitBackground, fitPlacement, floorPlan, floorToMap, imageToPlan, loadMaps, placeOnFloor, planToImage, toDisplay } from './plan.js';
 import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp, timeChip, TIME_CHIP_CSS } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
@@ -87,6 +87,15 @@ ${TIME_CHIP_CSS}
 .bg-pin { position: absolute; transform: translate(-50%, -50%); width: 18px; height: 18px; border-radius: 50%; font-size: 11px; font-weight: 600; color: #fff;
   display: inline-flex; align-items: center; justify-content: center; z-index: 4; pointer-events: none; box-shadow: 0 0 0 2px #fff; }
 .bg-pin.img { background: #d97706; }
+.plan-map .dev { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%; padding: 0; display: grid; place-items: center;
+  border: 1.5px solid var(--divider-color, #ccc); background: var(--card-background-color, #fff); color: var(--secondary-text-color, #666); cursor: pointer; z-index: 3;
+  --mdc-icon-size: 16px; font-size: 13px; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.plan-map .dev.on { background: #f59e0b; border-color: #f59e0b; color: #fff; }
+.plan-map .dev.gone { opacity: .45; border-style: dashed; }
+.plan-map .dev.sel { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+.plan-map.bg-editing .dev { cursor: move; touch-action: none; }
+.bg-note { font-size: 12px; color: var(--secondary-text-color, #666); margin-right: 4px; }
+.bg-pick { font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px; max-width: 320px; }
 .bg-pin.at { background: #0d9488; }
 .bg-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 10px; background: var(--secondary-background-color, #f3f4f6); font-size: 13px; }
 .bg-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -167,7 +176,35 @@ svg.links path.hot { stroke: var(--primary-color, #03a9f4); stroke-width: 4; }
 .help { color: var(--secondary-text-color, #777); font-size: 12px; }
 `;
 
-export class RzpHeadcount extends HTMLElement {
+export /** A device shown on the plan is "on": a light on, a door open, unlocked, a button pressed in the last 10 s. */
+function deviceOn(st) {
+  if (!st) return false;
+  if (st.entity_id.startsWith('event.')) return Date.now() - Date.parse(st.state) < 10000;
+  return ['on', 'open', 'opening', 'unlocked', 'unlocking', 'playing'].includes(st.state);
+}
+
+/** A letter for a device when HA's icons are not available. */
+function deviceGlyph(entityId, st) {
+  const dc = st?.attributes?.device_class || '';
+  if (/door|garage|opening/.test(dc)) return '▯';
+  if (dc === 'window') return '◫';
+  if (entityId.startsWith('lock.')) return '🔒';
+  if (entityId.startsWith('light.')) return '💡';
+  if (entityId.startsWith('event.')) return '◉';
+  return '●';
+}
+
+/** Point in polygon (for clicking a map's room in the editor). */
+function pointIn([x, y], poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+class RzpHeadcount extends HTMLElement {
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
@@ -200,7 +237,7 @@ export class RzpHeadcount extends HTMLElement {
     if (this._active) return;
     this._active = true;
     await this.load();
-    this._timer = setInterval(() => { if (this.cursor === null && !this._bgEdit) this.render(); else this._renderTimeline(); }, 5000); // not while placing an image
+    this._timer = setInterval(() => { if (this.cursor === null && !this._fpEdit) this.render(); else this._renderTimeline(); }, 5000); // not while editing a floor plan
   }
 
   deactivate() {
@@ -244,6 +281,7 @@ export class RzpHeadcount extends HTMLElement {
     }
     this.start = start;
     this.maps = await loadMaps(this.hass).catch(() => []); // room shapes, for floors drawn as a plan
+    this.floorPlans = (await this.hass.callWS({ type: `${DOMAIN}/floors` }).catch(() => ({}))).floors || {};
     this.entries = this.data.log;
     this._letters = new Map(); // tokens get letters A, B, C… in the order they show up in this range
     this._index();
@@ -259,7 +297,7 @@ export class RzpHeadcount extends HTMLElement {
         if (msg.closed) { setTimeout(() => this._active && this.load(), 3000); return; } // the home reloaded
         this.entries.push(...msg.log);
         this.data.now = { t: msg.log[msg.log.length - 1].t, tokens: msg.log[msg.log.length - 1].tokens, unknown_floors: msg.log[msg.log.length - 1].unknown_floors };
-        if (this.cursor === null && !this._bgEdit) this.render(); else this._renderTimeline();
+        if (this.cursor === null && !this._fpEdit) this.render(); else this._renderTimeline();
       }, { type: `${DOMAIN}/headcount/subscribe` });
     } catch { /* an older integration: no live updates */ }
   }
@@ -285,7 +323,7 @@ export class RzpHeadcount extends HTMLElement {
     }
     const levels = [...new Set([...this.areas.values()].map(a => a.level))].sort((x, y) => y - x); // upstairs on top
     const floorName = lv => d.floors.find(f => f.level === lv)?.name || `Floor ${lv}`;
-    this.floors = levels.map(lv => ({ level: lv, name: floorName(lv), areas: [...this.areas.values()].filter(a => a.level === lv) }));
+    this.floors = levels.map(lv => ({ level: lv, floor_id: d.floors.find(f => f.level === lv)?.floor_id || `level${lv}`, name: floorName(lv), areas: [...this.areas.values()].filter(a => a.level === lv) }));
     this.links = [];
     const seen = new Set();
     for (const [a, b, door] of d.connections) {
@@ -389,8 +427,11 @@ export class RzpHeadcount extends HTMLElement {
     const floors = this.floors.map(f => {
       const doubt = unknownFloors.has(f.level);
       const n = f.areas.reduce((x, a) => x + (per.get(a.id) || 0), 0);
-      const plan = planFor(this.maps || [], new Set(f.areas.map(a => a.id)));
-      const mode = plan ? localStorage.getItem(`rzp.plan.${f.level}`) || (innerWidth > 700 ? 'plan' : 'diagram') : 'diagram';
+      const areaIds = new Set(f.areas.map(a => a.id));
+      const edit = this._fpEdit?.floor === f.floor_id ? this._fpEdit : null;
+      const plan = floorPlan(this.maps || [], areaIds, edit ? edit.draft : this.floorPlans?.[f.floor_id]);
+      const mode = edit ? 'plan' : plan ? localStorage.getItem(`rzp.plan.${f.level}`) || (innerWidth > 700 ? 'plan' : 'diagram') : 'diagram';
+      const startable = !plan && this.admin && (this.maps || []).some(m => m.shapes.some(sh => sh.kind === 'include' && areaIds.has(sh.area)));
       const box = (a, mini = false) => {
           const doors = Object.entries(this.data.doors).filter(([, rs]) => rs.some(r => this.regionArea[r] === a.id));
           const radar = a.regions.map(r => this.regionRadars[r]?.[0]).find(Boolean);
@@ -422,13 +463,11 @@ export class RzpHeadcount extends HTMLElement {
       let rooms;
       if (mode === 'plan') {
         const dark = !!this.hass?.themes?.darkMode;
-        const radarOf = s => s.radar;
-        const edit = this._bgEdit?.anchor === plan.map.anchor ? this._bgEdit : null;
         const drawn = drawPlan(plan, {
-          occupied: a => per.get(a) || 0, dark, background: edit ? edit.draft : plan.map.background,
-          onRoom: edit ? null : s => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: radarOf(s), t: t ?? Date.now() / 1000 } })),
+          occupied: a => per.get(a) || 0, dark, background: plan.background,
+          onRoom: edit ? null : sh => this.dispatchEvent(new CustomEvent('open-radar', { detail: { radar: sh.radar, t: t ?? Date.now() / 1000 } })),
         });
-        this._plans.push({ drawn, radars: plan.map.radars });
+        this._plans.push({ drawn, radars: plan.parts.flatMap(p => p.map.radars) });
         const labels = [...plan.areas].map(id => this.areas.get(id)).filter(Boolean).map(a => {
           const at = drawn.place(a.id);
           const b = box(a, true);
@@ -437,14 +476,21 @@ export class RzpHeadcount extends HTMLElement {
           return b;
         });
         const others = f.areas.filter(a => !plan.areas.has(a.id));
-        const mapEl = el('div', { class: `plan-map${edit ? ' bg-editing' : ''}`, style: { aspectRatio: `${1 / drawn.aspect}` } }, drawn.svg, ...(edit ? [] : labels), drawn.overlay);
-        if (edit) this._bgEditor(edit, drawn, mapEl, plan.map);
+        const mapEl = el('div', { class: `plan-map${edit ? ' bg-editing' : ''}`, style: { aspectRatio: `${1 / drawn.aspect}` } },
+          drawn.svg, ...(edit ? [] : labels), ...this._devices(plan.items, drawn, edit), drawn.overlay);
+        if (edit) this._fpEditor(edit, drawn, mapEl, plan, f);
         rooms = el('div', { class: 'plan' },
           mapEl,
-          edit ? edit.bar : this.admin ? el('div', { class: 'bg-open' }, el('button', { class: 'fchip', onclick: () => this._bgStart(plan.map, drawn) },
-            plan.map.background ? 'Floor plan image…' : '+ Floor plan image')) : '',
+          edit ? edit.bar : this.admin ? el('div', { class: 'bg-open' }, el('button', { class: 'fchip', onclick: () => this._fpStart(f, plan) },
+            plan.saved ? 'Edit floor plan…' : '+ Floor plan (image, rooms, devices)')) : '',
           others.length ? el('div', { class: 'rooms' }, others.map(a => { const b = box(a); b.querySelector('.meta').textContent ||= 'not on this map'; return b; })) : '');
-      } else rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
+      } else {
+        rooms = el('div', { class: 'rooms' }, f.areas.map(a => box(a)));
+        if (startable) {
+          rooms = el('div', { class: 'plan' }, rooms, el('div', { class: 'bg-open' },
+            el('button', { class: 'fchip', title: 'Put the radar maps of this floor on one plan, with a floor-plan image and devices', onclick: () => this._fpStart(f, null) }, '+ Draw as a plan')));
+        }
+      }
       return el('div', { class: `floor${doubt ? ' doubt' : ''}` },
         el('h2', {}, f.name, el('span', { class: 'n', title: doubt ? 'Settling: a door to outside is in use, so it is not sure yet who left' : '' }, doubt ? `${n}+` : String(n)), toggle),
         rooms);
@@ -461,23 +507,73 @@ export class RzpHeadcount extends HTMLElement {
     if (t === null) { this._syncLive(want); this._paintLive(); } else { this._syncLive(new Set()); this._detectionsAt(t, want); }
   }
 
-  // ------------------------------------------------------------ floor-plan image
+  // ------------------------------------------------------------ floor plan (image, maps, devices)
 
-  /** Start placing the floor-plan image under a map (admins). Without one yet, ask for the file first. */
-  _bgStart(map, drawn) {
-    const draft = map.background ? { ...map.background } : null;
-    this._bgEdit = { anchor: map.anchor, draft, saved: map.background, step: null, pairs: [], pending: null };
-    if (!draft) { this._bgPick(drawn); return; }
+  /** Devices placed on the plan: an icon with their state; click for Home Assistant's details. While editing
+   *  (Devices tab), drag to move, click to select (and remove). */
+  _devices(items, drawn, edit) {
+    const devTab = edit?.tab === 'devices';
+    return (items || []).map(it => {
+      const st = this.hass?.states?.[it.entity_id];
+      const [fx, fy] = drawn.toFrac([it.x, it.y]);
+      const on = deviceOn(st);
+      const name = st?.attributes?.friendly_name || it.entity_id;
+      const icon = customElements.get('ha-state-icon') ? Object.assign(document.createElement('ha-state-icon'), { hass: this.hass, stateObj: st }) : el('span', {}, deviceGlyph(it.entity_id, st));
+      const b = el('button', {
+        class: `dev${on ? ' on' : ''}${!st || st.state === 'unavailable' ? ' gone' : ''}${devTab && edit.selItem === it.id ? ' sel' : ''}`,
+        style: { left: `${fx * 100}%`, top: `${fy * 100}%` },
+        title: `${name}: ${st ? st.state : 'not found'}`,
+      }, icon);
+      if (!edit) b.addEventListener('click', () => this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: it.entity_id }, bubbles: true, composed: true })));
+      else if (devTab) {
+        b.addEventListener('pointerdown', e => {
+          e.stopPropagation();
+          b.setPointerCapture(e.pointerId);
+          edit.selItem = it.id;
+          const start = drawn.toPlan(e.clientX, e.clientY);
+          const move = ev => {
+            const p = drawn.toPlan(ev.clientX, ev.clientY);
+            if (!p || !start) return;
+            const [nx, ny] = drawn.toFrac([it.x + p[0] - start[0], it.y + p[1] - start[1]]);
+            Object.assign(b.style, { left: `${nx * 100}%`, top: `${ny * 100}%` });
+          };
+          const up = ev => {
+            b.removeEventListener('pointermove', move);
+            const p = drawn.toPlan(ev.clientX, ev.clientY);
+            if (p && start && Math.hypot(p[0] - start[0], p[1] - start[1]) > 30) Object.assign(it, { x: it.x + p[0] - start[0], y: it.y + p[1] - start[1] });
+            this.render();
+          };
+          b.addEventListener('pointermove', move);
+          b.addEventListener('pointerup', up, { once: true });
+        });
+      }
+      return b;
+    });
+  }
+
+  /** Start editing a floor's plan (admins). Without a saved one: the map with most of its rooms is the frame. */
+  _fpStart(f, plan) {
+    const saved = this.floorPlans?.[f.floor_id];
+    let draft = saved ? structuredClone(saved) : null;
+    if (!draft) {
+      const areaIds = new Set(f.areas.map(a => a.id));
+      const rooms = m => new Set(m.shapes.filter(s => s.kind === 'include' && areaIds.has(s.area)).map(s => s.area)).size;
+      const primary = plan?.map || [...(this.maps || [])].sort((a, b) => rooms(b) - rooms(a))[0];
+      if (!primary) return;
+      draft = { primary: primary.anchor, image: null, maps: {}, items: [] };
+    }
+    const tab = !plan || plan.unplaced.length ? 'maps' : draft.image ? 'devices' : 'image'; // what is missing first
+    this._fpEdit = { floor: f.floor_id, draft, saved, tab, sel: null, step: null, pairs: [], pending: null, pick: '', selItem: null };
     this.render();
   }
 
-  /** Upload an image (HA's image upload, as for person pictures) and fit it over the rooms drawn so far. */
-  _bgPick(drawn) {
+  /** Upload an image (HA's image upload, as for person pictures) and fit it over the plan drawn so far. */
+  _fpPick(drawn) {
     const input = el('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
     input.addEventListener('change', async () => {
       const file = input.files?.[0];
       input.remove();
-      if (!file) { if (!this._bgEdit?.draft) this._bgEdit = null; this.render(); return; }
+      if (!file) return;
       try {
         const body = new FormData();
         body.append('file', file);
@@ -490,12 +586,12 @@ export class RzpHeadcount extends HTMLElement {
         img.src = image;
         await img.decode();
         const { x0, x1, y1 } = drawn.extent;
-        const prev = this._bgEdit.draft;
-        this._bgEdit.draft = prev ? { ...prev, image, w: img.naturalWidth, h: img.naturalHeight, scale: prev.scale * prev.w / img.naturalWidth }
-          : { image, w: img.naturalWidth, h: img.naturalHeight, x: x0, y: y1, scale: (x1 - x0) / img.naturalWidth, rotation: 0, opacity: 0.6 };
+        const e = this._fpEdit, prev = e.draft.image;
+        e.draft.image = prev ? { ...prev, image, w: img.naturalWidth, h: img.naturalHeight, scale: prev.scale * prev.w / img.naturalWidth }
+          : { image, w: img.naturalWidth, h: img.naturalHeight, x: x0, y: y1, scale: (x1 - x0) / img.naturalWidth, rotation: 0, mirror: false, opacity: 0.6 };
+        e.tab = 'image';
       } catch (err) {
         alert(`Could not use that image: ${err.message || err}`);
-        if (!this._bgEdit?.draft) this._bgEdit = null;
       }
       this.render();
     });
@@ -503,119 +599,220 @@ export class RzpHeadcount extends HTMLElement {
     input.click();
   }
 
-  /** Change the draft's scale or rotation around the image's centre. */
-  _bgAround(change) {
-    const e = this._bgEdit, d = e.draft, c = [d.w / 2, d.h / 2];
-    const before = imageToPlan(d, c);
-    const next = { ...d, ...change(d) };
+  /** Change the image's scale, rotation or mirror around its centre. */
+  _imgAround(change) {
+    const d = this._fpEdit.draft, b = d.image, c = [b.w / 2, b.h / 2];
+    const before = imageToPlan(b, c);
+    const next = { ...b, ...change(b) };
     const after = imageToPlan(next, c);
-    e.draft = { ...next, x: next.x + before[0] - after[0], y: next.y + before[1] - after[1] };
+    d.image = { ...next, x: next.x + before[0] - after[0], y: next.y + before[1] - after[1] };
   }
 
-  /** The editing toolbar and pointer handling for the map being edited (drag to move, wheel to scale, line up two points). */
-  _bgEditor(edit, drawn, mapEl, map) {
-    const d = edit.draft;
-    if (!d) { edit.bar = el('div', { class: 'bg-bar' }, 'Choose an image…'); return; }
+  /** Turn or flip the selected map around the centre of its rooms. */
+  _mapAround(map, change) {
+    const d = this._fpEdit.draft, place = d.maps[map.anchor];
+    const disp = toDisplay(map);
+    const pts = map.shapes.filter(s => s.kind === 'include').flatMap(s => s.polygon.map(disp));
+    const c = pts.length ? [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length] : [0, 0];
+    const before = placeOnFloor(place, c);
+    const next = { ...place, ...change(place) };
+    const after = placeOnFloor(next, c);
+    d.maps[map.anchor] = { ...next, x: next.x + before[0] - after[0], y: next.y + before[1] - after[1] };
+  }
+
+  /** The editing toolbar and pointer handling for the floor being edited. Tabs: the image under the plan, the
+   *  radar maps on it (one is the frame; the others are placed), the devices shown on it. */
+  _fpEditor(edit, drawn, mapEl, plan, f) {
+    const d = edit.draft, img = d.image;
     const rerender = () => this.render();
-    // Markers for the points being lined up (image points move with the image).
-    for (const [k, [img, at]] of edit.pairs.entries()) {
-      for (const [p, cls] of [[imageToPlan(d, img), 'img'], [at, 'at']]) {
-        const [fx, fy] = drawn.toFrac(p);
-        mapEl.append(el('span', { class: `bg-pin ${cls}`, style: { left: `${fx * 100}%`, top: `${fy * 100}%` } }, String(k + 1)));
-      }
+    const btn = (label, onclick, title = '', cls = 'fchip') => el('button', { class: cls, title, onclick }, label);
+    const selMap = edit.tab === 'maps' && edit.sel ? plan.parts.find(p => p.map.anchor === edit.sel && p.place) : null;
+    const mapName = m => [...new Set(m.shapes.filter(s => s.kind === 'include' && f.areas.some(a => a.id === s.area)).map(s => this.areas.get(s.area)?.name || s.area))].join(', ') || 'a radar';
+    // Markers for the points being lined up.
+    const pin = (p, cls, n) => { const [fx, fy] = drawn.toFrac(p); mapEl.append(el('span', { class: `bg-pin ${cls}`, style: { left: `${fx * 100}%`, top: `${fy * 100}%` } }, String(n))); };
+    for (const [k, [from, at]] of edit.pairs.entries()) {
+      pin(edit.tab === 'image' ? imageToPlan(img, from) : placeOnFloor(selMap?.place, from), 'img', k + 1);
+      pin(at, 'at', k + 1);
     }
-    if (edit.pending) {
-      const [fx, fy] = drawn.toFrac(imageToPlan(d, edit.pending));
-      mapEl.append(el('span', { class: 'bg-pin img', style: { left: `${fx * 100}%`, top: `${fy * 100}%` } }, String(edit.pairs.length + 1)));
-    }
+    if (edit.pending) pin(edit.tab === 'image' ? imageToPlan(img, edit.pending) : placeOnFloor(selMap?.place, edit.pending), 'img', edit.pairs.length + 1);
+    // Pointer: drag the image (Image) or the selected map (Maps); click to pick points or place a device.
     let drag = null;
     drawn.svg.addEventListener('pointerdown', e => {
       const p = drawn.toPlan(e.clientX, e.clientY);
       if (!p) return;
       drawn.svg.setPointerCapture(e.pointerId);
-      drag = { p, x: d.x, y: d.y, moved: false };
+      drag = { p, moved: false, img: img && { x: img.x, y: img.y } };
     });
     drawn.svg.addEventListener('pointermove', e => {
-      if (!drag || edit.step) return;
+      if (!drag) return;
       const p = drawn.toPlan(e.clientX, e.clientY);
       if (!p) return;
-      if (Math.hypot(p[0] - drag.p[0], p[1] - drag.p[1]) > 30) drag.moved = true;
-      edit.draft = { ...edit.draft, x: drag.x + p[0] - drag.p[0], y: drag.y + p[1] - drag.p[1] };
-      drawn.setBackground(edit.draft);
+      const dx = p[0] - drag.p[0], dy = p[1] - drag.p[1];
+      if (Math.hypot(dx, dy) > 30) drag.moved = true;
+      if (edit.step || !drag.moved) return;
+      if (edit.tab === 'image' && img) { d.image = { ...d.image, x: drag.img.x + dx, y: drag.img.y + dy }; drawn.setBackground(d.image); }
+      else if (selMap) drawn.nudge(selMap.map.anchor, dx, dy);
     });
     drawn.svg.addEventListener('pointerup', e => {
       const was = drag;
       drag = null;
       if (!was) return;
-      if (edit.step && !was.moved) { // a click while lining up: an image point, or where it belongs
-        const p = drawn.toPlan(e.clientX, e.clientY);
-        if (edit.step === 'image') { edit.pending = planToImage(edit.draft, p); edit.step = 'plan'; }
-        else this._bgPair(p);
+      const p = drawn.toPlan(e.clientX, e.clientY);
+      if (was.moved && !edit.step) {
+        if (selMap && p) { const pl = d.maps[selMap.map.anchor]; d.maps[selMap.map.anchor] = { ...pl, x: pl.x + p[0] - was.p[0], y: pl.y + p[1] - was.p[1] }; }
+        rerender();
+        return;
+      }
+      if (!p) return;
+      if (edit.step === 'from') { // a point on the image / the selected map
+        edit.pending = edit.tab === 'image' ? planToImage(d.image, p) : floorToMap(selMap.place, p);
+        edit.step = 'to';
+      } else if (edit.step === 'to') this._fpPair(p, selMap);
+      else if (edit.tab === 'devices' && edit.pick) {
+        d.items = [...(d.items || []), { id: `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, entity_id: edit.pick, x: p[0], y: p[1] }];
+        edit.pick = '';
+      } else if (edit.tab === 'maps') { // click a map's room to select it
+        const hit = plan.parts.find(part => part.place && part.map.shapes.some(s => s.kind === 'include' && pointIn(floorToMap(part.place, p), s.polygon.map(toDisplay(part.map)))));
+        edit.sel = hit ? hit.map.anchor : null;
       }
       rerender();
     });
-    drawn.svg.addEventListener('wheel', e => {
-      e.preventDefault();
-      const p = drawn.toPlan(e.clientX, e.clientY);
-      const k = Math.exp(-e.deltaY * 0.0015);
-      const img = planToImage(edit.draft, p);
-      const next = { ...edit.draft, scale: edit.draft.scale * k };
-      const now = imageToPlan(next, img); // keep the point under the pointer still
-      edit.draft = { ...next, x: next.x + p[0] - now[0], y: next.y + p[1] - now[1] };
-      drawn.setBackground(edit.draft);
-      clearTimeout(this._bgWheel);
-      this._bgWheel = setTimeout(rerender, 400);
-    }, { passive: false });
+    if (edit.tab === 'image' && img) {
+      drawn.svg.addEventListener('wheel', e => {
+        e.preventDefault();
+        const p = drawn.toPlan(e.clientX, e.clientY);
+        const k = Math.exp(-e.deltaY * 0.0015);
+        const at = planToImage(d.image, p);
+        const next = { ...d.image, scale: d.image.scale * k };
+        const now = imageToPlan(next, at); // keep the point under the pointer still
+        d.image = { ...next, x: next.x + p[0] - now[0], y: next.y + p[1] - now[1] };
+        drawn.setBackground(d.image);
+        clearTimeout(this._bgWheel);
+        this._bgWheel = setTimeout(rerender, 400);
+      }, { passive: false });
+    }
     // Where I stand: the first person the plan's radars see right now.
     const standing = () => {
-      for (const id of map.radars) {
-        const t = this._live?.get(id)?.targets?.[0];
-        if (t) return drawn.fromRadar(id, [t[1], t[2]]);
+      for (const part of plan.parts) for (const id of part.map.radars) {
+        const tg = this._live?.get(id)?.targets?.[0];
+        if (tg) return drawn.fromRadar(id, [tg[1], tg[2]]);
       }
       return null;
     };
-    const step = edit.step;
-    const hint = step === 'image' ? `Point ${edit.pairs.length + 1}: click a spot on the image you can find on the plan too (a room corner, a door).`
-      : step === 'plan' ? `Now click where that spot is on the plan, or stand there and use "Where I stand".`
-        : edit.pairs.length === 1 ? 'The image moved to match point 1. Add point 2 (far from point 1) to set its size and angle.'
-          : 'Drag the image to move it, scroll to resize it, or line up two points.';
-    const btn = (label, onclick, title = '', cls = 'fchip') => el('button', { class: cls, title, onclick }, label);
+    const tab = (key, label) => btn(label, () => { Object.assign(edit, { tab: key, step: null, pairs: [], pending: null }); rerender(); }, '', `fchip${edit.tab === key ? ' on' : ''}`);
+    const lineUp = what => edit.step
+      ? [btn('Stop', () => { edit.step = null; edit.pending = null; rerender(); }),
+        edit.step === 'to' ? btn('Where I stand', () => { const p = standing(); if (p) { this._fpPair(p, selMap); rerender(); } else alert('Nobody is in view of these radars right now.'); }, 'Use your own position, as the radars see it now') : '']
+      : [btn(edit.pairs.length === 1 ? 'Add point 2' : 'Line up two points', () => { if (edit.pairs.length >= 2) edit.pairs = []; edit.step = 'from'; rerender(); }, `Click a spot on the ${what}, then where it belongs`)];
+    let hint, tools;
+    if (edit.tab === 'image') {
+      hint = !img ? 'Add an image of this floor (a blueprint, a sketch, a photo of the plan) to draw it under the rooms.'
+        : edit.step === 'from' ? `Point ${edit.pairs.length + 1}: click a spot on the image you can find on the plan too (a room corner, a door).`
+          : edit.step === 'to' ? 'Now click where that spot is on the plan, or stand there and use "Where I stand".'
+            : 'Drag the image to move it, scroll to resize it, or line up two points.';
+      tools = !img ? [btn('Choose image…', () => this._fpPick(drawn))] : [
+        ...lineUp('image'),
+        btn('⟲ 90°', () => { this._imgAround(b => ({ rotation: ((b.rotation || 0) + 270) % 360 })); rerender(); }, 'Rotate a quarter turn left'),
+        btn('↺ 1°', () => { this._imgAround(b => ({ rotation: ((b.rotation || 0) + 359) % 360 })); rerender(); }),
+        btn('↻ 1°', () => { this._imgAround(b => ({ rotation: ((b.rotation || 0) + 1) % 360 })); rerender(); }),
+        btn('⟳ 90°', () => { this._imgAround(b => ({ rotation: ((b.rotation || 0) + 90) % 360 })); rerender(); }, 'Rotate a quarter turn right'),
+        btn('⇋ Mirror', () => { this._imgAround(b => ({ mirror: !b.mirror })); rerender(); }, 'Flip left-right (the other half of a duplex, a plan drawn mirrored)'),
+        btn('−', () => { this._imgAround(b => ({ scale: b.scale / 1.05 })); rerender(); }, 'Smaller'),
+        btn('+', () => { this._imgAround(b => ({ scale: b.scale * 1.05 })); rerender(); }, 'Larger'),
+        el('label', { class: 'bg-op' }, 'Opacity', el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: img.opacity ?? 0.6,
+          oninput: e => { d.image = { ...d.image, opacity: +e.target.value }; drawn.setBackground(d.image); } })),
+        btn('Replace image…', () => this._fpPick(drawn)),
+        btn('Remove image', () => { d.image = null; rerender(); }),
+      ];
+    } else if (edit.tab === 'maps') {
+      const frame = plan.parts[0];
+      hint = selMap ? (edit.step === 'from' ? `Point ${edit.pairs.length + 1}: click a spot in ${mapName(selMap.map)} (a room corner, a doorway).`
+        : edit.step === 'to' ? 'Now click where that spot is on the plan (on the image, or in the room it touches).'
+          : `${mapName(selMap.map)}: drag it into place, turn it, or line up two points.`)
+        : plan.unplaced.length ? 'Each radar map keeps its own shape. Add the other maps of this floor, then drag them into place.'
+          : 'Click a map to move it. The first one is the frame the others are placed on.';
+      tools = [
+        el('span', { class: 'bg-note' }, `Frame: ${mapName(frame.map)}`),
+        ...plan.parts.slice(1).map(part => btn(mapName(part.map), () => { Object.assign(edit, { sel: part.map.anchor, step: null, pairs: [], pending: null }); rerender(); }, 'Select', `fchip${edit.sel === part.map.anchor ? ' on' : ''}`)),
+        ...plan.unplaced.map(m => btn(`+ ${mapName(m)}`, () => {
+          const disp = toDisplay(m);
+          const pts = m.shapes.filter(s => s.kind === 'include').flatMap(s => s.polygon.map(disp));
+          const minx = Math.min(...pts.map(p => p[0])), maxy = Math.max(...pts.map(p => p[1]));
+          d.maps = { ...d.maps, [m.anchor]: { x: drawn.extent.x1 + 500 - minx, y: drawn.extent.y1 - 400 - maxy, rotation: 0, mirror: false } };
+          Object.assign(edit, { sel: m.anchor, step: null, pairs: [], pending: null });
+          rerender();
+        }, 'Put this radar map on the plan')),
+        ...(selMap ? [
+          ...lineUp('map'),
+          btn('⟲ 90°', () => { this._mapAround(selMap.map, pl => ({ rotation: ((pl.rotation || 0) + 270) % 360 })); rerender(); }),
+          btn('↺ 1°', () => { this._mapAround(selMap.map, pl => ({ rotation: ((pl.rotation || 0) + 359) % 360 })); rerender(); }),
+          btn('↻ 1°', () => { this._mapAround(selMap.map, pl => ({ rotation: ((pl.rotation || 0) + 1) % 360 })); rerender(); }),
+          btn('⟳ 90°', () => { this._mapAround(selMap.map, pl => ({ rotation: ((pl.rotation || 0) + 90) % 360 })); rerender(); }),
+          btn('⇋ Mirror', () => { this._mapAround(selMap.map, pl => ({ mirror: !pl.mirror })); rerender(); }),
+          btn('Take off the plan', () => { const { [selMap.map.anchor]: _gone, ...rest } = d.maps; d.maps = rest; edit.sel = null; rerender(); }),
+        ] : []),
+      ];
+    } else {
+      const sel = (d.items || []).find(it => it.id === edit.selItem);
+      const cands = this._deviceChoices(f, d.items || []);
+      hint = edit.pick ? 'Click on the plan where it is.' : sel ? `${this.hass.states[sel.entity_id]?.attributes?.friendly_name || sel.entity_id}: drag it to move it.`
+        : 'Show doors, switches and sensors where they are: pick one, then click on the plan.';
+      tools = [
+        el('select', { class: 'bg-pick', onchange: e => { edit.pick = e.target.value; edit.selItem = null; rerender(); } },
+          el('option', { value: '' }, cands.length ? 'Add a device…' : 'No more devices in these rooms'),
+          ...cands.map(([group, list]) => el('optgroup', { label: group }, list.map(([id, name]) => el('option', { value: id, selected: edit.pick === id }, name))))),
+        sel ? btn('Remove from the plan', () => { d.items = d.items.filter(it => it.id !== sel.id); edit.selItem = null; rerender(); }) : '',
+      ];
+    }
     edit.bar = el('div', { class: 'bg-bar' },
+      el('div', { class: 'bg-row' }, tab('image', 'Image'), tab('maps', 'Radar maps'), tab('devices', 'Devices')),
       el('div', { class: 'bg-hint' }, hint),
+      el('div', { class: 'bg-row' }, ...tools),
       el('div', { class: 'bg-row' },
-        step === 'plan' ? btn('Where I stand', () => { const p = standing(); if (p) { this._bgPair(p); rerender(); } else alert('Nobody is in view of these radars right now.'); }, 'Use your own position, as the radars see it now') : '',
-        !step ? btn(edit.pairs.length === 1 ? 'Add point 2' : 'Line up two points', () => { if (edit.pairs.length >= 2) edit.pairs = []; edit.step = 'image'; rerender(); }) : btn('Stop', () => { edit.step = null; edit.pending = null; rerender(); }),
-        btn('⟲ 90°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 270) % 360 })); rerender(); }, 'Rotate a quarter turn left'),
-        btn('↺ 1°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 359) % 360 })); rerender(); }),
-        btn('↻ 1°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 1) % 360 })); rerender(); }),
-        btn('⟳ 90°', () => { this._bgAround(b => ({ rotation: ((b.rotation || 0) + 90) % 360 })); rerender(); }, 'Rotate a quarter turn right'),
-        btn('−', () => { this._bgAround(b => ({ scale: b.scale / 1.05 })); rerender(); }, 'Smaller'),
-        btn('+', () => { this._bgAround(b => ({ scale: b.scale * 1.05 })); rerender(); }, 'Larger'),
-        el('label', { class: 'bg-op' }, 'Opacity', el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: d.opacity ?? 0.6,
-          oninput: e => { edit.draft = { ...edit.draft, opacity: +e.target.value }; drawn.setBackground(edit.draft); } }))),
-      el('div', { class: 'bg-row' },
-        btn('Replace image…', () => this._bgPick(drawn)),
-        edit.saved ? btn('Remove image', async () => { if (!confirm('Remove the floor plan image from this map?')) return; await this._bgSave(map, null); }) : '',
+        this.floorPlans?.[f.floor_id] ? btn('Delete floor plan', async () => { if (confirm('Delete this floor plan (its image, placed maps and devices)?')) await this._fpSave(f, null); }) : '',
         el('span', { style: { flex: 1 } }),
-        btn('Cancel', () => { this._bgEdit = null; rerender(); }),
-        btn('Save', () => this._bgSave(map, edit.draft), '', 'fchip on')));
+        btn('Cancel', () => { this._fpEdit = null; rerender(); }),
+        btn('Save', () => this._fpSave(f, d), '', 'fchip on')));
   }
 
-  /** The point just clicked (or stood on) is where the pending image point belongs; with two pairs, fit size and angle. */
-  _bgPair(at) {
-    const e = this._bgEdit;
+  /** Devices worth showing on a floor: doors, switches, lights, locks, buttons and sensors in its rooms. */
+  _deviceChoices(f, placed) {
+    const areaIds = new Set(f.areas.map(a => a.id));
+    const have = new Set(placed.map(it => it.entity_id));
+    const groups = [['Doors and windows', st => st.entity_id.startsWith('binary_sensor.') && /door|window|garage|opening|lock/.test(st.attributes.device_class || '')],
+      ['Locks', st => st.entity_id.startsWith('lock.')], ['Lights and switches', st => /^(light|switch|fan)\./.test(st.entity_id)],
+      ['Buttons and remotes', st => st.entity_id.startsWith('event.')], ['Covers', st => st.entity_id.startsWith('cover.')],
+      ['Motion and occupancy', st => st.entity_id.startsWith('binary_sensor.') && /motion|occupancy|presence/.test(st.attributes.device_class || '')]];
+    const out = groups.map(([label]) => [label, []]);
+    for (const st of Object.values(this.hass?.states || {})) {
+      if (have.has(st.entity_id)) continue;
+      const ent = this.hass.entities?.[st.entity_id];
+      if (ent?.hidden || ent?.entity_category) continue;
+      const area = ent?.area_id || this.hass.devices?.[ent?.device_id]?.area_id;
+      if (!areaIds.has(area)) continue;
+      const k = groups.findIndex(([, test]) => test(st));
+      if (k >= 0) out[k][1].push([st.entity_id, `${st.attributes.friendly_name || st.entity_id} (${this.areas.get(area)?.name || area})`]);
+    }
+    return out.filter(([, list]) => list.length).map(([label, list]) => [label, list.sort((a, b) => a[1].localeCompare(b[1]))]);
+  }
+
+  /** The point just clicked (or stood on) is where the pending point belongs. Image: two pairs set its size and
+   *  angle. A map: two pairs turn it (never scaled). */
+  _fpPair(at, selMap) {
+    const e = this._fpEdit;
     if (!e?.pending || !at) return;
     e.pairs = [...e.pairs, [e.pending, at]];
     e.pending = null;
-    e.draft = fitBackground(e.draft, e.pairs.slice(-2));
+    if (e.tab === 'image') e.draft.image = fitBackground(e.draft.image, e.pairs.slice(-2));
+    else if (selMap) e.draft.maps[selMap.map.anchor] = fitPlacement(e.draft.maps[selMap.map.anchor], e.pairs.slice(-2));
     e.step = null;
   }
 
-  async _bgSave(map, plan) {
+  async _fpSave(f, plan) {
     try {
-      await this.hass.callWS({ type: `${DOMAIN}/plans/save`, anchor: map.anchor, plan: plan && { image: plan.image, w: plan.w, h: plan.h, x: plan.x, y: plan.y, scale: plan.scale, rotation: plan.rotation || 0, opacity: plan.opacity ?? 0.6 } });
-      map.background = plan;
-      this._bgEdit = null;
+      const res = await this.hass.callWS({ type: `${DOMAIN}/floors/save`, floor_id: f.floor_id, plan });
+      this.floorPlans = res.floors;
+      this._fpEdit = null;
     } catch (err) {
       alert(`Could not save: ${err.message || err.code}`);
     }

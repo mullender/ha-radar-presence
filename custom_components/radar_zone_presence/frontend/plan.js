@@ -29,7 +29,6 @@ export function spotLike(zones) {
 /** Every radar's config, grouped by the map (alignment group) it is drawn on. */
 export async function loadMaps(hass) {
   const list = await hass.callWS({ type: `${DOMAIN}/list` });
-  const plans = (await hass.callWS({ type: `${DOMAIN}/plans` }).catch(() => ({ plans: {} }))).plans || {};
   const cfgs = await Promise.all(list.radars.map(r => hass.callWS({ type: `${DOMAIN}/config`, radar_id: r.radar_id }).catch(() => null)));
   const maps = new Map(); // anchor -> [{radar, cfg}]
   list.radars.forEach((r, i) => {
@@ -65,7 +64,7 @@ export async function loadMaps(hass) {
     }
     const display = radars.find(x => x.radar.radar_id === anchor)?.cfg.settings?.display || {};
     const toAnchor = new Map(radars.map(({ radar }) => [radar.radar_id, at(radar.radar_id)]));
-    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display, background: plans[anchor] || null };
+    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display };
   });
 }
 
@@ -115,17 +114,89 @@ export function centroid(poly) {
   return [x / (3 * a), y / (3 * a)];
 }
 
-/** Image pixel (u, v) -> display-frame mm, for a background placed at (x, y) with `scale` mm/px, rotated clockwise. */
-export function imageToPlan(bg, [u, v]) {
+/** Image pixel (u, v) -> floor-frame mm, for an image placed at (x, y) with `scale` mm/px, rotated clockwise,
+ *  flipped left-right first when `mirror` (the other half of a duplex). */
+export function imageToPlan(bg, [u0, v]) {
+  const u = bg.mirror ? bg.w - u0 : u0;
   const r = ((bg.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
   return [bg.x + bg.scale * (u * c - v * s), bg.y - bg.scale * (u * s + v * c)];
 }
 
-/** Display-frame mm -> image pixel (the inverse of imageToPlan). */
+/** Floor-frame mm -> image pixel (the inverse of imageToPlan). */
 export function planToImage(bg, [px, py]) {
   const r = ((bg.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
   const dx = (px - bg.x) / bg.scale, dy = (bg.y - py) / bg.scale;
-  return [dx * c + dy * s, -dx * s + dy * c];
+  const u = dx * c + dy * s;
+  return [bg.mirror ? bg.w - u : u, -dx * s + dy * c];
+}
+
+/** A map's display transform (its anchor frame -> how it is shown: the map's own rotation and mirror). */
+export function toDisplay(map) {
+  const d = map.display || {};
+  const r = ((d.rotation || 0) * Math.PI) / 180, m = d.mirror ? -1 : 1;
+  return ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y];
+}
+
+/**
+ * Where a map sits on its floor: its display frame (mm, y up) -> the floor frame, turned `rotation` degrees
+ * clockwise and flipped left-right first when `mirror`. No placement: the floor frame is this map's own.
+ */
+export function placeOnFloor(place, [x, y]) {
+  if (!place) return [x, y];
+  const r = ((place.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r), m = place.mirror ? -1 : 1;
+  return [place.x + c * m * x + s * y, place.y - s * m * x + c * y];
+}
+
+/** The inverse of placeOnFloor. */
+export function floorToMap(place, [X, Y]) {
+  if (!place) return [X, Y];
+  const r = ((place.rotation || 0) * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r), m = place.mirror ? -1 : 1;
+  const dx = X - place.x, dy = Y - place.y;
+  return [m * (c * dx - s * dy), s * dx + c * dy];
+}
+
+/**
+ * Line a map up on the floor: pairs of [point in the map's display frame, where it is on the floor]. One pair moves
+ * it; two also turn it (no scaling: a radar's millimetres are real). Keeps `mirror`.
+ */
+export function fitPlacement(place, pairs) {
+  let out = { x: 0, y: 0, rotation: 0, mirror: false, ...place };
+  if (pairs.length >= 2) {
+    const [[m1, f1], [m2, f2]] = pairs.slice(-2);
+    const a = placeOnFloor({ ...out, x: 0, y: 0, rotation: 0 }, [m2[0] - m1[0], m2[1] - m1[1]]); // mirrored, unturned
+    const b = [f2[0] - f1[0], f2[1] - f1[1]];
+    if (Math.hypot(...a) > 1 && Math.hypot(...b) > 1) {
+      const turn = Math.atan2(a[1], a[0]) - Math.atan2(b[1], b[0]); // clockwise, as rotation
+      out = { ...out, rotation: (((turn * 180) / Math.PI) % 360 + 360) % 360 };
+    }
+  }
+  const [[mp, fp]] = pairs.slice(-1);
+  const now = placeOnFloor(out, mp);
+  return { ...out, x: out.x + fp[0] - now[0], y: out.y + fp[1] - now[1] };
+}
+
+/**
+ * A floor drawn as a plan: the saved floor plan (one map as the frame, others placed on it, an image, devices) or,
+ * without one, the map holding most of the floor's rooms. {map (the frame), parts: [{map, areas, place}], areas,
+ * background, items, unplaced (maps with rooms on this floor not on the plan yet), saved} or null.
+ */
+export function floorPlan(maps, areaIds, saved = null) {
+  const onFloor = m => new Set(m.shapes.filter(s => s.kind === 'include' && areaIds.has(s.area)).map(s => s.area));
+  const primary = saved?.primary && maps.find(m => m.anchor === saved.primary);
+  if (!primary) {
+    const best = planFor(maps, areaIds);
+    if (!best) return null;
+    return { map: best.map, areas: best.areas, parts: [{ map: best.map, areas: best.areas, place: null }], background: null, items: [],
+      unplaced: maps.filter(m => m !== best.map && onFloor(m).size), saved: null };
+  }
+  const parts = [{ map: primary, areas: onFloor(primary), place: null }];
+  for (const [anchor, place] of Object.entries(saved.maps || {})) {
+    const m = maps.find(x => x.anchor === anchor);
+    if (m && m !== primary) parts.push({ map: m, areas: onFloor(m), place });
+  }
+  const areas = new Set(parts.flatMap(p => [...p.areas]));
+  const unplaced = maps.filter(m => !parts.some(p => p.map === m) && onFloor(m).size);
+  return { map: primary, areas, parts, background: saved.image || null, items: saved.items || [], unplaced, saved };
 }
 
 /**
@@ -139,7 +210,7 @@ export function fitBackground(bg, pairs) {
   }
   const [[i1, p1], [i2, p2]] = pairs;
   // Display frame with y down (as the image), so rotation is the same sense as the image's.
-  const a = [i2[0] - i1[0], i2[1] - i1[1]], b = [p2[0] - p1[0], -(p2[1] - p1[1])];
+  const a = [(bg.mirror ? -1 : 1) * (i2[0] - i1[0]), i2[1] - i1[1]], b = [p2[0] - p1[0], -(p2[1] - p1[1])];
   const la = Math.hypot(...a), lb = Math.hypot(...b);
   if (la < 1 || lb < 1) return bg;
   const rotation = (((Math.atan2(b[1], b[0]) - Math.atan2(a[1], a[0])) * 180) / Math.PI + 360) % 360;
@@ -150,31 +221,33 @@ export function fitBackground(bg, pairs) {
 
 /**
  * Draw a floor plan. `occupied(area)` -> count. Returns {svg, place(area) -> [x%, y%] of the room's label, size}.
- * Rooms of other floors on the same map are left out; doorways and spots are kept when they touch a room drawn.
+ * A plan is one map or several placed on one floor (floorPlan). Rooms of other floors on a map are left out;
+ * doorways and spots are kept when they touch a room drawn. Everything is drawn in the floor frame (mm, y up).
  */
-export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null, background = plan.map.background } = {}) {
-  const { map, areas } = plan;
-  const d = map.display || {};
-  const r = ((d.rotation || 0) * Math.PI) / 180, m = d.mirror ? -1 : 1;
-  const tf = ([x, y]) => [Math.cos(r) * m * x - Math.sin(r) * y, Math.sin(r) * m * x + Math.cos(r) * y];
-  const rooms = map.shapes.filter(s => s.kind === 'include' && areas.has(s.area));
+export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null, background = plan.background ?? plan.map.background } = {}) {
+  const parts = (plan.parts || [{ map: plan.map, areas: plan.areas, place: null }]).map(part => {
+    const display = toDisplay(part.map);
+    return { ...part, F: p => placeOnFloor(part.place, display(p)) }; // anchor frame -> floor frame
+  });
+  const rooms = parts.flatMap(part => part.map.shapes.filter(s => s.kind === 'include' && part.areas.has(s.area))
+    .map(s => ({ ...s, anchor: part.map.anchor, fp: s.polygon.map(part.F), label: s.labelAt ? part.F(s.labelAt) : null })));
   // The floor-plan image counts towards the extent: it shows the whole floor, also what no radar sees.
   const bgPts = background ? [[0, 0], [background.w, 0], [background.w, background.h], [0, background.h]].map(p => imageToPlan(background, p)) : [];
-  const roomPts = [...rooms.flatMap(s => s.polygon.map(tf)), ...bgPts];
+  const roomPts = [...rooms.flatMap(s => s.fp), ...bgPts];
   const xs = roomPts.map(p => p[0]), ys = roomPts.map(p => p[1]);
   const pad = 400;
   const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
   const W = x1 - x0, H = y1 - y0;
-  const sx = p => { const [x, y] = tf(p); return [x - x0, y1 - y]; };
-  const inBox = s => s.polygon.some(p => { const [x, y] = sx(p); return x >= 0 && y >= 0 && x <= W && y <= H; });
+  const sx = ([x, y]) => [x - x0, y1 - y]; // floor frame -> svg
+  const inBox = fp => fp.some(p => { const [x, y] = sx(p); return x >= 0 && y >= 0 && x <= W && y <= H; });
   const svg = document.createElementNS(SVGNS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W.toFixed(0)} ${H.toFixed(0)}`);
   svg.setAttribute('class', 'plan-svg');
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   const add = (tag, attrs, parent = svg) => { const n = document.createElementNS(SVGNS, tag); for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v); parent.append(n); return n; };
-  const pts = poly => poly.map(p => sx(p).map(v => v.toFixed(0)).join(',')).join(' ');
+  const pts = fp => fp.map(p => sx(p).map(v => v.toFixed(0)).join(',')).join(' ');
   const tone = k => KIND_STYLE[k][dark ? 'dark' : 'light'];
-  // The floor-plan image, under everything. Placed in the display frame, so svg = (x - x0, y1 - y).
+  // The floor-plan image, under everything. Placed in the floor frame, so svg = (x - x0, y1 - y).
   const bgEl = add('image', { preserveAspectRatio: 'none', class: 'plan-bg' });
   const setBackground = bg => {
     if (!bg) { bgEl.setAttribute('display', 'none'); return; }
@@ -183,45 +256,53 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
     bgEl.setAttribute('width', bg.w);
     bgEl.setAttribute('height', bg.h);
     bgEl.setAttribute('opacity', bg.opacity ?? 0.6);
-    bgEl.setAttribute('transform', `translate(${(bg.x - x0).toFixed(1)},${(y1 - bg.y).toFixed(1)}) rotate(${(bg.rotation || 0).toFixed(2)}) scale(${bg.scale})`);
+    bgEl.setAttribute('transform', `translate(${(bg.x - x0).toFixed(1)},${(y1 - bg.y).toFixed(1)}) rotate(${(bg.rotation || 0).toFixed(2)}) scale(${bg.scale})${bg.mirror ? ` translate(${bg.w},0) scale(-1,1)` : ''}`);
   };
   setBackground(background);
-  /** A pointer position -> display-frame mm (for dragging and picking points on the plan). */
+  /** A pointer position -> floor-frame mm (for dragging and picking points on the plan). */
   const toPlan = (clientX, clientY) => {
     const m = svg.getScreenCTM();
     if (!m) return null;
     const q = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
     return [q.x + x0, y1 - q.y];
   };
-  /** Display-frame mm -> where it is in the map element, as fractions (for markers over the plan). */
+  /** Floor-frame mm -> where it is in the map element, as fractions (for markers over the plan). */
   const toFrac = ([px, py]) => [(px - x0) / W, (y1 - py) / H];
+  // Each map in its own group, so the floor editor can drag one around before it is redrawn.
+  const groups = new Map(parts.map(part => [part.map.anchor, add('g', { class: 'plan-part' })]));
   // What the radars see: a soft wash.
-  for (const c of map.cones) add('polygon', { points: pts(c.polygon), fill: 'currentColor', 'fill-opacity': 0.035 });
+  for (const part of parts) for (const c of part.map.cones) add('polygon', { points: pts(c.polygon.map(part.F)), fill: 'currentColor', 'fill-opacity': 0.035 }, groups.get(part.map.anchor));
   for (const s of [...rooms].sort((a, b) => !!b.implicit - !!a.implicit)) { // a room without a shape (a radar's own view) underneath
     const n = occupied(s.area);
     const g = add('polygon', {
-      points: pts(s.polygon), fill: tone('include'), 'fill-opacity': n ? 0.26 : 0.08, stroke: tone('include'), 'stroke-opacity': 0.55, 'stroke-width': W / 300,
+      points: pts(s.fp), fill: tone('include'), 'fill-opacity': n ? 0.26 : 0.08, stroke: tone('include'), 'stroke-opacity': 0.55, 'stroke-width': W / 300,
       ...(s.implicit ? { 'stroke-dasharray': `${W / 80} ${W / 120}` } : {}),
       class: onRoom ? 'room link' : 'room',
-    });
+    }, groups.get(s.anchor));
     if (s.implicit) add('title', {}, g).textContent = `${s.name} has no room shape: this is the part of its radar's view counted as ${s.name}. Draw the room in that radar's Edit mode to fit it to the walls.`;
     if (onRoom) g.addEventListener('click', () => onRoom(s));
   }
-  for (const s of map.shapes) {
-    if (s.kind === 'include' || !inBox(s)) continue;
-    add('polygon', { points: pts(s.polygon), fill: tone(s.kind), 'fill-opacity': s.kind === 'exit' ? 0.45 : 0.25, stroke: tone(s.kind), 'stroke-opacity': 0.7, 'stroke-width': W / 500 });
-  }
-  for (const c of map.cones) {
-    const [x, y] = sx(c.origin);
-    if (x >= 0 && y >= 0 && x <= W && y <= H) add('circle', { cx: x.toFixed(0), cy: y.toFixed(0), r: W / 120, fill: 'currentColor', 'fill-opacity': 0.6 });
+  for (const part of parts) {
+    for (const s of part.map.shapes) {
+      const fp = s.polygon.map(part.F);
+      if (s.kind === 'include' || !inBox(fp)) continue;
+      add('polygon', { points: pts(fp), fill: tone(s.kind), 'fill-opacity': s.kind === 'exit' ? 0.45 : 0.25, stroke: tone(s.kind), 'stroke-opacity': 0.7, 'stroke-width': W / 500 }, groups.get(part.map.anchor));
+    }
+    for (const c of part.map.cones) {
+      const [x, y] = sx(part.F(c.origin));
+      if (x >= 0 && y >= 0 && x <= W && y <= H) add('circle', { cx: x.toFixed(0), cy: y.toFixed(0), r: W / 120, fill: 'currentColor', 'fill-opacity': 0.6 }, groups.get(part.map.anchor));
+    }
   }
   // Label position per area: the biggest shape's centre.
   const label = new Map();
   for (const s of rooms) {
-    const [cx, cy] = sx(s.labelAt || centroid(s.polygon));
-    const sz = Math.abs(polygonArea(s.polygon)) * (s.implicit ? 0.01 : 1); // a drawn shape wins
+    const [cx, cy] = sx(s.label || centroid(s.fp));
+    const sz = Math.abs(polygonArea(s.fp)) * (s.implicit ? 0.01 : 1); // a drawn shape wins
     if (!label.has(s.area) || sz > label.get(s.area).sz) label.set(s.area, { x: (100 * cx) / W, y: (100 * cy) / H, sz });
   }
+  // Which part of the plan a radar is on (its map), and its own coordinates -> the floor frame.
+  const radarTo = new Map();
+  for (const part of parts) for (const [radar, f] of part.map.toAnchor) radarTo.set(radar, { part, f: p => part.F(f(p)) });
   // Live detections (or those at the playhead), like the room view: a dot per target, a fading trail, hollow when ignored.
   // Detections go on their own layer above the room labels (headcount.js puts it last), so a label never hides a person.
   // A canvas: it is redrawn many times a second, and SVG updates there did not repaint reliably.
@@ -240,20 +321,20 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
     ctx.clearRect(0, 0, cw, ch);
     const px = p => { const [x, y] = sx(p); return [ox + x * k, oy + y * k]; };
     for (const [radar, { targets = [], trails = new Map() }] of byRadar) {
-      const f = map.toAnchor.get(radar);
-      if (!f) continue;
-      const ignored = (x, y) => map.ignores.some(g => g.radar === radar && pointInPolygon(x, y, g.polygon));
+      const on = radarTo.get(radar);
+      if (!on) continue;
+      const ignored = (x, y) => on.part.map.ignores.some(g => g.radar === radar && pointInPolygon(x, y, g.polygon));
       ctx.lineWidth = 1.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      for (const [slot, pts] of trails) {
-        if (pts.length < 2) continue;
+      for (const [slot, tpts] of trails) {
+        if (tpts.length < 2) continue;
         ctx.strokeStyle = slotColor(slot); ctx.globalAlpha = 0.45;
         ctx.beginPath();
-        pts.forEach((p, i) => { const [x, y] = px(f([p.x, p.y])); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+        tpts.forEach((p, i) => { const [x, y] = px(on.f([p.x, p.y])); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
       for (const [slot, x, y] of targets) {
-        const [cx, cy] = px(f([x, y]));
+        const [cx, cy] = px(on.f([x, y]));
         const off = ignored(x, y);
         ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2);
         if (off) { ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5; ctx.stroke(); } // ignored: hollow, as in the room view
@@ -261,7 +342,9 @@ export function drawPlan(plan, { occupied = () => 0, dark = false, onRoom = null
       }
     }
   };
-  /** A radar's own coordinates -> display-frame mm ("where I stand" when lining up the image). */
-  const fromRadar = (radar, p) => { const f = map.toAnchor.get(radar); return f ? tf(f(p)) : null; };
-  return { svg, overlay, place: a => label.get(a), aspect: H / W, setLive, setBackground, toPlan, toFrac, fromRadar, extent: { x0, x1, y0, y1 } };
+  /** A radar's own coordinates -> floor-frame mm ("where I stand" when lining up). */
+  const fromRadar = (radar, p) => radarTo.get(radar)?.f(p) ?? null;
+  /** Drag one map's drawing by (dx, dy) floor mm, until the plan is redrawn. */
+  const nudge = (anchor, dx, dy) => groups.get(anchor)?.setAttribute('transform', `translate(${dx.toFixed(0)},${(-dy).toFixed(0)})`);
+  return { svg, overlay, place: a => label.get(a), aspect: H / W, setLive, setBackground, toPlan, toFrac, fromRadar, nudge, extent: { x0, x1, y0, y1 } };
 }

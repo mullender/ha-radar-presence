@@ -67,8 +67,8 @@ def async_register(hass: HomeAssistant) -> None:
         ws_todo_answer,
         ws_settings,
         ws_settings_save,
-        ws_plans,
-        ws_plans_save,
+        ws_floors,
+        ws_floors_save,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -643,10 +643,12 @@ async def ws_zone_events(hass: HomeAssistant, connection, msg) -> None:
     connection.send_result(msg["id"], {"start": start.timestamp(), "end": end.timestamp(), "zones": by_zone})
 
 
-# A floor-plan image under a map (an alignment group, keyed by its anchor radar), placed in the map's display
-# frame: the image's top-left corner at (x, y) mm, `scale` mm per image pixel, rotated `rotation` degrees
-# clockwise as shown. Display only, so it is kept with the To do store's shared data, not the config (no reload).
-PLAN_SCHEMA = vol.Schema(
+# Floors drawn as a plan, keyed by floor id. The floor frame is one map's display frame (`primary`, an alignment
+# group's anchor radar); other maps of the floor are placed on it (`maps`: their display frame turned `rotation`
+# degrees clockwise, flipped when `mirror`, moved to x, y mm). An optional image under it (its top-left corner at
+# x, y mm, `scale` mm per pixel, rotated clockwise, flipped when `mirror`) and devices shown on it (`items`: an
+# entity at x, y mm). Display only, so kept with the To do store's shared data, not the config (no reload).
+FLOOR_IMAGE_SCHEMA = vol.Schema(
     {
         vol.Required("image"): vol.All(str, vol.Length(max=500), vol.Match(r"^(/api/image/serve/|/local/|https?://)")),
         vol.Required("w"): vol.All(vol.Coerce(float), vol.Range(min=1, max=20000)),
@@ -655,40 +657,69 @@ PLAN_SCHEMA = vol.Schema(
         vol.Required("y"): vol.Coerce(float),
         vol.Required("scale"): vol.All(vol.Coerce(float), vol.Range(min=0.01, max=1000)),
         vol.Optional("rotation", default=0): vol.Coerce(float),
+        vol.Optional("mirror", default=False): bool,
         vol.Optional("opacity", default=0.6): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+    }
+)
+FLOOR_SCHEMA = vol.Schema(
+    {
+        vol.Required("primary"): vol.All(str, vol.Length(min=1, max=64)),
+        vol.Optional("image", default=None): vol.Any(None, FLOOR_IMAGE_SCHEMA),
+        vol.Optional("maps", default={}): vol.All(
+            {
+                vol.All(str, vol.Length(max=64)): {
+                    vol.Required("x"): vol.Coerce(float),
+                    vol.Required("y"): vol.Coerce(float),
+                    vol.Optional("rotation", default=0): vol.Coerce(float),
+                    vol.Optional("mirror", default=False): bool,
+                }
+            },
+            vol.Length(max=32),
+        ),
+        vol.Optional("items", default=[]): vol.All(
+            [
+                {
+                    vol.Required("id"): vol.All(str, vol.Length(min=1, max=40)),
+                    vol.Required("entity_id"): vol.All(str, vol.Match(r"^[a-z_]+\.[a-z0-9_]+$")),
+                    vol.Required("x"): vol.Coerce(float),
+                    vol.Required("y"): vol.Coerce(float),
+                }
+            ],
+            vol.Length(max=300),
+        ),
     }
 )
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/plans"})
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/floors"})
 @websocket_api.async_response
-async def ws_plans(hass: HomeAssistant, connection, msg) -> None:
-    """Floor-plan images per map: {anchor radar id: plan}."""
+async def ws_floors(hass: HomeAssistant, connection, msg) -> None:
+    """Floors drawn as a plan: {floor id: plan}."""
     from .todo import async_get_todo
 
     todo = await async_get_todo(hass)
-    connection.send_result(msg["id"], {"plans": todo.meta.get("plans") or {}})
+    connection.send_result(msg["id"], {"floors": todo.meta.get("floors") or {}})
 
 
 @websocket_api.require_admin
 @websocket_api.websocket_command(
-    {vol.Required("type"): f"{DOMAIN}/plans/save", vol.Required("anchor"): str, vol.Required("plan"): vol.Any(None, dict)}
+    {vol.Required("type"): f"{DOMAIN}/floors/save", vol.Required("floor_id"): vol.All(str, vol.Length(min=1, max=64)), vol.Required("plan"): vol.Any(None, dict)}
 )
 @websocket_api.async_response
-async def ws_plans_save(hass: HomeAssistant, connection, msg) -> None:
-    """Place (or with plan None, remove) the floor-plan image under one map."""
+async def ws_floors_save(hass: HomeAssistant, connection, msg) -> None:
+    """Save (or with plan None, remove) one floor's plan."""
     from .todo import async_get_todo
 
     try:
-        plan = None if msg["plan"] is None else PLAN_SCHEMA(msg["plan"])
+        plan = None if msg["plan"] is None else FLOOR_SCHEMA(msg["plan"])
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     todo = await async_get_todo(hass)
-    plans = dict(todo.meta.get("plans") or {})
+    floors = dict(todo.meta.get("floors") or {})
     if plan is None:
-        plans.pop(msg["anchor"], None)
+        floors.pop(msg["floor_id"], None)
     else:
-        plans[msg["anchor"]] = plan
-    todo.set_meta("plans", plans)
-    connection.send_result(msg["id"], {"plans": plans})
+        floors[msg["floor_id"]] = plan
+    todo.set_meta("floors", floors)
+    connection.send_result(msg["id"], {"floors": floors})

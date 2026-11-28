@@ -751,3 +751,23 @@ user, so it looked like a wall switch. Two rules now:
   whoever is believed there.
 A remote under our control can also route its presses through a script: the
 change then carries a parent context and is ignored as "by a script".
+
+### 2026-11-27: floor plans (per floor: image, radar maps, devices)
+The floor-plan image moved from "per map" to "per floor", so a floor whose rooms
+are on separate radar maps (entry and garage) can be one plan.
+- Store: To do meta `floors` {floor id: {primary, image, maps, items}} via
+  `floors` / `floors/save` (replaces `plans`, which never held data in use).
+  The floor frame is the primary map's display frame; other maps are placed on
+  it (`placeOnFloor`: turned clockwise, optionally mirrored, moved; never
+  scaled, a radar's mm are real). The image can be mirrored too (the other half
+  of a duplex).
+- Editor (House → floor → *+ Draw as a plan* / *Edit floor plan…*): tabs Image
+  (upload, drag, scroll to resize, rotate, mirror, line up two points),
+  Radar maps (add the floor's other maps, drag, turn, mirror, line up two
+  points: map point → floor point, rigid fit), Devices (pick a door, lock,
+  light, switch, button or motion sensor in the floor's rooms; click to place;
+  drag; remove). Devices show HA's icon, amber when on/open/pressed; click opens
+  HA's details.
+- Blueprints at 1/4" = 1' on 36"×24" sheets: rendered at 4 px/pt the scale is
+  exactly 4.2333 mm/px, so only position, angle and mirror need lining up.
+Next: clip a radar's implicit room to the floor image; doors from the plan.

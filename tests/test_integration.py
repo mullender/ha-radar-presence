@@ -1300,16 +1300,21 @@ async def test_blueprints_are_added_and_make_working_automations(hass: HomeAssis
     assert ("temp", {"entity_id": ["climate.office"], "temperature": 20}) in calls
 
 
-async def test_a_floor_plan_image_is_placed_per_map(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
-    """The plan's background image: saved per map (anchor radar), validated, removable; no reload needed."""
+async def test_a_floor_plan_is_saved_per_floor(hass: HomeAssistant, radar_device: str, hass_ws_client) -> None:
+    """A floor's plan: maps placed on it, an image, devices; validated, removable; no reload needed."""
     await setup_entry(hass, radar_device, [])
     client = await hass_ws_client(hass)
-    plan = {"image": "/api/image/serve/abc123/original", "w": 1200, "h": 800, "x": -4000, "y": 6000, "scale": 8.5, "rotation": 90, "opacity": 0.5}
-    await client.send_json_auto_id({"type": f"{DOMAIN}/plans/save", "anchor": "r1", "plan": plan})
+    image = {"image": "/api/image/serve/abc123/original", "w": 1200, "h": 800, "x": -4000, "y": 6000, "scale": 8.5, "rotation": 90, "mirror": True}
+    plan = {"primary": "r1", "image": image, "maps": {"r2": {"x": 100, "y": -3000, "rotation": 180}}, "items": [{"id": "i1", "entity_id": "lock.front_door", "x": 10, "y": 20}]}
+    await client.send_json_auto_id({"type": f"{DOMAIN}/floors/save", "floor_id": "ground", "plan": plan})
     assert (await client.receive_json())["success"]
-    await client.send_json_auto_id({"type": f"{DOMAIN}/plans"})
-    assert (await client.receive_json())["result"]["plans"]["r1"]["scale"] == 8.5
-    await client.send_json_auto_id({"type": f"{DOMAIN}/plans/save", "anchor": "r1", "plan": {**plan, "image": "javascript:alert(1)"}})
+    await client.send_json_auto_id({"type": f"{DOMAIN}/floors"})
+    saved = (await client.receive_json())["result"]["floors"]["ground"]
+    assert saved["image"]["scale"] == 8.5 and saved["image"]["opacity"] == 0.6 and saved["maps"]["r2"]["mirror"] is False
+    assert saved["items"][0]["entity_id"] == "lock.front_door"
+    await client.send_json_auto_id({"type": f"{DOMAIN}/floors/save", "floor_id": "ground", "plan": {**plan, "image": {**image, "image": "javascript:alert(1)"}}})
     assert not (await client.receive_json())["success"]  # only uploaded images, /local/ files or web addresses
-    await client.send_json_auto_id({"type": f"{DOMAIN}/plans/save", "anchor": "r1", "plan": None})
-    assert (await client.receive_json())["result"]["plans"] == {}
+    await client.send_json_auto_id({"type": f"{DOMAIN}/floors/save", "floor_id": "ground", "plan": {**plan, "items": [{"id": "x", "entity_id": "not an entity", "x": 0, "y": 0}]}})
+    assert not (await client.receive_json())["success"]
+    await client.send_json_auto_id({"type": f"{DOMAIN}/floors/save", "floor_id": "ground", "plan": None})
+    assert (await client.receive_json())["result"]["floors"] == {}
