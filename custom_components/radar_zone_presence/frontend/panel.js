@@ -2764,18 +2764,33 @@ class RadarZonePresencePanel extends HTMLElement {
       ...this._alignControls());
   }
 
+  /** Radars grouped by floor (this radar's floor first, then upstairs to downstairs), by room within a floor. */
+  _radarsByFloor(radars) {
+    const mine = this.radars.find(r => r.radar_id === this.radarId)?.floor_id ?? null;
+    const floors = new Map();
+    for (const r of radars) {
+      const key = r.floor_id ?? '';
+      if (!floors.has(key)) floors.set(key, { name: r.floor || 'No floor', level: r.floor_level ?? -Infinity, list: [] });
+      floors.get(key).list.push(r);
+    }
+    return [...floors.entries()]
+      .sort(([ka, a], [kb, b]) => (kb === (mine ?? '')) - (ka === (mine ?? '')) || b.level - a.level)
+      .map(([key, f]) => [key === (mine ?? '') && mine ? `${f.name} (this floor)` : f.name, f.list.sort((a, b) => (a.area || '~').localeCompare(b.area || '~'))]);
+  }
+
   /** Align this radar's view with another radar that sees part of the same space. */
   _alignControls() {
     const others = this.radars.filter(r => r.radar_id !== this.radarId);
     if (!others.length) return [];
     const a = this._align?.radarId === this.radarId ? this._align : null;
     const saved = this.settings.display.aligned_to;
-    this._alignRef ||= saved?.radar_id && others.some(r => r.radar_id === saved.radar_id) ? saved.radar_id : others[0].radar_id;
+    this._alignRef ||= saved?.radar_id && others.some(r => r.radar_id === saved.radar_id) ? saved.radar_id : this._radarsByFloor(others)[0][1][0].radar_id; // one on this floor
     let status = '';
     if (a?.busy) status = `Matching against ${a.title}…`;
     else if (a?.error) status = a.error;
     else if (saved) {
-      status = `Linked with ${saved.title}: ${saved.agree} of ${saved.pairs} moments when both saw one person agree. `
+      const ref = this.radars.find(r => r.radar_id === saved.radar_id);
+      status = `Linked with ${ref?.area ? `${ref.area} (${saved.title})` : saved.title}: ${saved.agree} of ${saved.pairs} moments when both saw one person agree. `
         + `This radar is turned ${Math.abs(saved.angle_deg).toFixed(0)}° relative to it`
         + `${saved.offset_mm ? `, about ${(Math.hypot(...saved.offset_mm) / 1000).toFixed(1)} m away` : ''}.`;
     }
@@ -2783,7 +2798,8 @@ class RadarZonePresencePanel extends HTMLElement {
       el('label', { class: 'align-anchor' }, 'Line up with'),
       el('div', { style: { display: 'flex', gap: '6px' } },
         el('select', { style: { flex: 1, minWidth: 0 }, onchange: e => { this._alignRef = e.target.value; } },
-          others.map(r => el('option', { value: r.radar_id, selected: r.radar_id === this._alignRef }, r.title))),
+          this._radarsByFloor(others).map(([floor, list]) => el('optgroup', { label: floor },
+            list.map(r => el('option', { value: r.radar_id, selected: r.radar_id === this._alignRef, title: r.title }, `${r.area || 'No room'} · ${r.title}`))))),
         el('button', { class: 'btn', disabled: !this.hist || a?.busy, title: 'Rotate this view to match the other radar, from moments when both radars saw the same person', onclick: () => this._alignWith(this._alignRef) }, 'Line up')),
       el('div', { class: 'help full' }, 'For radars that overlap (one sees into the other\'s room): finds the rotation from the times both saw the same person, and lines this view up with the other radar\'s. Linked radars share their shapes.', status ? el('div', { style: { marginTop: '4px', color: a?.error ? 'var(--error-color, #db4437)' : '' } }, status) : ''),
     ];
