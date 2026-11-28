@@ -828,6 +828,16 @@ async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_dev
     hass.states.async_set("light.den_fan", "off")  # its timer ran out: says nothing
     await hass.async_block_till_done()
     assert evidence() == []
+    # A remote that calls light.toggle itself (an ESPHome remote, a voice assistant): no automation, no user,
+    # but a command, not the wall switch.
+    async def toggle(call) -> None:
+        hass.states.async_set("light.den", "off" if hass.states.get("light.den").state == "on" else "on", context=call.context)
+
+    hass.services.async_register("light", "toggle", toggle)
+    for _ in range(2):
+        await hass.services.async_call("light", "toggle", {"entity_id": "light.den"}, blocking=True, context=Context())
+    await hass.async_block_till_done()
+    assert evidence() == [] and hass.states.get("light.den").state == "off"
     hass.states.async_set("light.den", "on")  # the wall switch
     await hass.async_block_till_done()
     assert evidence() == [den.id] and hc.by_region() == {hall.id: 0, den.id: 1} and hc.count() == 1
@@ -851,6 +861,7 @@ async def test_switches_used_by_hand_are_evidence(hass: HomeAssistant, radar_dev
     kinds = [(e["kind"], e.get("entity")) for e in log if e["kind"] in ("signal", "ignored", "evidence")]
     assert ("ignored", "light.den") in kinds and ("signal", "light.den") in kinds and ("evidence", None) in kinds
     assert any("only switching on counts" in e["detail"] for e in log if e["kind"] == "ignored")
+    assert any("by a command" in e["detail"] for e in log if e["kind"] == "ignored")
     moved = next(e for e in log if e["kind"] == "evidence")
     assert [t[1] for t in moved["tokens"]] == [den.id]  # who is where after it
 

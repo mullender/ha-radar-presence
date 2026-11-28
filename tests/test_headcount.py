@@ -307,6 +307,21 @@ def test_someone_in_the_doorway_explains_the_switch() -> None:
     assert hc.by_region() == {"hall": 2, "den": 0}  # the other (unseen) one is not moved in
 
 
+def test_a_switch_in_a_room_a_radar_watches_needs_the_radar_to_see_someone() -> None:
+    """A remote carried elsewhere toggles the bedroom light: the bedroom radar sees nobody, so nobody moves in."""
+    regions = [Region("living", 3), Region("bedroom", 3)]
+    hc = HeadCount(regions, connections=[("living", "bedroom", None)])
+    hc.seed("living", 1, 0.0)  # sitting still downstairs, unseen
+    hc.frame("bedroom", {}, 90.0)
+    assert hc.evidence("bedroom", 100.0, "light.bedroom") == "its radar saw nobody there (a remote used elsewhere?)"
+    assert hc.by_region() == {"living": 1, "bedroom": 0}
+    # The radar had someone there a moment ago (lost again by the time of the switch): that is them.
+    hc.frame("bedroom", {7: (1500.0, 2000.0)}, 200.0)
+    hc.frame("bedroom", {}, 201.0)
+    assert hc.evidence("bedroom", 205.0, "light.bedroom") is None
+    assert hc.by_region() == {"living": 0, "bedroom": 1}
+
+
 def test_a_correction_removes_the_phantom_first() -> None:
     hc = HeadCount([Region("living", 2)])
     hc.seed("living", 2, 0.0)  # restored after a restart: one real, one left over

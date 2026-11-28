@@ -39,7 +39,7 @@ const SECTIONS = [
   },
   {
     key: 'hints', title: 'Activity hints',
-    why: 'Lights, switches and inner doors that mean someone is in that room when they are used by hand (not by an automation). They count people in rooms without a radar, and keep people who sit still counted.',
+    why: 'Lights, switches and inner doors that mean someone is in that room when they are used by hand at the switch (not by an automation, the app, a remote or voice). They count people in rooms without a radar, and keep people who sit still counted. In a room with a radar they only count when it saw someone there just now.',
     domains: ['binary_sensor', 'switch', 'light', 'fan', 'event', 'input_boolean'],
   },
   {

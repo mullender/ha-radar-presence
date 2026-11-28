@@ -737,3 +737,17 @@ Built from that list (2026-11-23):
   is on the plan (or *Where I stand* with the live dot); one pair moves it,
   two pairs set size and angle as well (`plan.fitBackground`).
   Not yet: the image in the Radars view, a "freeze" button.
+
+### 2026-11-27: switches count only when pressed at the switch
+A battery remote (ESPHome) calling `light.toggle` itself moved an unseen person
+into the bedroom from downstairs: the change had no automation parent and no
+user, so it looked like a wall switch. Two rules now:
+- A state change whose context is that of a recent service call (`call_service`
+  event, any source) is a command (remote, voice, another hub), not evidence.
+  Physical presses on the switch create a fresh context; its button event
+  entities are presses too.
+- In a room a radar watches, evidence moves nobody in unless the radar had a
+  track in that room in the last 15 s (`EVIDENCE_SEEN_S`). It still confirms
+  whoever is believed there.
+A remote under our control can also route its presses through a script: the
+change then carries a parent context and is ignored as "by a script".

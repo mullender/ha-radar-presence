@@ -23,6 +23,7 @@ from functools import partial
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er, floor_registry as fr
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
@@ -49,6 +50,7 @@ LOG_SAVE_DELAY_S = 120
 SEEN_EVERY_S = 15.0
 CONTACT_MIN_S = 2.0  # a door contact must stay open this long to count (a magnet at the edge of its range flickers)
 OCCUPANCY_STEADY_S = 10.0  # an occupancy sensor's region counts as held / free once it has stayed so this long
+COMMAND_KEEP_S = 30.0  # contexts of service calls are remembered this long (a light changing with one was commanded)
 EVENT_FRESH_S = 30.0  # a button press (event entity) counts only if its time is this recent  # who a radar sees, logged at most this often
 BOOTSTRAP_S = 3600.0  # without saved counts, people seen in the first hour count without a door
 COVER_MARGIN_MM = 500.0  # another radar "looks" at a spot this far inside its view
@@ -114,6 +116,7 @@ class HeadCountRuntime:
         self._occupancy: dict[str, str] = {}  # occupancy sensor (a bed sensor) -> its region
         self._occupied: dict[str, tuple[bool, float]] = {}  # region -> (any of its occupancy sensors on, since)
         self._contact_open: dict[str, float] = {}  # door contact -> when it opened (not counted yet)
+        self._commands: dict[str, float] = {}  # context id of a recent service call (no automation, no user) -> when
         self._occupancy_wait: dict[str, tuple[bool, float, str]] = {}  # region -> (on, since, sensor) until steady
         self._vacuums: dict[str, str | None] = {}  # robot vacuum -> its current room sensor
         self._vacuumed: dict[str, str] = {}  # space a robot vacuum is cleaning -> the vacuum: its tracks are it
@@ -339,6 +342,13 @@ class HeadCountRuntime:
                     self._hc("door", entity_id, True, now)
         if self._evidence:
             self._unsubs.append(async_track_state_change_event(self.hass, list(self._evidence), self._on_evidence))
+            domains = {e.split(".")[0] for e in self._evidence}
+
+            @callback
+            def commands_only(data: Any) -> bool:
+                return data.get("domain") in domains
+
+            self._unsubs.append(self.hass.bus.async_listen(EVENT_CALL_SERVICE, self._on_command, event_filter=commands_only))
         if self._occupancy:
             self._unsubs.append(async_track_state_change_event(self.hass, list(self._occupancy), self._on_occupancy))
             now = time.time()
@@ -383,7 +393,7 @@ class HeadCountRuntime:
             self._hc("frame_group", {region_of_area[a]: part for a, part in rooms.split(tracks).items()}, t, unconfirmed)
         self._changed()
 
-    def _hc(self, name: str, *args: Any, replay: bool = False) -> None:
+    def _hc(self, name: str, *args: Any, replay: bool = False) -> Any:
         """Feed the head count. Tracks in a room a robot vacuum is cleaning are left out; while it has not said
         where yet, every input is kept to replay and new tracks wait (unconfirmed)."""
         assert self.hc is not None
@@ -400,7 +410,7 @@ class HeadCountRuntime:
             else:
                 self.hc.frame_group(parts, t, unconfirmed)
             return
-        getattr(self.hc, name)(*args)
+        return getattr(self.hc, name)(*args)
 
     def _end_hold(self, t: float) -> None:
         """Back to the head count as it was when the vacuum started; replay what came since, now knowing its room."""
@@ -476,6 +486,14 @@ class HeadCountRuntime:
         self._changed()
 
     @callback
+    def _on_command(self, event: Event) -> None:
+        """A service call (light.toggle, ...) from no automation and no user: a remote that calls the service
+        itself (an ESPHome remote), a voice assistant, another hub. A switch it changes was not used by hand there."""
+        now = time.time()
+        self._commands = {c: t for c, t in self._commands.items() if now - t < COMMAND_KEEP_S}
+        self._commands[event.context.id] = now
+
+    @callback
     def _on_evidence(self, event: Event[EventStateChangedData]) -> None:
         """A switch or contact used by hand: someone is in its area. Changes by automations, scripts or the
         app carry a parent or a user in their context and do not count."""
@@ -496,6 +514,9 @@ class HeadCountRuntime:
         if new.context.parent_id is not None or new.context.user_id is not None:
             self._log_signal(t, "ignored", entity_id, f"{new.state}: by an automation or script" if new.context.parent_id else f"{new.state}: from the app")
             return
+        if new.context.id in self._commands:
+            self._log_signal(t, "ignored", entity_id, f"{new.state}: by a command (a remote, voice or another hub), not at the switch")
+            return
         region, on_only = self._evidence[entity_id]
         if on_only and new.state != "on":
             self._log_signal(t, "ignored", entity_id, f"{new.state}: only switching on counts (a timer may turn it off)")
@@ -513,7 +534,8 @@ class HeadCountRuntime:
         self._log_signal(t, "signal", entity_id, new.state, region)
         # Switched off (a light on the way out): confirms who is there, moves nobody in. Contacts and buttons: both.
         off = new.state == "off" and entity_id.split(".")[0] in ("light", "switch", "fan", "input_boolean")
-        self._hc("evidence", region, new.last_changed_timestamp, entity_id, not off)
+        if why := self._hc("evidence", region, new.last_changed_timestamp, entity_id, not off):
+            self._log_signal(t, "ignored", entity_id, f"{new.state}: {why}")
         self._changed()
 
     def _region_occupied(self, region: str) -> bool:
@@ -591,7 +613,8 @@ class HeadCountRuntime:
             return
         region, _on_only = self._evidence[entity_id]
         self._log_signal(opened, "signal", entity_id, "on", region)
-        self._hc("evidence", region, opened, entity_id)
+        if why := self._hc("evidence", region, opened, entity_id):
+            self._log_signal(opened, "ignored", entity_id, f"open: {why}")
         self._changed()
 
     @callback

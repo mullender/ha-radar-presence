@@ -101,6 +101,7 @@ VIRTUAL_EXITS = True  # ... on/off
 ESTABLISH_ON_EXIT_FLOOR = True  # still seen on the exit floor LAG_S after the close re-establishes (else: only other floors)
 REFOUND_MM = 2000.0  # ... and is this close to where they vanished
 REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
+EVIDENCE_SEEN_S = 15.0  # a switch used in a room a radar watches moves someone in only if it saw someone there this recently
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
 STATIC_S = 90.0  # a track that stays within STATIC_MM of where it appeared this long is a machine (a fan behind a wall)...
 STATIC_MM = 400.0  # ... until it moves this far: ignored, and whoever it was given to goes back
@@ -195,6 +196,7 @@ class HeadCount:
         self.tokens: dict[int, Token] = {}
         self._binding: dict[tuple[str, int], int] = {}  # (region, track) -> token, kept while the track is lost
         self._visible: dict[str, set[int]] = {r: set() for r in self.regions}
+        self._track_at: dict[str, float] = {}  # region -> last time a radar had a track in it
         self._pending: dict[tuple[str, int], _Pending] = {}
         self._pos: dict[str, dict[int, tuple[float, float]]] = {r: {} for r in self.regions}
         self.regions_seen: dict[int, str] = {}  # token -> first region it was seen in
@@ -237,22 +239,26 @@ class HeadCount:
         self.door(entity_id, True, t)
         self.door(entity_id, False, t)
 
-    def evidence(self, region: str, t: float, why: str = "", move: bool = True) -> None:
+    def evidence(self, region: str, t: float, why: str = "", move: bool = True) -> str | None:
         """Someone is in this region now, though no track says so: a switch pressed by hand, a closet door.
         Whoever is believed there stays (and is back, if in doubt); else (``move``) the unseen person who could
         have walked there is moved there. It never adds a person: a switch does not say who. (A light switched
-        off is someone on their way out: it confirms who is there, it does not move anyone in.)"""
+        off is someone on their way out: it confirms who is there, it does not move anyone in.) In a room a radar
+        watches, nobody is moved in unless it saw someone there just now: whoever used the switch by hand would
+        be in its view (a remote carried elsewhere is not). Returns why it was ignored, if it was."""
         if region not in self.regions:
-            return
+            return None
         self._tick(t)
         here = [tok for tok in self.tokens.values() if tok.region == region and not tok.provisional]
         if any(tok.visible is not None for tok in here):
-            return  # a radar sees them: nothing to add
+            return None  # a radar sees them: nothing to add
         if self._in_doorway_to(region):
-            return  # someone in view in its doorway reached for the switch (or stepped in): them
+            return None  # someone in view in its doorway reached for the switch (or stepped in): them
+        if not here and move and self.regions[region].observed and t - self._track_at.get(region, -math.inf) > EVIDENCE_SEEN_S:
+            return "its radar saw nobody there (a remote used elsewhere?)"
         tok = max(here, key=lambda k: k.last_seen) if here else (self._match(region, t) if move else None)
         if tok is None:
-            return
+            return None
         if tok.region != region:
             self._move_unseen(tok, region, t)
         tok.last_seen = t
@@ -262,6 +268,7 @@ class HeadCount:
             ESTABLISH_ON_EXIT_FLOOR or self.regions[region].floor != tok.unknown_floor
         ):
             self._establish(tok, t, why or "evidence")
+        return None
 
     def hold(self, region: str, on: bool, t: float, why: str = "", move: bool = True) -> None:
         """An occupancy sensor (a bed sensor) in this region turned on or off. On: someone is there for as long as it
@@ -425,6 +432,8 @@ class HeadCount:
         self._unconfirmed[region] = set(unconfirmed)
         prev = self._visible[region]
         cur = set(tracks)
+        if cur or prev:
+            self._track_at[region] = t
         last_pos = self._pos[region]
         self._pos[region] = dict(tracks)
         for tid in prev - cur:
