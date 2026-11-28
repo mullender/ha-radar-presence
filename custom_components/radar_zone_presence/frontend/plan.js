@@ -184,10 +184,26 @@ export function floorPlan(maps, areaIds, saved = null) {
   const onFloor = m => new Set(m.shapes.filter(s => s.kind === 'include' && areaIds.has(s.area)).map(s => s.area));
   const primary = saved?.primary && maps.find(m => m.anchor === saved.primary);
   if (!primary) {
-    const best = planFor(maps, areaIds);
-    if (!best) return null;
-    return { map: best.map, areas: best.areas, parts: [{ map: best.map, areas: best.areas, place: null }], background: null, items: [],
-      unplaced: maps.filter(m => m !== best.map && onFloor(m).size), saved: null };
+    // Not drawn yet: the map with most of the floor's rooms, and the floor's other maps side by side to its right
+    // (top-aligned, a metre apart) until they are lined up in the editor.
+    const withRooms = maps.map(m => ({ m, areas: onFloor(m) })).filter(x => x.areas.size).sort((a, b) => b.areas.size - a.areas.size);
+    const all = new Set(withRooms.flatMap(x => [...x.areas]));
+    if (all.size < 2) return null;
+    const box = (m, areas) => {
+      const disp = toDisplay(m);
+      const pts = m.shapes.filter(sh => sh.kind === 'include' && areas.has(sh.area)).flatMap(sh => sh.polygon.map(disp));
+      return { x0: Math.min(...pts.map(q => q[0])), x1: Math.max(...pts.map(q => q[0])), y1: Math.max(...pts.map(q => q[1])) };
+    };
+    const first = box(withRooms[0].m, withRooms[0].areas);
+    let right = first.x1;
+    const parts = withRooms.map(({ m, areas }, i) => {
+      if (!i) return { map: m, areas, place: null };
+      const b = box(m, areas);
+      const place = { x: right + 1000 - b.x0, y: first.y1 - b.y1, rotation: 0, mirror: false };
+      right += 1000 + b.x1 - b.x0;
+      return { map: m, areas, place };
+    });
+    return { map: parts[0].map, areas: all, parts, background: null, items: [], unplaced: [], saved: null };
   }
   const parts = [{ map: primary, areas: onFloor(primary), place: null }];
   for (const [anchor, place] of Object.entries(saved.maps || {})) {

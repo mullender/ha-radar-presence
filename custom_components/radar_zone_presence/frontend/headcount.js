@@ -560,9 +560,9 @@ class RzpHeadcount extends HTMLElement {
       const rooms = m => new Set(m.shapes.filter(s => s.kind === 'include' && areaIds.has(s.area)).map(s => s.area)).size;
       const primary = plan?.map || [...(this.maps || [])].sort((a, b) => rooms(b) - rooms(a))[0];
       if (!primary) return;
-      draft = { primary: primary.anchor, image: null, maps: {}, items: [] };
+      draft = { primary: primary.anchor, image: null, maps: Object.fromEntries((plan?.parts || []).filter(x => x.place).map(x => [x.map.anchor, x.place])), items: [] };
     }
-    const tab = !plan || plan.unplaced.length ? 'maps' : draft.image ? 'devices' : 'image'; // what is missing first
+    const tab = !plan || plan.unplaced.length || (!saved && plan.parts.length > 1) ? 'maps' : draft.image ? 'devices' : 'image'; // what is missing first
     this._fpEdit = { floor: f.floor_id, draft, saved, tab, sel: null, step: null, pairs: [], pending: null, pick: '', selItem: null };
     this.render();
   }

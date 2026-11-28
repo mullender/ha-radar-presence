@@ -105,7 +105,11 @@ test('floorPlan: a saved floor puts several maps on one plan; without one, the b
     { anchor: 'garage', shapes: [room('g', 'garage')], cones: [], toAnchor: new Map() },
   ];
   const areas = new Set(['entry', 'garage']);
-  assert.equal(floorPlan(maps, areas), null); // one room per map: no plan on its own
+  // Not drawn yet: both maps, side by side (top-aligned, a metre apart).
+  const auto = floorPlan(maps, areas);
+  assert.deepEqual([...auto.areas].sort(), ['entry', 'garage']);
+  assert.deepEqual(auto.parts.map(p => p.place), [null, { x: 4000, y: 0, rotation: 0, mirror: false }]);
+  assert.equal(floorPlan(maps, new Set(['entry'])), null); // a single room: no plan
   const saved = { primary: 'entry', maps: { garage: { x: 0, y: -4000, rotation: 0 } }, image: null, items: [{ id: 'i1', entity_id: 'lock.front', x: 10, y: 20 }] };
   const plan = floorPlan(maps, areas, saved);
   assert.deepEqual([...plan.areas].sort(), ['entry', 'garage']);
