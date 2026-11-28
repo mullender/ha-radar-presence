@@ -322,6 +322,38 @@ def test_a_switch_in_a_room_a_radar_watches_needs_the_radar_to_see_someone() -> 
     assert hc.by_region() == {"living": 0, "bedroom": 1}
 
 
+STAIRS_REGIONS = [
+    Region("living", 2, portals=(Portal("Stairs down", ((0, 0), (1000, 0), (1000, 800), (0, 800)), ("entry",)),)),
+    Region("entry", 1),
+]
+
+
+def test_lost_at_the_stairs_but_never_seen_downstairs_is_back_where_they_were_lost() -> None:
+    """Someone stops next to the stairs (the radar loses still people): taken downstairs, but the radar there
+    never sees them arrive, so they are back in the living room."""
+    hc = HeadCount(STAIRS_REGIONS, connections=[("living", "entry", None)])
+    hc.seed("living", 1, 0.0)
+    t = walk(hc, "living", 1, 1.0, [(3000.0, 3000.0), (1500.0, 1200.0), (500.0, 400.0)])
+    hc.frame("living", {}, t + 0.5)
+    assert hc.by_region() == {"living": 0, "entry": 1}
+    for k in range(1, 25):
+        hc.frame("entry", {}, t + k)
+        hc.frame("living", {}, t + k)
+    assert hc.by_region() == {"living": 1, "entry": 0}
+    assert hc.changes[-1].kind == "moved" and "not seen arriving" in hc.changes[-1].detail
+
+
+def test_lost_at_the_stairs_and_seen_downstairs_stays_downstairs() -> None:
+    hc = HeadCount(STAIRS_REGIONS, connections=[("living", "entry", None)])
+    hc.seed("living", 1, 0.0)
+    t = walk(hc, "living", 1, 1.0, [(3000.0, 3000.0), (1500.0, 1200.0), (500.0, 400.0)])
+    hc.frame("living", {}, t + 0.5)
+    walk(hc, "entry", 5, t + 3, [(800.0, 2500.0), (1500.0, 2000.0), (2000.0, 1500.0)])
+    for k in range(10, 40):
+        hc.frame("entry", {}, t + k)
+    assert hc.by_region() == {"living": 0, "entry": 1}
+
+
 def test_a_correction_removes_the_phantom_first() -> None:
     hc = HeadCount([Region("living", 2)])
     hc.seed("living", 2, 0.0)  # restored after a restart: one real, one left over

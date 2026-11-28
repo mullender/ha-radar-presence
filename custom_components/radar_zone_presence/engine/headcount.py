@@ -102,6 +102,7 @@ ESTABLISH_ON_EXIT_FLOOR = True  # still seen on the exit floor LAG_S after the c
 REFOUND_MM = 2000.0  # ... and is this close to where they vanished
 REFOUND_S = 30.0  # a track the tracker re-finds within this long keeps its person
 EVIDENCE_SEEN_S = 15.0  # a switch used in a room a radar watches moves someone in only if it saw someone there this recently
+ARRIVE_S = 20.0  # moved through a doorway into a room a radar watches, but not seen there this long (and nobody new there): back
 PORTAL_MM = 1200.0  # a track appearing or vanishing this close to a doorway came or went through it
 STATIC_S = 90.0  # a track that stays within STATIC_MM of where it appeared this long is a machine (a fan behind a wall)...
 STATIC_MM = 400.0  # ... until it moves this far: ignored, and whoever it was given to goes back
@@ -146,6 +147,7 @@ class Token:
     pos: tuple[float, float] | None = None  # where last seen (in seen_region's coordinates)
     before: tuple | None = None  # (track, region, seen_region, pos, last_seen, unknown, unknown_floor) before its current track
     origin: tuple[str, int] | None = None  # the track that made this person (arrived / appeared there)
+    passing: tuple[str, float] | None = None  # lost in a doorway, moved through it unseen: (where lost, when), until seen
 
 
 @dataclass(slots=True)
@@ -197,6 +199,7 @@ class HeadCount:
         self._binding: dict[tuple[str, int], int] = {}  # (region, track) -> token, kept while the track is lost
         self._visible: dict[str, set[int]] = {r: set() for r in self.regions}
         self._track_at: dict[str, float] = {}  # region -> last time a radar had a track in it
+        self._born_at: dict[str, float] = {}  # region -> last time a new track appeared in it
         self._pending: dict[tuple[str, int], _Pending] = {}
         self._pos: dict[str, dict[int, tuple[float, float]]] = {r: {} for r in self.regions}
         self.regions_seen: dict[int, str] = {}  # token -> first region it was seen in
@@ -434,6 +437,8 @@ class HeadCount:
         cur = set(tracks)
         if cur or prev:
             self._track_at[region] = t
+        if cur - prev:
+            self._born_at[region] = t
         last_pos = self._pos[region]
         self._pos[region] = dict(tracks)
         for tid in prev - cur:
@@ -566,11 +571,28 @@ class HeadCount:
         self._now = max(self._now, t)
         self._expire_unknown(t)
         self._confirm(t)
+        self._check_passing(t)
         for region, tid in self._held.items():
             tok = self.tokens.get(tid) if tid is not None else None
             if tok is None or tok.region != region or tok.provisional:  # walked out, corrected away: whoever is left
                 nxt = self._anchor_in(region)
                 self._held[region] = nxt.id if nxt is not None else None
+
+    def _check_passing(self, t: float) -> None:
+        """Someone lost in a doorway was taken to have gone through. If the radar on the other side has not seen
+        them (nor anyone new) ARRIVE_S later, they did not: they stood still in the doorway (or sat down next to
+        it), where their radar lost them. Back to where they were lost."""
+        for tok in self.tokens.values():
+            if tok.passing is None or tok.visible is not None:
+                continue
+            back, since = tok.passing
+            if t - since < ARRIVE_S:
+                continue
+            tok.passing = None
+            if tok.region != back and self._born_at.get(tok.region, -math.inf) < since and back in self.regions:
+                gone = tok.region
+                tok.region = back
+                self.changes.append(Change(t, "moved", tok.id, back, f"back from {gone}: not seen arriving there"))
 
     def _virtual_exit(self, region: str, name: str, t: float) -> None:
         floor = self.regions[region].floor
@@ -655,6 +677,7 @@ class HeadCount:
         return tok
 
     def _bind(self, tok: Token, region: str, tid: int, t: float) -> None:
+        tok.passing = None
         self.regions_seen.setdefault(tok.id, region)
         if tok.visible != (region, tid):  # a new track for this person: remember where they were, in case it is a machine
             tok.before = ((region, tid), tok.region, tok.seen_region, tok.pos, tok.last_seen, tok.unknown, tok.unknown_floor)
@@ -699,6 +722,8 @@ class HeadCount:
                 self._virtual_exit(region, passed[1], t)  # went through the front door and vanished: maybe out, sensor or not
             if portal is not None and len(portal.to) == 1 and (self.regions[portal.to[0]].observed or self._enclosed(portal.to[0])):
                 self._move_unseen(tok, portal.to[0], t)  # went through (a stairwell both ways: unknown which)
+                if self.regions[portal.to[0]].observed:
+                    tok.passing = (region, t)  # ... its radar should see them arrive (else they stood still in the doorway)
                 return
             for other, door in self._links.get(region, ()):
                 if door is not None and not self.regions[other].observed and self._door_recent(door, t, INTO_UNOBSERVED_S):
