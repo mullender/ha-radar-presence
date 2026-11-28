@@ -6,7 +6,7 @@
 // from the integration's decision log (`headcount/history` + `headcount/subscribe`).
 
 import './timeline.js';
-import { drawPlan, fitBackground, fitPlacement, floorPlan, floorToMap, imageToPlan, loadMaps, placeOnFloor, planToImage, toDisplay } from './plan.js';
+import { drawPlan, fitBackground, fitPlacement, floorPlan, floorToMap, imageToPlan, loadMaps, placeOnFloor, planToImage, radarOrigin, solvePins, toDisplay } from './plan.js';
 import { el, fmtTime, fmtDateTime, fmtDuration, correctionFollowUp, timeChip, TIME_CHIP_CSS } from './util.js';
 
 const DOMAIN = 'radar_zone_presence';
@@ -94,6 +94,10 @@ ${TIME_CHIP_CSS}
 .plan-map .dev.gone { opacity: .45; border-style: dashed; }
 .plan-map .dev.sel { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
 .plan-map.bg-editing .dev { cursor: move; touch-action: none; }
+.plan-map .radar-pin { position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px 2px 4px; z-index: 4;
+  border-radius: 12px; border: 1.5px dashed #64748b; background: rgba(255,255,255,.92); font: inherit; font-size: 11px; cursor: grab; touch-action: none; white-space: nowrap; }
+.plan-map .radar-pin.pinned { border-style: solid; border-color: #0d9488; }
+.plan-map .radar-pin.sel { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 1px; }
 .bg-note { font-size: 12px; color: var(--secondary-text-color, #666); margin-right: 4px; }
 .bg-pick { font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px; max-width: 320px; }
 .bg-pin.at { background: #0d9488; }
@@ -635,6 +639,38 @@ class RzpHeadcount extends HTMLElement {
       pin(at, 'at', k + 1);
     }
     if (edit.pending) pin(edit.tab === 'image' ? imageToPlan(img, edit.pending) : placeOnFloor(selMap?.place, edit.pending), 'img', edit.pairs.length + 1);
+    // Radars (Radar maps tab): drag each one to where it hangs on the image.
+    if (edit.tab === 'maps') {
+      for (const part of [...plan.parts, ...plan.unplaced.map(m => ({ map: m, place: null, unplaced: true }))]) {
+        for (const r of part.map.radars) {
+          const at = part.unplaced ? null : drawn.fromRadar(r, [0, 0]);
+          if (!at && !part.unplaced) continue;
+          const [fx, fy] = at ? drawn.toFrac(at) : [0.04, 0.06 + 0.07 * part.map.radars.indexOf(r)];
+          const pinned = !!d.pins?.[r];
+          const m = el('button', { class: `radar-pin${pinned ? ' pinned' : ''}${edit.selRadar === r ? ' sel' : ''}`, style: { left: `${fx * 100}%`, top: `${fy * 100}%` },
+            title: `${part.map.names?.get(r) || 'Radar'}: drag it to where it hangs${img ? '' : ' (add the image first)'}` }, '📡', el('span', {}, part.map.names?.get(r) || ''));
+          m.addEventListener('pointerdown', e => {
+            e.stopPropagation();
+            edit.selRadar = r;
+            if (!img) { rerender(); return; }
+            m.setPointerCapture(e.pointerId);
+            const host = mapEl.getBoundingClientRect();
+            const move = ev => Object.assign(m.style, { left: `${((ev.clientX - host.left) / host.width) * 100}%`, top: `${((ev.clientY - host.top) / host.height) * 100}%` });
+            m.addEventListener('pointermove', move);
+            m.addEventListener('pointerup', ev => {
+              m.removeEventListener('pointermove', move);
+              const p = drawn.toPlan(ev.clientX, ev.clientY);
+              if (p && (!at || Math.hypot(p[0] - at[0], p[1] - at[1]) > 50)) {
+                d.pins = { ...(d.pins || {}), [r]: planToImage(d.image, p) };
+                Object.assign(d, solvePins(d, this.maps || []));
+              }
+              rerender();
+            }, { once: true });
+          });
+          mapEl.append(m);
+        }
+      }
+    }
     // Pointer: drag the image (Image) or the selected map (Maps); click to pick points or place a device.
     let drag = null;
     drawn.svg.addEventListener('pointerdown', e => {
@@ -726,7 +762,10 @@ class RzpHeadcount extends HTMLElement {
       ];
     } else if (edit.tab === 'maps') {
       const frame = plan.parts[0];
-      hint = selMap ? (edit.step === 'from' ? `Point ${edit.pairs.length + 1}: click a spot in ${mapName(selMap.map)} (a room corner, a doorway).`
+      const pinsOnFrame = frame.map.radars.filter(r => d.pins?.[r]).length;
+      hint = img && !edit.step && !selMap ? `Drag each radar (📡) to where it hangs on the image. ${pinsOnFrame >= 2 ? `${frame.map.radars.filter(r => d.pins?.[r]).map(r => frame.map.names?.get(r)).join(' and ')} set the image's size and angle (from their alignment).`
+        : frame.map.radars.length >= 2 ? 'Two radars of the frame map set the image\'s size and angle from their alignment; one only moves it.' : 'One radar moves the image; turn it with ⟲ / ⟳ if needed.'}`
+        : selMap ? (edit.step === 'from' ? `Point ${edit.pairs.length + 1}: click a spot in ${mapName(selMap.map)} (a room corner, a doorway).`
         : edit.step === 'to' ? 'Now click where that spot is on the plan (on the image, or in the room it touches).'
           : `${mapName(selMap.map)}: drag it into place, turn it, or line up two points.`)
         : plan.unplaced.length ? 'Each radar map keeps its own shape. Add the other maps of this floor, then drag them into place.'
@@ -742,6 +781,7 @@ class RzpHeadcount extends HTMLElement {
           Object.assign(edit, { sel: m.anchor, step: null, pairs: [], pending: null });
           rerender();
         }, 'Put this radar map on the plan')),
+        ...(edit.selRadar ? this._radarTools(edit, plan, rerender, btn) : []),
         ...(selMap ? [
           ...lineUp('map'),
           btn('⟲ 90°', () => { this._mapAround(selMap.map, pl => ({ rotation: ((pl.rotation || 0) + 270) % 360 })); rerender(); }),
@@ -773,6 +813,40 @@ class RzpHeadcount extends HTMLElement {
         el('span', { style: { flex: 1 } }),
         btn('Cancel', () => { this._fpEdit = null; rerender(); }),
         btn('Save', () => this._fpSave(f, d), '', 'fchip on')));
+  }
+
+  /** Tools for the radar selected on the plan: turn its map a quarter turn around it, unpin it. */
+  _radarTools(edit, plan, rerender, btn) {
+    const d = edit.draft, r = edit.selRadar;
+    const part = plan.parts.find(p => p.map.radars.includes(r));
+    if (!part) return [];
+    const frame = part === plan.parts[0];
+    const name = part.map.names?.get(r) || 'Radar';
+    const turn = deg => {
+      if (frame) { // the frame map stays put: turn the image the other way around this radar
+        if (!d.image) return;
+        const pivot = radarOrigin(part.map, r), at = planToImage(d.image, pivot);
+        const next = { ...d.image, rotation: ((d.image.rotation || 0) - deg + 360) % 360 };
+        const now = imageToPlan(next, at);
+        d.image = { ...next, x: next.x + pivot[0] - now[0], y: next.y + pivot[1] - now[1] };
+        // pins on other maps stay on the image; the frame's own pins are image points that moved with it
+        for (const x of part.map.radars) if (d.pins?.[x] && x !== r) delete d.pins[x];
+      } else {
+        const o = radarOrigin(part.map, r), pl = d.maps[part.map.anchor] || { x: 0, y: 0, rotation: 0 };
+        const before = placeOnFloor(pl, o), next = { ...pl, rotation: ((pl.rotation || 0) + deg + 360) % 360 }, after = placeOnFloor(next, o);
+        d.maps[part.map.anchor] = { ...next, x: next.x + before[0] - after[0], y: next.y + before[1] - after[1] };
+        for (const x of part.map.radars) if (d.pins?.[x] && x !== r) delete d.pins[x];
+      }
+      Object.assign(d, solvePins(d, this.maps || []));
+      rerender();
+    };
+    const fixed = frame && part.map.radars.filter(x => d.pins?.[x]).length >= 2;
+    return [
+      el('span', { class: 'bg-note' }, `📡 ${name}${d.pins?.[r] ? ' (pinned)' : ''}:`),
+      btn('⟲ 90°', () => turn(-90), fixed ? 'Its two pinned radars set the angle' : 'Turn its map a quarter turn left, around this radar'),
+      btn('⟳ 90°', () => turn(90), fixed ? 'Its two pinned radars set the angle' : 'Turn its map a quarter turn right, around this radar'),
+      d.pins?.[r] ? btn('Unpin', () => { const { [r]: _x, ...rest } = d.pins; d.pins = rest; rerender(); }) : '',
+    ];
   }
 
   /** Devices worth showing on a floor: doors, switches, lights, locks, buttons and sensors in its rooms. */

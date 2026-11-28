@@ -119,3 +119,25 @@ test('floorPlan: a saved floor puts several maps on one plan; without one, the b
   const partial = floorPlan(maps, areas, { primary: 'entry', maps: {} });
   assert.deepEqual(partial.unplaced.map(m => m.anchor), ['garage']);
 });
+
+test('solvePins: two radars of the frame map size and turn the image; one radar of another map moves that map', async () => {
+  const { solvePins, imageToPlan, placeOnFloor, radarOrigin } = await import('../../custom_components/radar_zone_presence/frontend/plan.js');
+  const near = (a, b, eps = 1e-3) => assert.ok(Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps, `${a} vs ${b}`);
+  // Frame map: two aligned radars 5 m apart (the second at (5000, 0) in the anchor's frame).
+  const kitchen = { anchor: 'k', radars: ['k', 'l'], display: {}, toAnchor: new Map([['k', p => p], ['l', ([x, y]) => [x + 5000, y]]]), shapes: [] };
+  const garage = { anchor: 'g', radars: ['g'], display: {}, toAnchor: new Map([['g', p => p]]), shapes: [] };
+  const image = { image: '/local/x.png', w: 1000, h: 800, x: 0, y: 0, scale: 1, rotation: 0 };
+  // On the image the two radars hang 500 px apart, along the image's y axis: 10 mm/px, turned a quarter.
+  const plan = { primary: 'k', image, maps: {}, pins: { k: [100, 100], l: [100, 600], g: [800, 300] } };
+  const out = solvePins(plan, [kitchen, garage]);
+  assert.ok(Math.abs(out.image.scale - 10) < 1e-6);
+  near(imageToPlan(out.image, [100, 100]), radarOrigin(kitchen, 'k'));
+  near(imageToPlan(out.image, [100, 600]), radarOrigin(kitchen, 'l'));
+  // The garage radar lands on its pin; its map is only moved.
+  near(placeOnFloor(out.maps.g, radarOrigin(garage, 'g')), imageToPlan(out.image, [800, 300]));
+  assert.equal(out.maps.g.rotation, 0);
+  // One pin on the frame only moves the image (its scale stays).
+  const one = solvePins({ ...plan, pins: { k: [100, 100] } }, [kitchen, garage]);
+  assert.equal(one.image.scale, 1);
+  near(imageToPlan(one.image, [100, 100]), [0, 0]);
+});

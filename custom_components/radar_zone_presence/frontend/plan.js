@@ -64,7 +64,8 @@ export async function loadMaps(hass) {
     }
     const display = radars.find(x => x.radar.radar_id === anchor)?.cfg.settings?.display || {};
     const toAnchor = new Map(radars.map(({ radar }) => [radar.radar_id, at(radar.radar_id)]));
-    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display };
+    const names = new Map(radars.map(({ radar }) => [radar.radar_id, radar.area || radar.title]));
+    return { anchor, radars: radars.map(x => x.radar.radar_id), shapes, cones, ignores, toAnchor, display, names };
   });
 }
 
@@ -173,6 +174,37 @@ export function fitPlacement(place, pairs) {
   const [[mp, fp]] = pairs.slice(-1);
   const now = placeOnFloor(out, mp);
   return { ...out, x: out.x + fp[0] - now[0], y: out.y + fp[1] - now[1] };
+}
+
+/** Where a radar is in its map's display frame (its origin, through its alignment to the map's anchor). */
+export function radarOrigin(map, radar) {
+  const f = map.toAnchor.get(radar);
+  return f ? toDisplay(map)(f([0, 0])) : null;
+}
+
+/**
+ * Radars pinned to where they hang on the floor image (`plan.pins`: radar -> image pixel) place the image and the
+ * maps. The frame map's pinned radars move the image (one pin) or also size and turn it (two: the radars' real
+ * distance, from their alignment, sets the image's scale). Other maps are moved (one pin) or also turned (two) so
+ * their radars land on their pins. Returns the new {image, maps}.
+ */
+export function solvePins(plan, maps) {
+  const pins = plan.pins || {};
+  let image = plan.image;
+  const placed = { ...(plan.maps || {}) };
+  if (!image) return { image, maps: placed };
+  const primary = maps.find(m => m.anchor === plan.primary);
+  if (primary) {
+    const own = primary.radars.filter(r => pins[r] && radarOrigin(primary, r));
+    if (own.length) image = fitBackground(image, own.slice(-2).map(r => [pins[r], radarOrigin(primary, r)]));
+  }
+  for (const m of maps) {
+    if (m === primary) continue;
+    const own = m.radars.filter(r => pins[r] && radarOrigin(m, r));
+    if (!own.length) continue;
+    placed[m.anchor] = fitPlacement(placed[m.anchor] || {}, own.slice(-2).map(r => [radarOrigin(m, r), imageToPlan(image, pins[r])]));
+  }
+  return { image, maps: placed };
 }
 
 /**

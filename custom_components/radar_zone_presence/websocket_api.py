@@ -676,6 +676,10 @@ FLOOR_SCHEMA = vol.Schema(
             },
             vol.Length(max=32),
         ),
+        # Radars pinned to where they hang on the image (image pixels): they set the image's (and maps') placement.
+        vol.Optional("pins", default={}): vol.All(
+            {vol.All(str, vol.Length(max=64)): vol.ExactSequence([vol.Coerce(float), vol.Coerce(float)])}, vol.Length(max=64)
+        ),
         vol.Optional("items", default=[]): vol.All(
             [
                 {
